@@ -1,0 +1,682 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Sistema de Gestión - Ferretería</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background-color: #f4f6f9; }
+    .nav-tabs .nav-link.active { font-weight: bold; background-color: #0d6efd; color: white !important; }
+    .card { border-radius: 10px; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }
+    
+    /* --- NUBECITA / ASISTENTE FLOTANTE --- */
+    .asistente-float-btn {
+      position: fixed;
+      bottom: 25px;
+      right: 25px;
+      width: 60px;
+      height: 60px;
+      background-color: #0d6efd;
+      color: white;
+      border-radius: 50%;
+      display: flex;
+      justify-content: center;
+      align-items: center;
+      box-shadow: 0 4px 12px rgba(0,0,0,0.3);
+      cursor: pointer;
+      z-index: 9999;
+      transition: transform 0.2s, background-color 0.2s;
+    }
+    .asistente-float-btn:hover {
+      transform: scale(1.1);
+      background-color: #0b5ed7;
+    }
+    .asistente-float-btn svg { width: 32px; height: 32px; fill: white; }
+
+    .asistente-chat-box {
+      position: fixed;
+      bottom: 95px;
+      right: 25px;
+      width: 350px;
+      max-width: 90vw;
+      height: 480px;
+      background-color: #ffffff;
+      border-radius: 12px;
+      box-shadow: 0 8px 24px rgba(0,0,0,0.2);
+      display: flex;
+      flex-direction: column;
+      overflow: hidden;
+      z-index: 9999;
+      transition: opacity 0.3s ease, transform 0.3s ease;
+    }
+    .asistente-chat-box.oculto {
+      opacity: 0;
+      pointer-events: none;
+      transform: translateY(20px);
+    }
+
+    .chat-header {
+      background-color: #0d6efd;
+      color: white;
+      padding: 12px 16px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      font-weight: bold;
+    }
+    .chat-header button { background: transparent; border: none; color: white; font-size: 18px; cursor: pointer; }
+
+    .chat-body {
+      flex: 1;
+      padding: 12px;
+      overflow-y: auto;
+      background-color: #f8f9fa;
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .msg-bot, .msg-user {
+      max-width: 85%;
+      padding: 8px 12px;
+      border-radius: 12px;
+      font-size: 14px;
+      line-height: 1.4;
+      white-space: pre-wrap;
+    }
+    .msg-bot { background-color: #e9ecef; color: #212529; align-self: flex-start; }
+    .msg-user { background-color: #0d6efd; color: white; align-self: flex-end; }
+
+    .chat-footer {
+      display: flex;
+      padding: 10px;
+      border-top: 1px solid #dee2e6;
+      background-color: #fff;
+    }
+    .chat-footer input {
+      flex: 1;
+      border: 1px solid #ced4da;
+      border-radius: 20px;
+      padding: 6px 12px;
+      font-size: 14px;
+      outline: none;
+    }
+    .chat-footer button {
+      background-color: #0d6efd;
+      color: white;
+      border: none;
+      border-radius: 50%;
+      width: 35px;
+      height: 35px;
+      margin-left: 8px;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- BARRA DE NAVEGACIÓN -->
+  <nav class="navbar navbar-dark bg-dark px-3 mb-4">
+    <span class="navbar-brand mb-0 h1">🛠️ Sistema de Gestión - Ferretería</span>
+    <div class="text-light">
+      Usuario: <strong>{{ usuario }}</strong> ({{ rol }}) |
+      <a href="/logout" class="btn btn-sm btn-outline-danger ms-2">Cerrar Sesión</a>
+    </div>
+  </nav>
+
+  <div class="container-fluid px-4">
+    <!-- PESTAÑAS -->
+    <ul class="nav nav-tabs mb-4" id="mainTabs" role="tablist">
+      <li class="nav-item">
+        <button class="nav-link active" id="ventas-tab" data-bs-toggle="tab" data-bs-target="#tab-ventas" type="button">🛒 Ventas / Facturación</button>
+      </li>
+      <li class="nav-item">
+        <button class="nav-link" id="productos-tab" data-bs-toggle="tab" data-bs-target="#tab-productos" type="button">📦 Productos</button>
+      </li>
+      <li class="nav-item">
+        <button class="nav-link" id="clientes-tab" data-bs-toggle="tab" data-bs-target="#tab-clientes" type="button">👥 Clientes</button>
+      </li>
+      <li class="nav-item">
+        <button class="nav-link" id="creditos-tab" data-bs-toggle="tab" data-bs-target="#tab-creditos" type="button">💳 Créditos / Estado de Cuenta</button>
+      </li>
+      <li class="nav-item">
+        <button class="nav-link" id="historial-tab" data-bs-toggle="tab" data-bs-target="#tab-historial" type="button">📋 Historial Ventas</button>
+      </li>
+    </ul>
+
+    <div class="tab-content" id="mainTabsContent">
+      
+      <!-- PESTAÑA VENTAS CON FACTURA Y MÚLTIPLES PRODUCTOS -->
+      <div class="tab-pane fade show active" id="tab-ventas">
+        <div class="row">
+          <!-- Columna Izquierda: Selección de Cliente y Agregar Productos -->
+          <div class="col-md-5">
+            <div class="card p-4 mb-3">
+              <h5 class="text-primary mb-3">1. Selección de Cliente y Pago</h5>
+              <div class="mb-3">
+                <label class="form-label fw-bold">Cliente</label>
+                <select id="ventaCliente" class="form-select" required></select>
+                <small class="text-muted">Por defecto: Cliente Mostrador (General)</small>
+              </div>
+              <div class="mb-3">
+                <label class="form-label fw-bold">Tipo de Pago</label>
+                <select id="ventaTipoPago" class="form-select">
+                  <option value="contado">💵 Contado</option>
+                  <option value="credito">💳 Crédito (Fiado)</option>
+                </select>
+              </div>
+            </div>
+
+            <div class="card p-4">
+              <h5 class="text-primary mb-3">2. Seleccionar Producto para la Factura</h5>
+              <div class="mb-3">
+                <label class="form-label">Producto</label>
+                <select id="ventaProducto" class="form-select"></select>
+              </div>
+              <div class="mb-3">
+                <label class="form-label">Cantidad</label>
+                <input type="number" id="ventaCantidad" class="form-control" value="1" min="1">
+              </div>
+              <button type="button" class="btn btn-secondary w-100" onclick="agregarProductoAlCarrito()">➕ Agregar a la Factura</button>
+            </div>
+          </div>
+
+          <!-- Columna Derecha: Vista Previa de la Factura y Botón de Procesar -->
+          <div class="col-md-7">
+            <div class="card p-4">
+              <h4 class="mb-3 text-success">📋 Factura de Venta</h4>
+              <table class="table table-bordered align-middle">
+                <thead class="table-dark">
+                  <tr>
+                    <th>Producto</th>
+                    <th>Precio U.</th>
+                    <th>Cant.</th>
+                    <th>Subtotal</th>
+                    <th>Acción</th>
+                  </tr>
+                </thead>
+                <tbody id="tablaCarrito">
+                  <tr><td colspan="5" class="text-center text-muted">Aún no has agregado productos a la factura.</td></tr>
+                </tbody>
+              </table>
+
+              <div class="d-flex justify-content-between align-items-center mt-3 pt-3 border-top">
+                <h3>Total General:</h3>
+                <h2 id="lblTotalFactura" class="text-success fw-bold">$0 COP</h2>
+              </div>
+
+              <button class="btn btn-success btn-lg w-100 mt-3" onclick="procesarVentaCompleta()">✅ Procesar y Registrar Venta</button>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- PESTAÑA PRODUCTOS -->
+      <div class="tab-pane fade" id="tab-productos">
+        <div class="card p-4 mb-4">
+          <h4>Agregar Producto</h4>
+          <form id="formProducto" class="row g-3">
+            <div class="col-md-3"><input type="text" id="prodNombre" class="form-control" placeholder="Nombre (ej. Cemento)" required></div>
+            <div class="col-md-2"><input type="text" id="prodCategoria" class="form-control" placeholder="Categoría" required></div>
+            <div class="col-md-2"><input type="text" id="prodDimensiones" class="form-control" placeholder="Dimensiones"></div>
+            <div class="col-md-2"><input type="number" id="prodCosto" class="form-control" placeholder="Precio Costo" required></div>
+            <div class="col-md-2"><input type="number" id="prodVenta" class="form-control" placeholder="Precio Venta" required></div>
+            <div class="col-md-1"><input type="number" id="prodStock" class="form-control" placeholder="Stock" required></div>
+            <div class="col-md-1"><input type="number" id="prodStockMin" class="form-control" placeholder="Mínimo" value="5" required></div>
+            <div class="col-md-2"><button type="submit" class="btn btn-primary w-100">Guardar</button></div>
+          </form>
+        </div>
+        <div class="card p-4">
+          <h4>Inventario de Bodega</h4>
+          <table class="table table-striped mt-2">
+            <thead>
+              <tr><th>ID</th><th>Nombre</th><th>Categoría</th><th>Dimensiones</th><th>Precio Venta</th><th>Stock</th></tr>
+            </thead>
+            <tbody id="tablaProductos"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- PESTAÑA CLIENTES -->
+      <div class="tab-pane fade" id="tab-clientes">
+        <div class="card p-4 mb-4">
+          <h4>Registrar Nuevo Cliente</h4>
+          <form id="formCliente" class="row g-3">
+            <div class="col-md-3"><input type="text" id="cliNombre" class="form-control" placeholder="Nombre completo" required></div>
+            <div class="col-md-3"><input type="text" id="cliCedula" class="form-control" placeholder="CC / NIT"></div>
+            <div class="col-md-3"><input type="text" id="cliTelefono" class="form-control" placeholder="Teléfono"></div>
+            <div class="col-md-3"><button type="submit" class="btn btn-primary w-100">Guardar Cliente</button></div>
+          </form>
+        </div>
+        <div class="card p-4">
+          <h4>Directorio de Clientes</h4>
+          <table class="table table-striped mt-2">
+            <thead>
+              <tr><th>ID</th><th>Nombre</th><th>CC/NIT</th><th>Teléfono</th></tr>
+            </thead>
+            <tbody id="tablaClientes"></tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- PESTAÑA CRÉDITOS Y ABONOS -->
+      <div class="tab-pane fade" id="tab-creditos">
+        <div class="card p-4 mb-4">
+          <h4>Estado de Cuenta y Cartera</h4>
+          <div class="row g-3">
+            <div class="col-md-6">
+              <select id="selectClienteCredito" class="form-select">
+                <option value="">-- Seleccionar Cliente --</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <button class="btn btn-primary w-100" onclick="cargarEstadoCuentaCliente()">Consultar Cuenta</button>
+            </div>
+          </div>
+        </div>
+
+        <div id="vistaEstadoCuenta" class="card p-4 d-none">
+          <div class="d-flex justify-content-between align-items-center mb-3">
+            <div>
+              <h3 id="lblClienteNombre" class="text-primary mb-0">ESTADO DE CUENTA</h3>
+            </div>
+            <div class="text-end">
+              <h2 id="lblDeudaTotal" class="text-danger mb-0">$0 COP</h2>
+              <small class="text-uppercase fw-bold text-muted">DEUDA TOTAL PENDIENTE</small>
+            </div>
+          </div>
+          <hr>
+          <div class="card bg-light p-3 mb-4">
+            <h5 class="text-success">💵 Aplicar Abono a la Deuda Global:</h5>
+            <div class="row g-2 align-items-center">
+              <div class="col-auto"><span>$</span></div>
+              <div class="col-md-4">
+                <input type="number" id="montoAbonoGlobal" class="form-control" placeholder="Monto a abonar">
+              </div>
+              <div class="col-md-3">
+                <button class="btn btn-success w-100" onclick="procesarAbonoGlobal()">Registrar Abono</button>
+              </div>
+            </div>
+          </div>
+
+          <h5>Facturas Pendientes:</h5>
+          <div id="contenedorDeudasFacturas" class="mb-4"></div>
+
+          <h5>Historial de Abonos:</h5>
+          <div id="contenedorHistorialAbonos"></div>
+        </div>
+      </div>
+
+      <!-- PESTAÑA HISTORIAL VENTAS -->
+      <div class="tab-pane fade" id="tab-historial">
+        <div class="card p-4">
+          <h4>Historial General de Ventas Realizadas</h4>
+          <table class="table table-hover mt-2">
+            <thead>
+              <tr><th>ID Venta</th><th>Fecha y Hora</th><th>Cliente</th><th>Productos</th><th>Total</th><th>Tipo Pago</th></tr>
+            </thead>
+            <tbody id="tablaHistorialVentas"></tbody>
+          </table>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- ASISTENTE IA FLOTANTE -->
+  <div class="asistente-float-btn" onclick="toggleAsistenteIA()" title="Asistente Virtual">
+    <svg viewBox="0 0 24 24">
+      <path d="M19.35 10.04C18.67 6.59 15.64 4 12 4 9.11 4 6.6 5.64 5.35 8.04 2.34 8.36 0 10.91 0 14c0 3.31 2.69 6 6 6h13c2.76 0 5-2.24 5-5 0-2.64-2.05-4.78-4.65-4.96zM19 18H6c-2.21 0-4-1.79-4-4 0-2.05 1.53-3.76 3.56-3.97l1.07-.11.5-.95C8.08 7.14 9.94 6 12 6c2.62 0 4.88 1.86 5.39 4.43l.3 1.5 1.53.11c1.56.1 2.78 1.41 2.78 2.96 0 1.65-1.35 3-3 3z"/>
+    </svg>
+  </div>
+
+  <div id="asistenteChatBox" class="asistente-chat-box oculto">
+    <div class="chat-header">
+      <span>🤖 Asistente Virtual</span>
+      <button onclick="toggleAsistenteIA()">✕</button>
+    </div>
+    <div id="chatBody" class="chat-body">
+      <div class="msg-bot">¡Hola! 🛠️ ¿En qué te puedo colaborar? Pregúntame sobre precios, existencias o cartera contable.</div>
+    </div>
+    <div class="chat-footer">
+      <input type="text" id="chatInput" placeholder="Escribe tu duda..." onkeypress="handleKeyPress(event)">
+      <button onclick="enviarPreguntaIA()">➤</button>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script>
+    let productosDisponibles = [];
+    let carritoVenta = [];
+
+    document.addEventListener("DOMContentLoaded", () => {
+      cargarClientes();
+      cargarProductos();
+      cargarHistorialVentas();
+    });
+
+    // --- CARGA DE DATOS DESDE LA API ---
+    async function cargarClientes() {
+      const res = await fetch('/api/clientes');
+      const clientes = await res.json();
+      
+      const selectVenta = document.getElementById('ventaCliente');
+      const selectCredito = document.getElementById('selectClienteCredito');
+      const tbody = document.getElementById('tablaClientes');
+      
+      selectVenta.innerHTML = '';
+      selectCredito.innerHTML = '<option value="">-- Seleccionar Cliente --</option>';
+      tbody.innerHTML = '';
+
+      clientes.forEach(c => {
+        // Garantizar que "Cliente Mostrador (General)" quede seleccionado por defecto
+        const selected = c.id === 1 ? 'selected' : '';
+        selectVenta.innerHTML += `<option value="${c.id}" ${selected}>${c.nombre}</option>`;
+        selectCredito.innerHTML += `<option value="${c.id}">${c.nombre} (CC/NIT: ${c.cedula_nit || 'N/A'})</option>`;
+        tbody.innerHTML += `<tr><td>${c.id}</td><td>${c.nombre}</td><td>${c.cedula_nit || '-'}</td><td>${c.telefono || '-'}</td></tr>`;
+      });
+    }
+
+    async function cargarProductos() {
+      const res = await fetch('/api/productos');
+      productosDisponibles = await res.json();
+      const selectVenta = document.getElementById('ventaProducto');
+      const tbody = document.getElementById('tablaProductos');
+
+      selectVenta.innerHTML = '';
+      tbody.innerHTML = '';
+
+      productosDisponibles.forEach(p => {
+        selectVenta.innerHTML += `<option value="${p.id}">${p.nombre} ($${p.precio_venta.toLocaleString()}) - Stock: ${p.stock_actual}</option>`;
+        tbody.innerHTML += `<tr><td>${p.id}</td><td>${p.nombre}</td><td>${p.categoria}</td><td>${p.dimensiones || '-'}</td><td>$${p.precio_venta.toLocaleString()}</td><td>${p.stock_actual}</td></tr>`;
+      });
+    }
+
+    async function cargarHistorialVentas() {
+      const res = await fetch('/api/ventas');
+      const ventas = await res.json();
+      const tbody = document.getElementById('tablaHistorialVentas');
+      tbody.innerHTML = '';
+
+      ventas.forEach(v => {
+        tbody.innerHTML += `<tr>
+          <td>#${v.id}</td>
+          <td>${v.fecha_dia} ${v.hora}</td>
+          <td>${v.cliente}</td>
+          <td>${v.productos_detalle || '-'}</td>
+          <td>$${v.total_venta.toLocaleString()} COP</td>
+          <td><span class="badge bg-${v.tipo_pago === 'credito' ? 'warning' : 'success'}">${v.tipo_pago}</span></td>
+        </tr>`;
+      });
+    }
+
+    // --- LÓGICA DE LA FACTURA Y MÚLTIPLES PRODUCTOS ---
+    function agregarProductoAlCarrito() {
+      const idProducto = parseInt(document.getElementById('ventaProducto').value);
+      const cantidad = parseInt(document.getElementById('ventaCantidad').value);
+
+      if (!idProducto || cantidad <= 0) return alert("Ingresa una cantidad válida.");
+
+      const prod = productosDisponibles.find(p => p.id === idProducto);
+      if (!prod) return;
+
+      if (cantidad > prod.stock_actual) {
+        return alert(`Stock insuficiente. Solo hay ${prod.stock_actual} unidades disponibles de ${prod.nombre}.`);
+      }
+
+      const existeIdx = carritoVenta.findIndex(item => item.id_producto === idProducto);
+      if (existeIdx >= 0) {
+        if (carritoVenta[existeIdx].cantidad + cantidad > prod.stock_actual) {
+          return alert(`No puedes superar las ${prod.stock_actual} unidades disponibles en inventario.`);
+        }
+        carritoVenta[existeIdx].cantidad += cantidad;
+        carritoVenta[existeIdx].subtotal = carritoVenta[existeIdx].cantidad * prod.precio_venta;
+      } else {
+        carritoVenta.push({
+          id_producto: prod.id,
+          nombre: prod.nombre,
+          precio_venta: prod.precio_venta,
+          cantidad: cantidad,
+          subtotal: prod.precio_venta * cantidad
+        });
+      }
+
+      document.getElementById('ventaCantidad').value = 1;
+      renderizarCarrito();
+    }
+
+    function eliminarDelCarrito(index) {
+      carritoVenta.splice(index, 1);
+      renderizarCarrito();
+    }
+
+    function renderizarCarrito() {
+      const tbody = document.getElementById('tablaCarrito');
+      tbody.innerHTML = '';
+      let total = 0;
+
+      if (carritoVenta.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Aún no has agregado productos a la factura.</td></tr>';
+        document.getElementById('lblTotalFactura').textContent = '$0 COP';
+        return;
+      }
+
+      carritoVenta.forEach((item, idx) => {
+        total += item.subtotal;
+        tbody.innerHTML += `
+          <tr>
+            <td>${item.nombre}</td>
+            <td>$${item.precio_venta.toLocaleString()}</td>
+            <td>${item.cantidad}</td>
+            <td>$${item.subtotal.toLocaleString()}</td>
+            <td><button class="btn btn-sm btn-danger" onclick="eliminarDelCarrito(${idx})">❌</button></td>
+          </tr>
+        `;
+      });
+
+      document.getElementById('lblTotalFactura').textContent = `$${total.toLocaleString()} COP`;
+    }
+
+    // --- PROCESAR VENTA (VERSIÓN CON DIAGNÓSTICO DETALLADO) ---
+    async function procesarVentaCompleta() {
+      const selectCliente = document.getElementById('ventaCliente');
+      const selectTipoPago = document.getElementById('ventaTipoPago');
+
+      const idCliente = parseInt(selectCliente.value);
+      const tipoPago = selectTipoPago.value;
+
+      if (!idCliente || isNaN(idCliente)) {
+        return alert("Por favor, selecciona un cliente válido.");
+      }
+      
+      if (carritoVenta.length === 0) {
+        return alert("Agrega al menos un producto a la factura antes de procesar.");
+      }
+
+      const body = {
+        id_cliente: idCliente,
+        tipo_pago: tipoPago,
+        items: carritoVenta.map(item => ({
+          id_producto: parseInt(item.id_producto),
+          cantidad: parseInt(item.cantidad)
+        }))
+      };
+
+      try {
+        const res = await fetch('/api/ventas', {
+          method: 'POST',
+          headers: { 
+            'Content-Type': 'application/json' 
+          },
+          body: JSON.stringify(body)
+        });
+
+        // Intentamos leer el JSON o texto de respuesta del servidor
+        const textData = await res.text();
+        let data;
+        try {
+          data = JSON.parse(textData);
+        } catch (e) {
+          data = { error: textData || "Respuesta no válida del servidor" };
+        }
+
+        if (res.ok) {
+          alert("🎉 " + (data.mensaje || "Venta registrada con éxito."));
+          
+          carritoVenta = [];
+          renderizarCarrito();
+          
+          await cargarProductos();
+          await cargarHistorialVentas();
+        } else {
+          console.error("Detalle del error del servidor:", data);
+          alert("❌ Error al registrar la venta: " + (data.error || "Ocurrió un error inesperado."));
+        }
+      } catch (error) {
+        console.error("Error de red:", error);
+        alert("❌ Error de comunicación con el servidor: " + error.message);
+      }
+    }
+
+    // --- GUARDAR FORMULARIOS ---
+    document.getElementById('formProducto').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const body = {
+        nombre: document.getElementById('prodNombre').value,
+        categoria: document.getElementById('prodCategoria').value,
+        dimensiones: document.getElementById('prodDimensiones').value,
+        precio_costo: parseFloat(document.getElementById('prodCosto').value),
+        precio_venta: parseFloat(document.getElementById('prodVenta').value),
+        stock_actual: parseInt(document.getElementById('prodStock').value),
+        stock_minimo: parseInt(document.getElementById('prodStockMin').value)
+      };
+      await fetch('/api/productos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      document.getElementById('formProducto').reset();
+      cargarProductos();
+    });
+
+    document.getElementById('formCliente').addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const body = {
+        nombre: document.getElementById('cliNombre').value,
+        cedula_nit: document.getElementById('cliCedula').value,
+        telefono: document.getElementById('cliTelefono').value
+      };
+      await fetch('/api/clientes', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+      document.getElementById('formCliente').reset();
+      cargarClientes();
+    });
+
+    // --- CONSULTA Y ABONOS A DEUDAS ---
+    async function cargarEstadoCuentaCliente() {
+      const idCliente = document.getElementById('selectClienteCredito').value;
+      if (!idCliente) return alert("Por favor selecciona un cliente.");
+
+      const res = await fetch(`/api/historial-cliente/${idCliente}`);
+      const data = await res.json();
+
+      document.getElementById('vistaEstadoCuenta').classList.remove('d-none');
+      const contDeudas = document.getElementById('contenedorDeudasFacturas');
+      const contAbonos = document.getElementById('contenedorHistorialAbonos');
+
+      contDeudas.innerHTML = '';
+      contAbonos.innerHTML = '';
+
+      let deudaTotal = 0;
+      data.deudas.forEach(d => {
+        deudaTotal += d.saldo_pendiente;
+        contDeudas.innerHTML += `<div class="border p-2 mb-2 rounded bg-white">
+          <strong>Factura #${d.id_venta}</strong> - ${d.fecha}<br>
+          Productos: ${d.productos_detalle || '-'}<br>
+          Total Venta: $${d.total_venta.toLocaleString()} COP | <span class="text-danger fw-bold">Saldo Pendiente: $${d.saldo_pendiente.toLocaleString()} COP</span>
+        </div>`;
+      });
+
+      document.getElementById('lblDeudaTotal').textContent = `$${deudaTotal.toLocaleString()} COP`;
+
+      if (data.abonos.length === 0) {
+        contAbonos.innerHTML = '<p class="text-muted">No hay registros de abonos recibidos.</p>';
+      } else {
+        data.abonos.forEach(a => {
+          contAbonos.innerHTML += `<div class="border p-2 mb-1 bg-light">
+            Abono de <strong>$${a.monto.toLocaleString()} COP</strong> el ${a.fecha} (Factura #${a.id_venta})
+          </div>`;
+        });
+      }
+    }
+
+    async function procesarAbonoGlobal() {
+      const idCliente = document.getElementById('selectClienteCredito').value;
+      const monto = parseFloat(document.getElementById('montoAbonoGlobal').value);
+
+      if (!idCliente || !monto || monto <= 0) return alert("Ingresa un monto de abono válido.");
+
+      const res = await fetch('/api/abonos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ id_cliente: parseInt(idCliente), monto: monto })
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.mensaje);
+        document.getElementById('montoAbonoGlobal').value = '';
+        cargarEstadoCuentaCliente();
+      } else {
+        alert(data.error || "Error al procesar el abono.");
+      }
+    }
+
+    // --- LÓGICA DEL ASISTENTE VIRTUAL ---
+    function toggleAsistenteIA() {
+      const chatBox = document.getElementById('asistenteChatBox');
+      chatBox.classList.toggle('oculto');
+      if (!chatBox.classList.contains('oculto')) {
+        document.getElementById('chatInput').focus();
+      }
+    }
+
+    function handleKeyPress(e) {
+      if (e.key === 'Enter') enviarPreguntaIA();
+    }
+
+    async function enviarPreguntaIA() {
+      const input = document.getElementById('chatInput');
+      const chatBody = document.getElementById('chatBody');
+      const pregunta = input.value.trim();
+
+      if (!pregunta) return;
+
+      const msgUser = document.createElement('div');
+      msgUser.className = 'msg-user';
+      msgUser.textContent = pregunta;
+      chatBody.appendChild(msgUser);
+
+      input.value = '';
+      chatBody.scrollTop = chatBody.scrollHeight;
+
+      const msgCargando = document.createElement('div');
+      msgCargando.className = 'msg-bot';
+      msgCargando.textContent = 'Consultando...';
+      chatBody.appendChild(msgCargando);
+      chatBody.scrollTop = chatBody.scrollHeight;
+
+      try {
+        const resp = await fetch('/api/asistente-ia', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ pregunta: pregunta })
+        });
+
+        const data = await resp.json();
+        msgCargando.innerHTML = data.respuesta || 'Sin respuesta.';
+      } catch (err) {
+        msgCargando.textContent = 'Error de conexión con el servidor.';
+      }
+
+      chatBody.scrollTop = chatBody.scrollHeight;
+    }
+  </script>
+</body>
+</html>
