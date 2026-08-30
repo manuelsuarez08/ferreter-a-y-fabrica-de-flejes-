@@ -7,6 +7,9 @@ app = Flask(__name__)
 app.secret_key = 'clave_secreta_ferreteria'
 DB_NAME = 'ferreteria.db'
 
+# Asignación para que servidores como Render/Gunicorn detecten la aplicación automáticamente
+server = app
+
 def init_db():
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
