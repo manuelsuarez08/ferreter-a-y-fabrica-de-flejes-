@@ -86,20 +86,12 @@ def crear_base_de_datos():
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS abonos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
-            id_cliente INTEGER,
             id_credito INTEGER,
             fecha TIMESTAMP DEFAULT CURRENT_TIMESTAMP,
             monto REAL NOT NULL,
-            FOREIGN KEY (id_cliente) REFERENCES clientes (id),
             FOREIGN KEY (id_credito) REFERENCES creditos (id)
         )
     ''')
-    
-    # Agregar columna id_cliente si no existe (para bases de datos existentes)
-    try:
-        cursor.execute("ALTER TABLE abonos ADD COLUMN id_cliente INTEGER REFERENCES clientes (id)")
-    except:
-        pass  # La columna ya existe
 
     # Insertar usuario administrador por defecto si no existe
     cursor.execute("SELECT * FROM usuarios WHERE usuario = 'admin'")
