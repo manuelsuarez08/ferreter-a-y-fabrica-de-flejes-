@@ -7,7 +7,6 @@ app = Flask(__name__)
 app.secret_key = 'clave_secreta_ferreteria'
 DB_NAME = 'ferreteria.db'
 
-# Asignación para que servidores como Render/Gunicorn detecten la aplicación automáticamente
 server = app
 
 def init_db():
@@ -24,15 +23,21 @@ def init_db():
         )
     ''')
 
-    # Tabla de clientes
+    # Tabla de clientes (con columna direccion)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS clientes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nombre TEXT NOT NULL,
             cedula_nit TEXT UNIQUE,
-            telefono TEXT
+            telefono TEXT,
+            direccion TEXT
         )
     ''')
+
+    try:
+        cursor.execute("ALTER TABLE clientes ADD COLUMN direccion TEXT")
+    except sqlite3.OperationalError:
+        pass
 
     # Tabla de productos
     cursor.execute('''
@@ -76,7 +81,7 @@ def init_db():
         )
     ''')
 
-    # Tabla de abonos a crédito
+    # Tabla de abonos
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS abonos (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -87,7 +92,7 @@ def init_db():
         )
     ''')
 
-    # Usuario por defecto si la tabla está vacía
+    # Usuario por defecto
     cursor.execute("SELECT COUNT(*) FROM usuarios")
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT INTO usuarios (usuario, clave, rol) VALUES ('admin', 'admin123', 'admin')")
@@ -95,7 +100,7 @@ def init_db():
     # Cliente general por defecto
     cursor.execute("SELECT COUNT(*) FROM clientes WHERE id = 1")
     if cursor.fetchone()[0] == 0:
-        cursor.execute("INSERT INTO clientes (id, nombre, cedula_nit, telefono) VALUES (1, 'Cliente Mostrador (General)', '222222222222', '0000000000')")
+        cursor.execute("INSERT INTO clientes (id, nombre, cedula_nit, telefono, direccion) VALUES (1, 'Cliente Mostrador (General)', '222222222222', '0000000000', 'Local / Mostrador')")
 
     conn.commit()
     conn.close()
@@ -151,99 +156,6 @@ def logout():
     session.clear()
     return redirect(url_for('login'))
 
-# --- API ADMINISTRACIÓN DE USUARIOS (RESTRINGIDO A ADMIN) ---
-@app.route('/api/usuarios', methods=['GET', 'POST'])
-def handle_usuarios():
-    if session.get('rol') != 'admin':
-        return jsonify({"error": "Acceso denegado. Solo el administrador puede realizar esta acción."}), 403
-
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-
-    if request.method == 'GET':
-        cursor.execute("SELECT id, usuario, clave, rol FROM usuarios ORDER BY id ASC")
-        rows = cursor.fetchall()
-        conn.close()
-        return jsonify([{"id": r[0], "usuario": r[1], "clave": r[2], "rol": r[3]} for r in rows])
-
-    elif request.method == 'POST':
-        data = request.json
-        try:
-            cursor.execute("INSERT INTO usuarios (usuario, clave, rol) VALUES (?, ?, ?)",
-                           (data['usuario'], data['clave'], data.get('rol', 'empleado')))
-            conn.commit()
-            conn.close()
-            return jsonify({"mensaje": "Usuario creado con éxito"}), 201
-        except sqlite3.IntegrityError:
-            conn.close()
-            return jsonify({"error": "El nombre de usuario ya existe"}), 400
-
-@app.route('/api/usuarios/<int:id_usuario>', methods=['PUT', 'DELETE'])
-def update_delete_usuario(id_usuario):
-    if session.get('rol') != 'admin':
-        return jsonify({"error": "Acceso denegado. Solo el administrador puede modificar usuarios."}), 403
-
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-
-    if request.method == 'PUT':
-        data = request.json
-        nueva_clave = data.get('clave')
-        nuevo_rol = data.get('rol')
-
-        if nueva_clave and nuevo_rol:
-            cursor.execute("UPDATE usuarios SET clave = ?, rol = ? WHERE id = ?", (nueva_clave, nuevo_rol, id_usuario))
-        elif nueva_clave:
-            cursor.execute("UPDATE usuarios SET clave = ? WHERE id = ?", (nueva_clave, id_usuario))
-        elif nuevo_rol:
-            cursor.execute("UPDATE usuarios SET rol = ? WHERE id = ?", (nuevo_rol, id_usuario))
-
-        conn.commit()
-        conn.close()
-        return jsonify({"mensaje": "Usuario actualizado correctamente"}), 200
-
-    elif request.method == 'DELETE':
-        if id_usuario == 1:
-            conn.close()
-            return jsonify({"error": "No se puede eliminar el usuario administrador principal"}), 400
-
-        cursor.execute("DELETE FROM usuarios WHERE id = ?", (id_usuario,))
-        conn.commit()
-        conn.close()
-        return jsonify({"mensaje": "Usuario eliminado con éxito"}), 200
-
-# --- API NOTIFICACIONES DE STOCK ---
-@app.route('/api/notificaciones', methods=['GET'])
-def get_notificaciones():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    cursor.execute("""
-        SELECT id, nombre, categoria, dimensiones, stock_actual, stock_minimo
-        FROM productos
-        WHERE stock_actual <= stock_minimo
-        ORDER BY stock_actual ASC
-    """)
-    rows = cursor.fetchall()
-    conn.close()
-
-    notificaciones = []
-    for r in rows:
-        nivel_urgencia = "critico" if r[4] == 0 else "alto"
-        notificaciones.append({
-            "id": r[0],
-            "nombre": r[1],
-            "categoria": r[2] or "Sin Categoría",
-            "dimensiones": r[3] or "",
-            "stock_actual": r[4],
-            "stock_minimo": r[5],
-            "urgencia": nivel_urgencia
-        })
-
-    return jsonify({
-        "total": len(notificaciones),
-        "alertas": notificaciones
-    })
-
 # --- API CLIENTES ---
 @app.route('/api/clientes', methods=['GET', 'POST'])
 def handle_clientes():
@@ -251,16 +163,16 @@ def handle_clientes():
     cursor = conn.cursor()
 
     if request.method == 'GET':
-        cursor.execute("SELECT id, nombre, cedula_nit, telefono FROM clientes ORDER BY id DESC")
+        cursor.execute("SELECT id, nombre, cedula_nit, telefono, direccion FROM clientes ORDER BY id DESC")
         rows = cursor.fetchall()
         conn.close()
-        return jsonify([{"id": r[0], "nombre": r[1], "cedula_nit": r[2], "telefono": r[3]} for r in rows])
+        return jsonify([{"id": r[0], "nombre": r[1], "cedula_nit": r[2], "telefono": r[3], "direccion": r[4] or ""} for r in rows])
 
     elif request.method == 'POST':
         data = request.json
         try:
-            cursor.execute("INSERT INTO clientes (nombre, cedula_nit, telefono) VALUES (?, ?, ?)",
-                           (data['nombre'], data.get('cedula_nit'), data.get('telefono')))
+            cursor.execute("INSERT INTO clientes (nombre, cedula_nit, telefono, direccion) VALUES (?, ?, ?, ?)",
+                           (data['nombre'], data.get('cedula_nit'), data.get('telefono'), data.get('direccion')))
             conn.commit()
             conn.close()
             return jsonify({"mensaje": "Cliente creado con éxito"}), 201
@@ -268,113 +180,7 @@ def handle_clientes():
             conn.close()
             return jsonify({"error": "La cédula o NIT ya está registrado"}), 400
 
-# --- API PRODUCTOS (REABASTECIMIENTO Y REGISTRO NUEVO) ---
-@app.route('/api/productos', methods=['GET', 'POST'])
-def handle_productos():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-
-    if request.method == 'GET':
-        cursor.execute("SELECT id, nombre, categoria, dimensiones, precio_costo, precio_venta, stock_actual, stock_minimo FROM productos ORDER BY id DESC")
-        rows = cursor.fetchall()
-        conn.close()
-        return jsonify([{
-            "id": r[0], "nombre": r[1], "categoria": r[2], "dimensiones": r[3],
-            "precio_costo": r[4], "precio_venta": r[5], "stock_actual": r[6], "stock_minimo": r[7]
-        } for r in rows])
-
-    elif request.method == 'POST':
-        data = request.json
-        nombre = data['nombre'].strip()
-        categoria = data.get('categoria', '').strip()
-        dimensiones = data.get('dimensiones', '').strip()
-        precio_costo = float(data['precio_costo'])
-        precio_venta = float(data['precio_venta'])
-        stock_ingresado = int(data['stock_actual'])
-        stock_minimo = int(data.get('stock_minimo', 5))
-
-        # Verificar si existe coincidencia de nombre y dimensión
-        cursor.execute("""
-            SELECT id, stock_actual FROM productos 
-            WHERE LOWER(nombre) = LOWER(?) AND LOWER(dimensiones) = LOWER(?)
-        """, (nombre, dimensiones))
-        prod_existente = cursor.fetchone()
-
-        if prod_existente:
-            id_prod, stock_actual = prod_existente
-            nuevo_stock = stock_actual + stock_ingresado
-            cursor.execute("""
-                UPDATE productos 
-                SET categoria = ?, precio_costo = ?, precio_venta = ?, stock_actual = ?, stock_minimo = ?
-                WHERE id = ?
-            """, (categoria, precio_costo, precio_venta, nuevo_stock, stock_minimo, id_prod))
-            conn.commit()
-            conn.close()
-            return jsonify({"mensaje": f"Stock reabastecido con éxito. Nuevo stock total: {nuevo_stock}"}), 200
-        else:
-            cursor.execute("""
-                INSERT INTO productos (nombre, categoria, dimensiones, precio_costo, precio_venta, stock_actual, stock_minimo)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (nombre, categoria, dimensiones, precio_costo, precio_venta, stock_ingresado, stock_minimo))
-            conn.commit()
-            conn.close()
-            return jsonify({"mensaje": "Producto agregado con éxito"}), 201
-
-# --- API CREDITOS Y ABONOS ---
-@app.route('/api/creditos', methods=['GET'])
-def get_creditos():
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-    query = """
-        SELECT c.id, c.nombre, c.telefono, SUM(v.saldo_pendiente) as deuda_total
-        FROM clientes c
-        JOIN ventas v ON c.id = v.id_cliente
-        WHERE v.saldo_pendiente > 0
-        GROUP BY c.id
-    """
-    cursor.execute(query)
-    rows = cursor.fetchall()
-    conn.close()
-    return jsonify([{"id_cliente": r[0], "nombre": r[1], "telefono": r[2], "deuda_total": r[3]} for r in rows])
-
-@app.route('/api/abonos', methods=['POST'])
-def registrar_abono():
-    data = request.json
-    id_cliente = data['id_cliente']
-    monto_abono = float(data['monto'])
-
-    if monto_abono <= 0:
-        return jsonify({"error": "El monto del abono debe ser mayor a cero"}), 400
-
-    conn = sqlite3.connect(DB_NAME)
-    cursor = conn.cursor()
-
-    cursor.execute("SELECT id, saldo_pendiente FROM ventas WHERE id_cliente = ? AND saldo_pendiente > 0 ORDER BY id ASC", (id_cliente,))
-    ventas_pendientes = cursor.fetchall()
-
-    if not ventas_pendientes:
-        conn.close()
-        return jsonify({"error": "El cliente no tiene saldo pendiente por pagar"}), 400
-
-    monto_restante = monto_abono
-    for venta_id, saldo in ventas_pendientes:
-        if monto_restante <= 0:
-            break
-        if monto_restante >= saldo:
-            monto_restante -= saldo
-            cursor.execute("UPDATE ventas SET saldo_pendiente = 0 WHERE id = ?", (venta_id,))
-        else:
-            cursor.execute("UPDATE ventas SET saldo_pendiente = saldo_pendiente - ? WHERE id = ?", (monto_restante, venta_id))
-            monto_restante = 0
-
-    fecha_hoy = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
-    cursor.execute("INSERT INTO abonos (id_cliente, monto, fecha) VALUES (?, ?, ?)", (id_cliente, monto_abono, fecha_hoy))
-
-    conn.commit()
-    conn.close()
-    return jsonify({"mensaje": "Abono registrado con éxito"}), 201
-
-# --- API VENTAS ---
+# --- API VENTAS E HISTORIAL ---
 @app.route('/api/ventas', methods=['GET', 'POST'])
 def handle_ventas():
     conn = sqlite3.connect(DB_NAME)
@@ -385,7 +191,7 @@ def handle_ventas():
         query = """
             SELECT v.id, v.fecha_dia, v.hora, c.nombre, v.total_venta, v.tipo_pago,
                    GROUP_CONCAT(p.nombre || ' (x' || dv.cantidad || ')', ', ') as detalles,
-                   c.cedula_nit, c.telefono, v.id_cliente
+                   c.cedula_nit, c.telefono, v.id_cliente, c.direccion
             FROM ventas v
             JOIN clientes c ON v.id_cliente = c.id
             LEFT JOIN detalle_ventas dv ON v.id = dv.id_venta
@@ -404,7 +210,7 @@ def handle_ventas():
         return jsonify([{
             "id": r[0], "fecha_dia": r[1], "hora": r[2], "cliente": r[3],
             "total_venta": r[4], "tipo_pago": r[5], "productos_detalle": r[6],
-            "cedula_nit": r[7], "telefono": r[8], "id_cliente": r[9]
+            "cedula_nit": r[7], "telefono": r[8], "id_cliente": r[9], "direccion": r[10] or ""
         } for r in rows])
 
     elif request.method == 'POST':
@@ -471,13 +277,14 @@ def handle_ventas():
             conn.close()
             return jsonify({"error": str(e)}), 500
 
+# --- DETALLE DE FACTURA ---
 @app.route('/api/ventas/<int:id_venta>', methods=['GET'])
 def get_factura_detalle(id_venta):
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
     cursor.execute("""
-        SELECT v.id, v.fecha_dia, v.hora, c.nombre, c.cedula_nit, c.telefono, v.total_venta, v.tipo_pago, v.id_cliente
+        SELECT v.id, v.fecha_dia, v.hora, c.nombre, c.cedula_nit, c.telefono, v.total_venta, v.tipo_pago, v.id_cliente, c.direccion
         FROM ventas v
         JOIN clientes c ON v.id_cliente = c.id
         WHERE v.id = ?
@@ -508,6 +315,7 @@ def get_factura_detalle(id_venta):
         "total_venta": venta[6],
         "tipo_pago": venta[7],
         "id_cliente": venta[8],
+        "direccion": venta[9] or "",
         "items": [{
             "nombre": d[0] + (f" ({d[1]})" if d[1] else ""),
             "cantidad": d[2],
@@ -516,12 +324,14 @@ def get_factura_detalle(id_venta):
         } for d in detalles]
     })
 
+# --- EDITAR CLIENTE Y DIRECCION DESDE FACTURA ---
 @app.route('/api/ventas/<int:id_venta>/cliente', methods=['PUT'])
 def editar_cliente_factura(id_venta):
     data = request.json
     nombre = data.get('nombre')
     cedula_nit = data.get('cedula_nit')
     telefono = data.get('telefono')
+    direccion = data.get('direccion')
 
     if not nombre:
         return jsonify({"error": "El nombre del cliente no puede estar vacío"}), 400
@@ -540,13 +350,13 @@ def editar_cliente_factura(id_venta):
 
     try:
         if id_cliente == 1:
-            cursor.execute("INSERT INTO clientes (nombre, cedula_nit, telefono) VALUES (?, ?, ?)",
-                           (nombre, cedula_nit, telefono))
+            cursor.execute("INSERT INTO clientes (nombre, cedula_nit, telefono, direccion) VALUES (?, ?, ?, ?)",
+                           (nombre, cedula_nit, telefono, direccion))
             nuevo_id_cliente = cursor.lastrowid
             cursor.execute("UPDATE ventas SET id_cliente = ? WHERE id = ?", (nuevo_id_cliente, id_venta))
         else:
-            cursor.execute("UPDATE clientes SET nombre = ?, cedula_nit = ?, telefono = ? WHERE id = ?",
-                           (nombre, cedula_nit, telefono, id_cliente))
+            cursor.execute("UPDATE clientes SET nombre = ?, cedula_nit = ?, telefono = ?, direccion = ? WHERE id = ?",
+                           (nombre, cedula_nit, telefono, direccion, id_cliente))
 
         conn.commit()
         conn.close()
