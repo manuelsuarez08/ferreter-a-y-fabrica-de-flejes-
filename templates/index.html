@@ -1,394 +1,1076 @@
 <!DOCTYPE html>
 <html lang="es">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Ferretería y Fábrica de Flejes</title>
-    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
-    <style>
-        body { background-color: #f8f9fa; }
-        .sidebar { min-height: 100vh; background-color: #212529; color: white; }
-        .sidebar a { color: #adb5bd; text-decoration: none; padding: 10px 15px; display: block; }
-        .sidebar a:hover, .sidebar a.active { background-color: #0d6efd; color: white; }
-        .printable-factura { display: none; }
-        
-        @media print {
-            body * { visibility: hidden; }
-            .printable-factura, .printable-factura * { visibility: visible; }
-            .printable-factura { position: absolute; left: 0; top: 0; width: 100%; display: block !important; }
-        }
-    </style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Ferretería y Fábrica de Flejes - Sistema POS</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
+  <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <style>
+    body {
+      background-color: #f8f9fa;
+      color: #212529;
+    }
+    .factura-box {
+      background: #fff;
+      padding: 25px;
+      border: 1px solid #ddd;
+      border-radius: 6px;
+      max-width: 650px;
+      margin: 0 auto;
+    }
+  </style>
 </head>
 <body>
+
+  <!-- Navbar -->
+  <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4 shadow-sm">
     <div class="container-fluid">
-        <div class="row">
-            <!-- Sidebar / Menú lateral -->
-            <div class="col-md-2 sidebar p-0">
-                <div class="p-3 fs-5 fw-bold text-center border-bottom border-secondary">
-                    🛠️ FERRETERÍA
-                </div>
-                <div class="nav flex-column mt-3">
-                    <a href="#" class="active" onclick="mostrarSeccion('ventas', this)">🛒 Ventas y Facturación</a>
-                    <a href="#" onclick="mostrarSeccion('historial', this)">📜 Historial de Ventas</a>
-                    <a href="#" onclick="mostrarSeccion('clientes', this)">👥 Clientes</a>
-                    <a href="#" onclick="mostrarSeccion('inventario', this)">📦 Inventario</a>
-                    <a href="#" onclick="mostrarSeccion('creditos', this)">💳 Créditos / Abonos</a>
-                    <a href="/logout" class="text-danger mt-4">🚪 Cerrar Sesión ({{ usuario }})</a>
-                </div>
-            </div>
+      <a class="navbar-brand fw-bold fs-4" href="#">🛠️ FERRETERÍA Y FÁBRICA DE FLEJES</a>
+      
+      <div class="d-flex align-items-center gap-3">
+        <!-- Botón de Notificaciones -->
+        <button type="button" class="btn btn-warning position-relative fw-bold" onclick="abrirModalNotificaciones()">
+          🔔 Reposición
+          <span id="badge-notificaciones" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display: none;">
+            0
+          </span>
+        </button>
 
-            <!-- Contenido Principal -->
-            <div class="col-md-10 p-4">
-                
-                <!-- SECCIÓN: VENTAS Y FACTURACIÓN -->
-                <div id="sec-ventas">
-                    <h3>🛒 Ventas y Facturación</h3>
-                    <hr>
-                    <div class="row mb-3">
-                        <div class="col-md-6">
-                            <label class="form-label fw-bold">Seleccionar Cliente:</label>
-                            <select id="venta-cliente" class="form-select"></select>
-                        </div>
-                        <div class="col-md-3">
-                            <label class="form-label fw-bold">Tipo de Pago:</label>
-                            <select id="venta-tipo-pago" class="form-select">
-                                <option value="contado">Contado</option>
-                                <option value="credito">Crédito</option>
-                            </select>
-                        </div>
-                    </div>
+        <span class="navbar-text text-white">
+          Usuario: <strong>{{ usuario }}</strong> ({{ rol }}) | <a href="/logout" class="text-white text-decoration-underline">Cerrar Sesión</a>
+        </span>
+      </div>
+    </div>
+  </nav>
 
-                    <div class="card p-3 mb-3">
-                        <h5>Agregar Producto</h5>
-                        <div class="row">
-                            <div class="col-md-5">
-                                <select id="select-producto" class="form-select"></select>
-                            </div>
-                            <div class="col-md-3">
-                                <input type="number" id="cant-producto" class="form-control" placeholder="Cantidad" min="1" value="1">
-                            </div>
-                            <div class="col-md-4">
-                                <button onclick="agregarAlCarrito()" class="btn btn-primary w-100">➕ Agregar a la Venta</button>
-                            </div>
-                        </div>
-                    </div>
-
-                    <table class="table table-bordered bg-white">
-                        <thead class="table-dark">
-                            <tr>
-                                <th>Producto</th>
-                                <th>Precio Unitario</th>
-                                <th>Cantidad</th>
-                                <th>Subtotal</th>
-                                <th>Acción</th>
-                            </tr>
-                        </thead>
-                        <tbody id="tabla-carrito"></tbody>
-                    </table>
-
-                    <div class="d-flex justify-content-between align-items-center mt-3">
-                        <h4 class="text-success">Total: $<span id="total-venta">0</span></h4>
-                        <button onclick="procesarVenta()" class="btn btn-success btn-lg">💵 Finalizar Venta e Imprimir</button>
-                    </div>
-                </div>
-
-                <!-- SECCIÓN: HISTORIAL DE VENTAS -->
-                <div id="sec-historial" style="display:none;">
-                    <h3>📜 Historial de Ventas</h3>
-                    <hr>
-                    <div class="row mb-3">
-                        <div class="col-md-4">
-                            <input type="date" id="filtro-fecha" class="form-control" onchange="cargarHistorial()">
-                        </div>
-                    </div>
-                    <table class="table table-striped table-hover bg-white">
-                        <thead class="table-dark">
-                            <tr>
-                                <th># Factura</th>
-                                <th>Fecha</th>
-                                <th>Cliente</th>
-                                <th>Dirección</th>
-                                <th>Total</th>
-                                <th>Tipo Pago</th>
-                                <th>Acción</th>
-                            </tr>
-                        </thead>
-                        <tbody id="tabla-historial"></tbody>
-                    </table>
-                </div>
-
-                <!-- SECCIÓN: CLIENTES -->
-                <div id="sec-clientes" style="display:none;">
-                    <h3>👥 Gestión de Clientes</h3>
-                    <hr>
-                    <div class="card p-3 mb-3">
-                        <h5>Registrar Nuevo Cliente</h5>
-                        <div class="row g-2">
-                            <div class="col-md-3"><input type="text" id="cli-nombre" class="form-control" placeholder="Nombre completo"></div>
-                            <div class="col-md-3"><input type="text" id="cli-cedula" class="form-control" placeholder="Cédula / NIT"></div>
-                            <div class="col-md-3"><input type="text" id="cli-telefono" class="form-control" placeholder="Teléfono"></div>
-                            <div class="col-md-3"><input type="text" id="cli-direccion" class="form-control" placeholder="Dirección"></div>
-                        </div>
-                        <button onclick="guardarCliente()" class="btn btn-primary mt-2">💾 Guardar Cliente</button>
-                    </div>
-
-                    <table class="table table-bordered bg-white">
-                        <thead class="table-dark">
-                            <tr>
-                                <th>ID</th>
-                                <th>Nombre</th>
-                                <th>Cédula / NIT</th>
-                                <th>Teléfono</th>
-                                <th>Dirección</th>
-                            </tr>
-                        </thead>
-                        <tbody id="tabla-clientes"></tbody>
-                    </table>
-                </div>
-
-                <!-- MODAL DE FACTURA Y EDICIÓN -->
-                <div class="modal fade" id="modalFactura" tabindex="-1">
-                    <div class="modal-dialog modal-lg">
-                        <div class="modal-content">
-                            <div class="modal-header">
-                                <h5 class="modal-title">Factura de Venta #<span id="fac-id"></span></h5>
-                                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
-                            </div>
-                            <div class="modal-body">
-                                <h6>Datos del Cliente</h6>
-                                <div class="row g-2 mb-3">
-                                    <div class="col-md-3"><input type="text" id="fac-cliente-nombre" class="form-control" placeholder="Nombre"></div>
-                                    <div class="col-md-3"><input type="text" id="fac-cliente-cedula" class="form-control" placeholder="Cédula/NIT"></div>
-                                    <div class="col-md-3"><input type="text" id="fac-cliente-telefono" class="form-control" placeholder="Teléfono"></div>
-                                    <div class="col-md-3"><input type="text" id="fac-cliente-direccion" class="form-control" placeholder="Dirección"></div>
-                                </div>
-                                <button onclick="actualizarClienteFactura()" class="btn btn-sm btn-outline-secondary mb-3">✏️ Actualizar Datos Cliente</button>
-
-                                <h6>Detalle de Productos</h6>
-                                <table class="table table-sm">
-                                    <thead>
-                                        <tr>
-                                            <th>Producto</th>
-                                            <th>Cant.</th>
-                                            <th>Precio U.</th>
-                                            <th>Subtotal</th>
-                                        </tr>
-                                    </thead>
-                                    <tbody id="fac-items"></tbody>
-                                </table>
-                                <h5 class="text-end text-success">Total: $<span id="fac-total"></span></h5>
-                            </div>
-                            <div class="modal-footer">
-                                <button class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
-                                <button onclick="imprimirFactura()" class="btn btn-primary">🖨️ Imprimir Factura</button>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-
-                <!-- IMPRESIÓN DE FACTURA -->
-                <div class="printable-factura p-4">
-                    <h2 class="text-center">🛠️ FERRETERÍA Y FÁBRICA DE FLEJES</h2>
-                    <p class="text-center mb-1">NIT: 123456789-0 | Tel: 300 000 0000</p>
-                    <p class="text-center mb-4">Dirección: Calle Principal #10-20</p>
-                    <hr>
-                    <h5>Factura de Venta No. <span id="pr-fac-id"></span></h5>
-                    <p><strong>Fecha:</strong> <span id="pr-fac-fecha"></span> | <strong>Hora:</strong> <span id="pr-fac-hora"></span></p>
-                    <p><strong>Cliente:</strong> <span id="pr-fac-cliente"></span></p>
-                    <p><strong>Cédula / NIT:</strong> <span id="pr-fac-cedula"></span></p>
-                    <p><strong>Teléfono:</strong> <span id="pr-fac-telefono"></span></p>
-                    <p><strong>Dirección:</strong> <span id="pr-fac-direccion"></span></p>
-                    <p><strong>Tipo de Pago:</strong> <span id="pr-fac-tipo-pago"></span></p>
-                    <hr>
-                    <table class="table table-sm">
-                        <thead>
-                            <tr>
-                                <th>Producto</th>
-                                <th>Cant.</th>
-                                <th>Precio U.</th>
-                                <th>Subtotal</th>
-                            </tr>
-                        </thead>
-                        <tbody id="pr-fac-items"></tbody>
-                    </table>
-                    <hr>
-                    <h4 class="text-end">TOTAL: $<span id="pr-fac-total"></span></h4>
-                </div>
-
-            </div>
-        </div>
+  <div class="container-fluid px-4">
+    <!-- Banner de Alerta de stock -->
+    <div id="banner-alerta-stock" class="alert alert-warning alert-dismissible fade show d-none" role="alert">
+      <strong>⚠️ Atención:</strong> Hay productos que están a punto de agotarse o con stock en 0. 
+      <button class="btn btn-sm btn-outline-dark ms-2 fw-bold" onclick="abrirModalNotificaciones()">Ver Lista de Pedidos Urgentes</button>
+      <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
     </div>
 
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script>
-        let carrito = [];
-        let productosCache = [];
-        let facturaActualId = null;
+    <!-- Navegación por pestañas -->
+    <ul class="nav nav-tabs" id="myTab" role="tablist">
+      <li class="nav-item">
+        <button class="nav-link active" id="ventas-tab" data-bs-toggle="tab" data-bs-target="#ventas" type="button" onclick="cargarFormularioVentas()">🛒 Ventas / Facturación</button>
+      </li>
+      <li class="nav-item">
+        <button class="nav-link" id="productos-tab" data-bs-toggle="tab" data-bs-target="#productos" type="button" onclick="cargarProductosTabla()">📦 Productos</button>
+      </li>
+      <li class="nav-item">
+        <button class="nav-link" id="clientes-tab" data-bs-toggle="tab" data-bs-target="#clientes" type="button" onclick="cargarClientesTabla()">👥 Clientes</button>
+      </li>
+      <li class="nav-item">
+        <button class="nav-link" id="creditos-tab" data-bs-toggle="tab" data-bs-target="#creditos" type="button" onclick="cargarCreditosTabla()">💳 Créditos / Estado de Cuenta</button>
+      </li>
+      <li class="nav-item">
+        <button class="nav-link" id="historial-tab" data-bs-toggle="tab" data-bs-target="#historial" type="button" onclick="cargarHistorialVentas()">📜 Historial Ventas</button>
+      </li>
+      <li class="nav-item">
+        <button class="nav-link" id="facturas-tab" data-bs-toggle="tab" data-bs-target="#facturas" type="button" onclick="cargarFacturasTabla()">📄 Facturas de Ventas</button>
+      </li>
+      {% if rol == 'admin' %}
+      <li class="nav-item">
+        <button class="nav-link" id="usuarios-tab" data-bs-toggle="tab" data-bs-target="#usuarios" type="button" onclick="cargarUsuariosTabla()">🔑 Usuarios y Accesos</button>
+      </li>
+      {% endif %}
+    </ul>
 
-        function mostrarSeccion(sec, btn) {
-            ['ventas', 'historial', 'clientes', 'inventario', 'creditos'].forEach(s => {
-                const el = document.getElementById('sec-' + s);
-                if (el) el.style.display = 'none';
-            });
-            document.getElementById('sec-' + sec).style.display = 'block';
-            document.querySelectorAll('.sidebar a').forEach(a => a.classList.remove('active'));
-            if(btn) btn.classList.add('active');
+    <div class="tab-content bg-white border border-top-0 p-4 rounded-bottom shadow-sm">
+      
+      <!-- Pestaña Ventas -->
+      <div class="tab-pane fade show active" id="ventas">
+        <h4 class="mb-3">Nueva Venta</h4>
+        
+        <div class="card p-3 mb-4 bg-light border">
+          <div class="row g-3">
+            <div class="col-md-5">
+              <label for="select-cliente" class="form-label fw-bold">Cliente:</label>
+              <select id="select-cliente" placeholder="Buscar cliente..."></select>
+            </div>
+            <div class="col-md-4">
+              <label for="select-tipo-pago" class="form-label fw-bold">Tipo de Pago:</label>
+              <select id="select-tipo-pago" class="form-select">
+                <option value="efectivo" selected>Efectivo</option>
+                <option value="nequi_daviplata">Nequi / Daviplata</option>
+                <option value="tarjeta">Tarjeta</option>
+                <option value="credito">Crédito</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label for="input-direccion-venta" class="form-label fw-bold">Dirección de Entrega:</label>
+              <input type="text" id="input-direccion-venta" class="form-control" placeholder="Dirección de envío/obra">
+            </div>
+          </div>
+        </div>
 
-            if (sec === 'clientes') cargarClientes();
-            if (sec === 'historial') cargarHistorial();
+        <div class="card p-3 mb-4 border">
+          <h5 class="fw-bold mb-3">Agregar Productos</h5>
+          <div class="row g-3 align-items-end">
+            <div class="col-md-6">
+              <label for="select-producto" class="form-label fw-bold">Seleccionar Producto:</label>
+              <select id="select-producto" placeholder="-- Buscar o seleccionar producto --"></select>
+            </div>
+            <div class="col-md-3">
+              <label for="input-cantidad" class="form-label fw-bold">Cantidad:</label>
+              <input type="number" id="input-cantidad" class="form-control" value="1" min="1">
+            </div>
+            <div class="col-md-3">
+              <button class="btn btn-success w-100 fw-bold" onclick="agregarProductoAlCarrito()">➕ Agregar a la lista</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="table-responsive mb-3">
+          <table class="table table-bordered align-middle">
+            <thead class="table-light">
+              <tr>
+                <th>Producto</th>
+                <th>Precio Unitario</th>
+                <th>Cantidad</th>
+                <th>Subtotal</th>
+                <th style="width: 80px;">Acción</th>
+              </tr>
+            </thead>
+            <tbody id="tabla-carrito-body">
+              <tr><td colspan="5" class="text-center text-muted">No hay productos agregados a la venta.</td></tr>
+            </tbody>
+          </table>
+        </div>
+
+        <div class="d-flex justify-content-between align-items-center bg-light p-3 rounded border">
+          <h4 class="m-0">Total Venta: <span id="total-venta-texto" class="text-primary fw-bold">$0</span></h4>
+          <button class="btn btn-primary btn-lg fw-bold" onclick="procesarVenta()">💾 Registrar / Facturar Venta</button>
+        </div>
+      </div>
+
+      <!-- Pestaña Productos -->
+      <div class="tab-pane fade" id="productos">
+        <h4 class="mb-3">Inventario de Productos</h4>
+        
+        <div class="card p-3 mb-4 bg-light border">
+          <h5 class="fw-bold mb-3">Registrar / Reabastecer Producto</h5>
+          <form id="form-producto" onsubmit="guardarProducto(event)" class="row g-3">
+            <div class="col-md-4">
+              <label class="form-label fw-bold">Nombre del Producto</label>
+              <select id="prod-nombre" placeholder="Buscar o escribir producto nuevo..." required></select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold">Categoría</label>
+              <input type="text" id="prod-categoria" class="form-control" placeholder="Ej: Flejes, Tuberías, Varillas">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold">Dimensiones / Medida</label>
+              <input type="text" id="prod-dimensiones" class="form-control" placeholder="Ej: 10x10 cm, 1/2 pulgada">
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-bold">Precio Costo ($)</label>
+              <input type="number" step="0.01" id="prod-costo" class="form-control" required>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-bold">Precio Venta ($)</label>
+              <input type="number" step="0.01" id="prod-venta" class="form-control" required>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-bold" id="label-stock-ingreso">Cantidad a Ingresar</label>
+              <input type="number" id="prod-stock" class="form-control" required>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-bold">Stock Mínimo</label>
+              <input type="number" id="prod-minimo" class="form-control" value="5">
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+              <button type="submit" id="btn-guardar-prod" class="btn btn-primary w-100 fw-bold">📦 Guardar / Reabastecer</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="table-responsive">
+          <table class="table table-striped table-hover align-middle border">
+            <thead class="table-light">
+              <tr>
+                <th>ID</th>
+                <th>Nombre</th>
+                <th>Categoría</th>
+                <th>Dimensiones</th>
+                <th>Precio Costo</th>
+                <th>Precio Venta</th>
+                <th>Stock Actual</th>
+                <th>Estado</th>
+              </tr>
+            </thead>
+            <tbody id="tabla-productos-body">
+              <tr><td colspan="8" class="text-center text-muted">Cargando productos...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Pestaña Clientes -->
+      <div class="tab-pane fade" id="clientes">
+        <h4 class="mb-3">Gestión de Clientes</h4>
+
+        <div class="card p-3 mb-4 bg-light border">
+          <h5 class="fw-bold mb-3">Registrar Nuevo Cliente</h5>
+          <form id="form-cliente" onsubmit="guardarCliente(event)" class="row g-3">
+            <div class="col-md-3">
+              <label class="form-label fw-bold">Nombre Completo</label>
+              <input type="text" id="cli-nombre" class="form-control" required>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold">Cédula / NIT</label>
+              <input type="text" id="cli-cedula" class="form-control" required>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-bold">Teléfono</label>
+              <input type="text" id="cli-telefono" class="form-control">
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-bold">Dirección</label>
+              <input type="text" id="cli-direccion" class="form-control">
+            </div>
+            <div class="col-md-2 d-flex align-items-end">
+              <button type="submit" class="btn btn-primary w-100 fw-bold">Guardar</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="table-responsive">
+          <table class="table table-striped table-hover align-middle border">
+            <thead class="table-light">
+              <tr>
+                <th>ID</th>
+                <th>Nombre</th>
+                <th>Cédula / NIT</th>
+                <th>Teléfono</th>
+                <th>Dirección</th>
+              </tr>
+            </thead>
+            <tbody id="tabla-clientes-body">
+              <tr><td colspan="5" class="text-center text-muted">Cargando clientes...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Pestaña Créditos -->
+      <div class="tab-pane fade" id="creditos">
+        <h4 class="mb-3">Cartera de Créditos y Pendientes</h4>
+
+        <div class="card p-3 mb-4 bg-light border">
+          <h5 class="fw-bold mb-3">Registrar Abono</h5>
+          <form id="form-abono" onsubmit="registrarAbono(event)" class="row g-3">
+            <div class="col-md-5">
+              <label class="form-label fw-bold">Cliente en Cartera</label>
+              <select id="select-credito-cliente" class="form-select" required></select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label fw-bold">Monto del Abono ($)</label>
+              <input type="number" step="0.01" id="abono-monto" class="form-control" required>
+            </div>
+            <div class="col-md-3 d-flex align-items-end">
+              <button type="submit" class="btn btn-success w-100 fw-bold">💰 Registrar Abono</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="table-responsive">
+          <table class="table table-striped table-hover align-middle border">
+            <thead class="table-light">
+              <tr>
+                <th>ID Cliente</th>
+                <th>Nombre</th>
+                <th>Teléfono</th>
+                <th>Dirección</th>
+                <th>Deuda Total Pendiente</th>
+              </tr>
+            </thead>
+            <tbody id="tabla-creditos-body">
+              <tr><td colspan="5" class="text-center text-muted">Cargando cartera...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Pestaña Historial Ventas -->
+      <div class="tab-pane fade" id="historial">
+        <h4 class="mb-3">Historial de Ventas por Fecha</h4>
+        
+        <div class="row align-items-center mb-4 g-2">
+          <div class="col-auto">
+            <label class="form-label fw-bold mb-0">Seleccionar Día:</label>
+          </div>
+          <div class="col-auto">
+            <input type="date" id="filtro-fecha-historial" class="form-control" onchange="cargarHistorialVentas()">
+          </div>
+          <div class="col-auto">
+            <button class="btn btn-secondary fw-bold" onclick="setHoyHistorial()">Ver Hoy</button>
+          </div>
+        </div>
+
+        <div class="table-responsive">
+          <table class="table table-bordered align-middle border">
+            <thead class="table-light">
+              <tr>
+                <th># Venta</th>
+                <th>Fecha / Hora</th>
+                <th>Cliente</th>
+                <th>Dirección</th>
+                <th>Productos Vendidos</th>
+                <th>Tipo Pago</th>
+                <th>Total</th>
+              </tr>
+            </thead>
+            <tbody id="tabla-historial-body">
+              <tr><td colspan="7" class="text-center text-muted">Cargando historial...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      <!-- Pestaña Facturas de Ventas -->
+      <div class="tab-pane fade" id="facturas">
+        <h4 class="mb-3">Visualización y Reimpresión de Facturas</h4>
+
+        <div class="table-responsive mb-4">
+          <table class="table table-hover align-middle border">
+            <thead class="table-light">
+              <tr>
+                <th># Factura</th>
+                <th>Fecha / Hora</th>
+                <th>Cliente</th>
+                <th>Tipo Pago</th>
+                <th>Total</th>
+                <th>Acción</th>
+              </tr>
+            </thead>
+            <tbody id="tabla-facturas-body">
+              <tr><td colspan="6" class="text-center text-muted">Cargando facturas...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
+      {% if rol == 'admin' %}
+      <!-- Pestaña Usuarios (Admin) -->
+      <div class="tab-pane fade" id="usuarios">
+        <h4 class="mb-3">Administración de Usuarios y Permisos</h4>
+
+        <div class="card p-3 mb-4 bg-light border">
+          <h5 class="fw-bold mb-3">Registrar Nuevo Usuario</h5>
+          <form id="form-usuario" onsubmit="guardarUsuario(event)" class="row g-3">
+            <div class="col-md-4">
+              <label class="form-label fw-bold">Nombre de Usuario</label>
+              <input type="text" id="user-usuario" class="form-control" required>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label fw-bold">Contraseña</label>
+              <input type="password" id="user-clave" class="form-control" required>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-bold">Rol</label>
+              <select id="user-rol" class="form-select">
+                <option value="empleado" selected>Empleado</option>
+                <option value="admin">Administrador</option>
+              </select>
+            </div>
+            <div class="col-md-2 d-flex align-items-end">
+              <button type="submit" class="btn btn-primary w-100 fw-bold">Crear Usuario</button>
+            </div>
+          </form>
+        </div>
+
+        <div class="table-responsive">
+          <table class="table table-striped table-hover align-middle border">
+            <thead class="table-light">
+              <tr>
+                <th>ID</th>
+                <th>Usuario</th>
+                <th>Rol</th>
+                <th>Acciones</th>
+              </tr>
+            </thead>
+            <tbody id="tabla-usuarios-body">
+              <tr><td colspan="4" class="text-center text-muted">Cargando usuarios...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+      {% endif %}
+
+    </div>
+  </div>
+
+  <!-- MODAL NOTIFICACIONES -->
+  <div class="modal fade" id="modalNotificaciones" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header bg-warning text-dark">
+          <h5 class="modal-title fw-bold">⚠️ Alertas de Reposición de Inventario</h5>
+          <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="table-responsive">
+            <table class="table table-bordered align-middle">
+              <thead class="table-light">
+                <tr>
+                  <th>Producto</th>
+                  <th>Categoría</th>
+                  <th>Dimensiones</th>
+                  <th>Stock Actual</th>
+                  <th>Stock Mínimo</th>
+                  <th>Estado</th>
+                </tr>
+              </thead>
+              <tbody id="lista-notificaciones-body">
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL VER / EDITAR FACTURA -->
+  <div class="modal fade" id="modalFactura" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header bg-primary text-white">
+          <h5 class="modal-title fw-bold">Detalle de Factura</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div id="area-factura-pdf" class="factura-box">
+            <div class="text-center mb-3">
+              <h3 class="fw-bold mb-0 text-primary">🛠️ FERRETERÍA Y FÁBRICA DE FLEJES</h3>
+              <p class="text-muted mb-0">Venta de Materiales de Construcción y Fabricación de Flejes a Medida</p>
+              <p class="text-muted mb-0">NIT: 123456789-0 | Tel: (606) 123-4567</p>
+              <hr>
+              <h5 class="fw-bold">FACTURA DE VENTA N° <span id="fac-id"></span></h5>
+            </div>
+
+            <div class="row mb-3">
+              <div class="col-6">
+                <p class="mb-1"><strong>Fecha:</strong> <span id="fac-fecha"></span></p>
+                <p class="mb-1"><strong>Hora:</strong> <span id="fac-hora"></span></p>
+                <p class="mb-1"><strong>Medio de Pago:</strong> <span id="fac-pago"></span></p>
+              </div>
+              <div class="col-6">
+                <p class="mb-1"><strong>Cliente:</strong> <span id="fac-cliente-nombre"></span></p>
+                <p class="mb-1"><strong>Cédula/NIT:</strong> <span id="fac-cliente-nit"></span></p>
+                <p class="mb-1"><strong>Teléfono:</strong> <span id="fac-cliente-tel"></span></p>
+                <p class="mb-1"><strong>Dirección:</strong> <span id="fac-cliente-dir"></span></p>
+              </div>
+            </div>
+
+            <table class="table table-sm table-bordered">
+              <thead class="table-light">
+                <tr>
+                  <th>Producto</th>
+                  <th class="text-center">Cant.</th>
+                  <th class="text-end">Precio Unit.</th>
+                  <th class="text-end">Subtotal</th>
+                </tr>
+              </thead>
+              <tbody id="fac-items-body">
+              </tbody>
+              <tfoot>
+                <tr>
+                  <th colspan="3" class="text-end fs-5">TOTAL:</th>
+                  <th class="text-end fs-5 text-primary" id="fac-total"></th>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          <!-- Formulario de Edición de Datos de Cliente en la Factura -->
+          <div class="card mt-3 p-3 bg-light border">
+            <h6 class="fw-bold mb-2">✏️ Editar Datos del Cliente para esta Factura:</h6>
+            <div class="row g-2">
+              <div class="col-md-3">
+                <input type="text" id="edit-fac-nombre" class="form-control form-control-sm" placeholder="Nombre cliente">
+              </div>
+              <div class="col-md-3">
+                <input type="text" id="edit-fac-nit" class="form-control form-control-sm" placeholder="Cédula/NIT">
+              </div>
+              <div class="col-md-2">
+                <input type="text" id="edit-fac-tel" class="form-control form-control-sm" placeholder="Teléfono">
+              </div>
+              <div class="col-md-2">
+                <input type="text" id="edit-fac-dir" class="form-control form-control-sm" placeholder="Dirección">
+              </div>
+              <div class="col-md-2">
+                <button class="btn btn-warning btn-sm w-100 fw-bold" onclick="guardarEdicionClienteFactura()">Guardar</button>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+          <button type="button" class="btn btn-success fw-bold" onclick="descargarPDF()">📥 Descargar PDF</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/js/tom-select.complete.min.js"></script>
+
+  <script>
+    let carrito = [];
+    let productosLista = [];
+    let clientesLista = [];
+    let tsCliente, tsProducto, tsProdNombre;
+    let facturaActualId = null;
+
+    document.addEventListener('DOMContentLoaded', () => {
+      cargarNotificaciones();
+      cargarFormularioVentas();
+    });
+
+    async function cargarNotificaciones() {
+      try {
+        const res = await fetch('/api/notificaciones');
+        const data = await res.json();
+        const badge = document.getElementById('badge-notificaciones');
+        const banner = document.getElementById('banner-alerta-stock');
+
+        if (data.total > 0) {
+          badge.innerText = data.total;
+          badge.style.display = 'inline-block';
+          banner.classList.remove('d-none');
+        } else {
+          badge.style.display = 'none';
+          banner.classList.add('d-none');
         }
 
-        async function cargarClientes() {
-            const res = await fetch('/api/clientes');
-            const data = await res.json();
-            
-            const selectVenta = document.getElementById('venta-cliente');
-            selectVenta.innerHTML = '';
-            
-            const tbody = document.getElementById('tabla-clientes');
-            tbody.innerHTML = '';
-
-            data.forEach(c => {
-                selectVenta.innerHTML += `<option value="${c.id}">${c.nombre} (${c.cedula_nit || 'Sin NIT'})</option>`;
-                tbody.innerHTML += `
-                    <tr>
-                        <td>${c.id}</td>
-                        <td>${c.nombre}</td>
-                        <td>${c.cedula_nit || '-'}</td>
-                        <td>${c.telefono || '-'}</td>
-                        <td>${c.direccion || '-'}</td>
-                    </tr>
-                `;
-            });
+        const tbody = document.getElementById('lista-notificaciones-body');
+        tbody.innerHTML = '';
+        if (data.alertas.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" class="text-center text-success">✅ Todo el inventario tiene stock adecuado.</td></tr>';
+        } else {
+          data.alertas.forEach(p => {
+            const badgeUrgencia = p.urgencia === 'critico' 
+              ? '<span class="badge bg-danger">AGOTADO (0)</span>' 
+              : '<span class="badge bg-warning text-dark">STOCK BAJO</span>';
+            tbody.innerHTML += `
+              <tr>
+                <td><strong>${p.nombre}</strong></td>
+                <td>${p.categoria}</td>
+                <td>${p.dimensiones}</td>
+                <td class="fw-bold text-danger">${p.stock_actual}</td>
+                <td>${p.stock_minimo}</td>
+                <td>${badgeUrgencia}</td>
+              </tr>
+            `;
+          });
         }
+      } catch (err) {
+        console.error('Error notificaciones:', err);
+      }
+    }
 
-        async function guardarCliente() {
-            const cliente = {
-                nombre: document.getElementById('cli-nombre').value,
-                cedula_nit: document.getElementById('cli-cedula').value,
-                telefono: document.getElementById('cli-telefono').value,
-                direccion: document.getElementById('cli-direccion').value
-            };
+    function abrirModalNotificaciones() {
+      const modal = new bootstrap.Modal(document.getElementById('modalNotificaciones'));
+      modal.show();
+    }
 
-            const res = await fetch('/api/clientes', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(cliente)
-            });
+    async function cargarFormularioVentas() {
+      const resClientes = await fetch('/api/clientes');
+      clientesLista = await resClientes.json();
 
-            if (res.ok) {
-                alert("Cliente guardado con éxito");
-                document.getElementById('cli-nombre').value = '';
-                document.getElementById('cli-cedula').value = '';
-                document.getElementById('cli-telefono').value = '';
-                document.getElementById('cli-direccion').value = '';
-                cargarClientes();
-            } else {
-                const err = await res.json();
-                alert(err.error || "Error al guardar");
-            }
+      const resProds = await fetch('/api/productos');
+      productosLista = await resProds.json();
+
+      if (tsCliente) tsCliente.destroy();
+      tsCliente = new TomSelect('#select-cliente', {
+        options: clientesLista.map(c => ({ value: c.id, text: `${c.nombre} (${c.cedula_nit || 'Sin doc'})` })),
+        items: ['1'],
+        create: false,
+        onChange: function(val) {
+          const cli = clientesLista.find(c => c.id == val);
+          if (cli) {
+            document.getElementById('input-direccion-venta').value = cli.direccion || '';
+          }
         }
+      });
 
-        async function cargarHistorial() {
-            const fecha = document.getElementById('filtro-fecha').value;
-            let url = '/api/ventas';
-            if (fecha) url += `?fecha=${fecha}`;
+      if (tsProducto) tsProducto.destroy();
+      tsProducto = new TomSelect('#select-producto', {
+        options: productosLista.map(p => ({
+          value: p.id,
+          text: `${p.nombre} ${p.dimensiones ? '['+p.dimensiones+']' : ''} - $${p.precio_venta} (Disp: ${p.stock_actual})`
+        })),
+        create: false
+      });
+    }
 
-            const res = await fetch(url);
-            const data = await res.json();
+    function agregarProductoAlCarrito() {
+      const prodId = document.getElementById('select-producto').value;
+      const cant = parseInt(document.getElementById('input-cantidad').value);
 
-            const tbody = document.getElementById('tabla-historial');
-            tbody.innerHTML = '';
+      if (!prodId || isNaN(cant) || cant <= 0) {
+        alert('Seleccione un producto y una cantidad válida.');
+        return;
+      }
 
-            data.forEach(v => {
-                tbody.innerHTML += `
-                    <tr>
-                        <td>#${v.id}</td>
-                        <td>${v.fecha_dia} ${v.hora}</td>
-                        <td>${v.cliente}</td>
-                        <td>${v.direccion || '-'}</td>
-                        <td>$${v.total_venta}</td>
-                        <td><span class="badge bg-${v.tipo_pago === 'contado' ? 'success' : 'warning'}">${v.tipo_pago}</span></td>
-                        <td><button onclick="verFactura(${v.id})" class="btn btn-sm btn-info">👁️ Ver Factura</button></td>
-                    </tr>
-                `;
-            });
+      const prod = productosLista.find(p => p.id == prodId);
+      if (!prod) return;
+
+      if (cant > prod.stock_actual) {
+        alert(`Stock insuficiente. Solo hay ${prod.stock_actual} unidades disponibles.`);
+        return;
+      }
+
+      const existe = carrito.find(item => item.id_producto == prodId);
+      if (existe) {
+        if (existe.cantidad + cant > prod.stock_actual) {
+          alert(`Supera el stock. Ya agregó ${existe.cantidad} al carrito.`);
+          return;
         }
+        existe.cantidad += cant;
+        existe.subtotal = existe.cantidad * prod.precio_venta;
+      } else {
+        carrito.push({
+          id_producto: prod.id,
+          nombre: prod.nombre + (prod.dimensiones ? ` (${prod.dimensiones})` : ''),
+          precio: prod.precio_venta,
+          cantidad: cant,
+          subtotal: cant * prod.precio_venta
+        });
+      }
 
-        async function verFactura(idVenta) {
-            facturaActualId = idVenta;
-            const res = await fetch(`/api/ventas/${idVenta}`);
-            const f = await res.json();
+      actualizarTablaCarrito();
+    }
 
-            document.getElementById('fac-id').innerText = f.id;
-            document.getElementById('fac-cliente-nombre').value = f.cliente;
-            document.getElementById('fac-cliente-cedula').value = f.cedula_nit || '';
-            document.getElementById('fac-cliente-telefono').value = f.telefono || '';
-            document.getElementById('fac-cliente-direccion').value = f.direccion || '';
-            document.getElementById('fac-total').innerText = f.total_venta;
+    function actualizarTablaCarrito() {
+      const tbody = document.getElementById('tabla-carrito-body');
+      tbody.innerHTML = '';
 
-            const tbody = document.getElementById('fac-items');
-            tbody.innerHTML = '';
-            f.items.forEach(i => {
-                tbody.innerHTML += `
-                    <tr>
-                        <td>${i.nombre}</td>
-                        <td>${i.cantidad}</td>
-                        <td>$${i.precio_unitario}</td>
-                        <td>$${i.subtotal}</td>
-                    </tr>
-                `;
-            });
+      if (carrito.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">No hay productos agregados a la venta.</td></tr>';
+        document.getElementById('total-venta-texto').innerText = '$0';
+        return;
+      }
 
-            // Preparar datos para imprimir
-            document.getElementById('pr-fac-id').innerText = f.id;
-            document.getElementById('pr-fac-fecha').innerText = f.fecha_dia;
-            document.getElementById('pr-fac-hora').innerText = f.hora;
-            document.getElementById('pr-fac-cliente').innerText = f.cliente;
-            document.getElementById('pr-fac-cedula').innerText = f.cedula_nit || '-';
-            document.getElementById('pr-fac-telefono').innerText = f.telefono || '-';
-            document.getElementById('pr-fac-direccion').innerText = f.direccion || '-';
-            document.getElementById('pr-fac-tipo-pago').innerText = f.tipo_pago;
-            document.getElementById('pr-fac-total').innerText = f.total_venta;
+      let total = 0;
+      carrito.forEach((item, index) => {
+        total += item.subtotal;
+        tbody.innerHTML += `
+          <tr>
+            <td>${item.nombre}</td>
+            <td>$${item.precio.toLocaleString()}</td>
+            <td>${item.cantidad}</td>
+            <td class="fw-bold">$${item.subtotal.toLocaleString()}</td>
+            <td><button class="btn btn-sm btn-danger" onclick="eliminarDelCarrito(${index})">❌</button></td>
+          </tr>
+        `;
+      });
 
-            const prTbody = document.getElementById('pr-fac-items');
-            prTbody.innerHTML = tbody.innerHTML;
+      document.getElementById('total-venta-texto').innerText = `$${total.toLocaleString()}`;
+    }
 
-            new bootstrap.Modal(document.getElementById('modalFactura')).show();
-        }
+    function eliminarDelCarrito(index) {
+      carrito.splice(index, 1);
+      actualizarTablaCarrito();
+    }
 
-        async function actualizarClienteFactura() {
-            if (!facturaActualId) return;
+    async function procesarVenta() {
+      if (carrito.length === 0) {
+        alert('Agregue al menos un producto a la venta.');
+        return;
+      }
 
-            const datos = {
-                nombre: document.getElementById('fac-cliente-nombre').value,
-                cedula_nit: document.getElementById('fac-cliente-cedula').value,
-                telefono: document.getElementById('fac-cliente-telefono').value,
-                direccion: document.getElementById('fac-cliente-direccion').value
-            };
+      const payload = {
+        id_cliente: parseInt(document.getElementById('select-cliente').value),
+        tipo_pago: document.getElementById('select-tipo-pago').value,
+        direccion: document.getElementById('input-direccion-venta').value,
+        items: carrito.map(i => ({ id_producto: i.id_producto, cantidad: i.cantidad }))
+      };
 
-            const res = await fetch(`/api/ventas/${facturaActualId}/cliente`, {
-                method: 'PUT',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify(datos)
-            });
+      const res = await fetch('/api/ventas', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
 
-            if (res.ok) {
-                alert("Datos del cliente actualizados correctamente.");
-                verFactura(facturaActualId);
-                cargarClientes();
-            } else {
-                const err = await res.json();
-                alert(err.error || "Error al actualizar cliente");
-            }
-        }
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.mensaje);
+        carrito = [];
+        actualizarTablaCarrito();
+        cargarNotificaciones();
+        verFactura(data.id_venta);
+      } else {
+        alert('Error: ' + data.error);
+      }
+    }
 
-        function imprimirFactura() {
-            window.print();
-        }
+    async function cargarProductosTabla() {
+      const res = await fetch('/api/productos');
+      productosLista = await res.json();
 
-        // Cargar datos iniciales
-        cargarClientes();
-    </script>
+      const tbody = document.getElementById('tabla-productos-body');
+      tbody.innerHTML = '';
+
+      productosLista.forEach(p => {
+        const estado = p.stock_actual <= p.stock_minimo 
+          ? '<span class="badge bg-danger">Bajo Stock</span>' 
+          : '<span class="badge bg-success">OK</span>';
+        tbody.innerHTML += `
+          <tr>
+            <td>${p.id}</td>
+            <td><strong>${p.nombre}</strong></td>
+            <td>${p.categoria || ''}</td>
+            <td>${p.dimensiones || ''}</td>
+            <td>$${p.precio_costo}</td>
+            <td>$${p.precio_venta}</td>
+            <td class="fw-bold">${p.stock_actual}</td>
+            <td>${estado}</td>
+          </tr>
+        `;
+      });
+
+      if (tsProdNombre) tsProdNombre.destroy();
+      tsProdNombre = new TomSelect('#prod-nombre', {
+        options: productosLista.map(p => ({ value: p.nombre, text: p.nombre })),
+        create: true
+      });
+    }
+
+    async function guardarProducto(e) {
+      e.preventDefault();
+      const payload = {
+        nombre: document.getElementById('prod-nombre').value,
+        categoria: document.getElementById('prod-categoria').value,
+        dimensiones: document.getElementById('prod-dimensiones').value,
+        precio_costo: document.getElementById('prod-costo').value,
+        precio_venta: document.getElementById('prod-venta').value,
+        stock_actual: document.getElementById('prod-stock').value,
+        stock_minimo: document.getElementById('prod-minimo').value
+      };
+
+      const res = await fetch('/api/productos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.mensaje);
+        document.getElementById('form-producto').reset();
+        cargarProductosTabla();
+        cargarNotificaciones();
+      } else {
+        alert('Error: ' + data.error);
+      }
+    }
+
+    async function cargarClientesTabla() {
+      const res = await fetch('/api/clientes');
+      const clientes = await res.json();
+
+      const tbody = document.getElementById('tabla-clientes-body');
+      tbody.innerHTML = '';
+
+      clientes.forEach(c => {
+        tbody.innerHTML += `
+          <tr>
+            <td>${c.id}</td>
+            <td><strong>${c.nombre}</strong></td>
+            <td>${c.cedula_nit || ''}</td>
+            <td>${c.telefono || ''}</td>
+            <td>${c.direccion || ''}</td>
+          </tr>
+        `;
+      });
+    }
+
+    async function guardarCliente(e) {
+      e.preventDefault();
+      const payload = {
+        nombre: document.getElementById('cli-nombre').value,
+        cedula_nit: document.getElementById('cli-cedula').value,
+        telefono: document.getElementById('cli-telefono').value,
+        direccion: document.getElementById('cli-direccion').value
+      };
+
+      const res = await fetch('/api/clientes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.mensaje);
+        document.getElementById('form-cliente').reset();
+        cargarClientesTabla();
+      } else {
+        alert('Error: ' + data.error);
+      }
+    }
+
+    async function cargarCreditosTabla() {
+      const res = await fetch('/api/creditos');
+      const creditos = await res.json();
+
+      const select = document.getElementById('select-credito-cliente');
+      select.innerHTML = '<option value="">-- Seleccionar cliente --</option>';
+
+      const tbody = document.getElementById('tabla-creditos-body');
+      tbody.innerHTML = '';
+
+      if (creditos.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-success">No hay créditos pendientes.</td></tr>';
+        return;
+      }
+
+      creditos.forEach(c => {
+        select.innerHTML += `<option value="${c.id_cliente}">${c.nombre} (Deuda: $${c.deuda_total})</option>`;
+        tbody.innerHTML += `
+          <tr>
+            <td>${c.id_cliente}</td>
+            <td><strong>${c.nombre}</strong></td>
+            <td>${c.telefono || ''}</td>
+            <td>${c.direccion || ''}</td>
+            <td class="text-danger fw-bold">$${c.deuda_total.toLocaleString()}</td>
+          </tr>
+        `;
+      });
+    }
+
+    async function registrarAbono(e) {
+      e.preventDefault();
+      const payload = {
+        id_cliente: parseInt(document.getElementById('select-credito-cliente').value),
+        monto: parseFloat(document.getElementById('abono-monto').value)
+      };
+
+      const res = await fetch('/api/abonos', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.mensaje);
+        document.getElementById('form-abono').reset();
+        cargarCreditosTabla();
+      } else {
+        alert('Error: ' + data.error);
+      }
+    }
+
+    function setHoyHistorial() {
+      const hoy = new Date().toISOString().split('T')[0];
+      document.getElementById('filtro-fecha-historial').value = hoy;
+      cargarHistorialVentas();
+    }
+
+    async function cargarHistorialVentas() {
+      const fecha = document.getElementById('filtro-fecha-historial').value;
+      const url = fecha ? `/api/ventas?fecha=${fecha}` : '/api/ventas';
+
+      const res = await fetch(url);
+      const ventas = await res.json();
+
+      const tbody = document.getElementById('tabla-historial-body');
+      tbody.innerHTML = '';
+
+      if (ventas.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">No se registraron ventas.</td></tr>';
+        return;
+      }
+
+      ventas.forEach(v => {
+        tbody.innerHTML += `
+          <tr>
+            <td>#${v.id}</td>
+            <td>${v.fecha_dia} ${v.hora}</td>
+            <td><strong>${v.cliente}</strong></td>
+            <td>${v.direccion || ''}</td>
+            <td>${v.productos_detalle || ''}</td>
+            <td><span class="badge bg-secondary">${v.tipo_pago}</span></td>
+            <td class="fw-bold text-primary">$${v.total_venta.toLocaleString()}</td>
+          </tr>
+        `;
+      });
+    }
+
+    async function cargarFacturasTabla() {
+      const res = await fetch('/api/ventas');
+      const ventas = await res.json();
+
+      const tbody = document.getElementById('tabla-facturas-body');
+      tbody.innerHTML = '';
+
+      ventas.forEach(v => {
+        tbody.innerHTML += `
+          <tr>
+            <td>#${v.id}</td>
+            <td>${v.fecha_dia} ${v.hora}</td>
+            <td><strong>${v.cliente}</strong></td>
+            <td>${v.tipo_pago}</td>
+            <td class="fw-bold">$${v.total_venta.toLocaleString()}</td>
+            <td>
+              <button class="btn btn-sm btn-primary fw-bold" onclick="verFactura(${v.id})">👁️ Ver / Imprimir</button>
+            </td>
+          </tr>
+        `;
+      });
+    }
+
+    async function verFactura(idVenta) {
+      facturaActualId = idVenta;
+      const res = await fetch(`/api/ventas/${idVenta}`);
+      const data = await res.json();
+
+      if (!res.ok) {
+        alert(data.error);
+        return;
+      }
+
+      document.getElementById('fac-id').innerText = data.id;
+      document.getElementById('fac-fecha').innerText = data.fecha_dia;
+      document.getElementById('fac-hora').innerText = data.hora;
+      document.getElementById('fac-pago').innerText = data.tipo_pago.toUpperCase();
+      document.getElementById('fac-cliente-nombre').innerText = data.cliente;
+      document.getElementById('fac-cliente-nit').innerText = data.cedula_nit || 'N/A';
+      document.getElementById('fac-cliente-tel').innerText = data.telefono || 'N/A';
+      document.getElementById('fac-cliente-dir').innerText = data.direccion || 'N/A';
+
+      // Pre-llenar campos de edición
+      document.getElementById('edit-fac-nombre').value = data.cliente;
+      document.getElementById('edit-fac-nit').value = data.cedula_nit || '';
+      document.getElementById('edit-fac-tel').value = data.telefono || '';
+      document.getElementById('edit-fac-dir').value = data.direccion || '';
+
+      const tbody = document.getElementById('fac-items-body');
+      tbody.innerHTML = '';
+
+      data.items.forEach(i => {
+        tbody.innerHTML += `
+          <tr>
+            <td>${i.nombre}</td>
+            <td class="text-center">${i.cantidad}</td>
+            <td class="text-end">$${i.precio_unitario.toLocaleString()}</td>
+            <td class="text-end fw-bold">$${i.subtotal.toLocaleString()}</td>
+          </tr>
+        `;
+      });
+
+      document.getElementById('fac-total').innerText = `$${data.total_venta.toLocaleString()}`;
+
+      const modal = new bootstrap.Modal(document.getElementById('modalFactura'));
+      modal.show();
+    }
+
+    async function guardarEdicionClienteFactura() {
+      if (!facturaActualId) return;
+
+      const payload = {
+        nombre: document.getElementById('edit-fac-nombre').value,
+        cedula_nit: document.getElementById('edit-fac-nit').value,
+        telefono: document.getElementById('edit-fac-tel').value,
+        direccion: document.getElementById('edit-fac-dir').value
+      };
+
+      const res = await fetch(`/api/ventas/${facturaActualId}/cliente`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.mensaje);
+        verFactura(facturaActualId);
+        cargarFacturasTabla();
+      } else {
+        alert('Error: ' + data.error);
+      }
+    }
+
+    function descargarPDF() {
+      const elemento = document.getElementById('area-factura-pdf');
+      const opt = {
+        margin:       0.5,
+        filename:     `Factura_${document.getElementById('fac-id').innerText}.pdf`,
+        image:        { type: 'jpeg', quality: 0.98 },
+        html2canvas:  { scale: 2 },
+        jsPDF:        { unit: 'in', format: 'letter', orientation: 'portrait' }
+      };
+      html2pdf().set(opt).from(elemento).save();
+    }
+
+    {% if rol == 'admin' %}
+    async function cargarUsuariosTabla() {
+      const res = await fetch('/api/usuarios');
+      const usuarios = await res.json();
+
+      const tbody = document.getElementById('tabla-usuarios-body');
+      tbody.innerHTML = '';
+
+      usuarios.forEach(u => {
+        tbody.innerHTML += `
+          <tr>
+            <td>${u.id}</td>
+            <td><strong>${u.usuario}</strong></td>
+            <td><span class="badge bg-${u.rol === 'admin' ? 'danger' : 'info'}">${u.rol}</span></td>
+            <td>
+              ${u.id !== 1 ? `<button class="btn btn-sm btn-danger fw-bold" onclick="eliminarUsuario(${u.id})">Eliminar</button>` : '<em>Principal</em>'}
+            </td>
+          </tr>
+        `;
+      });
+    }
+
+    async function guardarUsuario(e) {
+      e.preventDefault();
+      const payload = {
+        usuario: document.getElementById('user-usuario').value,
+        clave: document.getElementById('user-clave').value,
+        rol: document.getElementById('user-rol').value
+      };
+
+      const res = await fetch('/api/usuarios', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.mensaje);
+        document.getElementById('form-usuario').reset();
+        cargarUsuariosTabla();
+      } else {
+        alert('Error: ' + data.error);
+      }
+    }
+
+    async function eliminarUsuario(id) {
+      if (!confirm('¿Está seguro de eliminar este usuario?')) return;
+
+      const res = await fetch(`/api/usuarios/${id}`, { method: 'DELETE' });
+      const data = await res.json();
+
+      if (res.ok) {
+        alert(data.mensaje);
+        cargarUsuariosTabla();
+      } else {
+        alert('Error: ' + data.error);
+      }
+    }
+    {% endif %}
+  </script>
 </body>
 </html>
