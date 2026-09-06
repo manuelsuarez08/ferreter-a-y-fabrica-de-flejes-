@@ -1,4 +1,5 @@
 import sqlite3
+from werkzeug.security import generate_password_hash
 
 DB_NAME = 'ferreteria.db'
 
@@ -32,6 +33,7 @@ def cargar_datos_iniciales():
         nombre TEXT NOT NULL,
         categoria TEXT,
         dimensiones TEXT,
+        codigo_barras TEXT UNIQUE,
         precio_costo REAL NOT NULL,
         precio_venta REAL NOT NULL,
         stock_actual INTEGER NOT NULL,
@@ -72,6 +74,9 @@ def cargar_datos_iniciales():
     )""")
 
     print("🔄 Limpiando datos antiguos y reiniciando contadores de ID...")
+    cursor.execute("DELETE FROM detalle_ventas")
+    cursor.execute("DELETE FROM ventas")
+    cursor.execute("DELETE FROM abonos")
     cursor.execute("DELETE FROM usuarios")
     cursor.execute("DELETE FROM clientes")
     cursor.execute("DELETE FROM productos")
@@ -83,12 +88,12 @@ def cargar_datos_iniciales():
 
     print("👤 Cargando usuarios...")
     usuarios = [
-        ('admin', 'Administrador', 'admin123', 'admin123', 'admin'),
-        ('empleado', 'Empleado Mostrador', '1234', '1234', 'empleado'),
-        ('vendedor', 'Vendedor Mostrador', '1234', '1234', 'empleado')
+        ('admin', generate_password_hash('admin123'), 'admin'),
+        ('empleado', generate_password_hash('1234'), 'empleado'),
+        ('vendedor', generate_password_hash('1234'), 'empleado')
     ]
     cursor.executemany(
-        "INSERT INTO usuarios (username, nombre, password, clave, rol) VALUES (?, ?, ?, ?, ?)",
+        "INSERT INTO usuarios (usuario, clave, rol) VALUES (?, ?, ?)",
         usuarios
     )
 
