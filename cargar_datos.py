@@ -1,92 +1,32 @@
+import os
 import sqlite3
 from werkzeug.security import generate_password_hash
 
-DB_NAME = 'ferreteria.db'
+from app import init_db
+
+BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+DB_NAME = os.path.join(BASE_DIR, 'ferreteria.db')
+
 
 def cargar_datos_iniciales():
+    print("Verificando la estructura de la base de datos...")
+    init_db()
+
     conn = sqlite3.connect(DB_NAME)
     cursor = conn.cursor()
 
-    print("🛠️ Creando/Verificando tablas en SQLite...")
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS usuarios (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        username TEXT UNIQUE,
-        nombre TEXT,
-        password TEXT,
-        clave TEXT,
-        rol TEXT NOT NULL
-    )""")
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS clientes (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre TEXT NOT NULL,
-        cedula_nit TEXT,
-        telefono TEXT
-    )""")
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS productos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        nombre TEXT NOT NULL,
-        categoria TEXT,
-        dimensiones TEXT,
-        codigo_barras TEXT UNIQUE,
-        precio_costo REAL NOT NULL,
-        precio_venta REAL NOT NULL,
-        stock_actual INTEGER NOT NULL,
-        stock_minimo INTEGER DEFAULT 5
-    )""")
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS ventas (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        id_cliente INTEGER NOT NULL,
-        fecha_dia TEXT NOT NULL,
-        hora TEXT NOT NULL,
-        tipo_pago TEXT NOT NULL,
-        total_venta REAL NOT NULL,
-        saldo_pendiente REAL NOT NULL,
-        FOREIGN KEY (id_cliente) REFERENCES clientes (id)
-    )""")
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS detalle_ventas (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        id_venta INTEGER NOT NULL,
-        id_producto INTEGER NOT NULL,
-        cantidad INTEGER NOT NULL,
-        precio_unitario REAL NOT NULL,
-        subtotal REAL NOT NULL,
-        FOREIGN KEY (id_venta) REFERENCES ventas (id),
-        FOREIGN KEY (id_producto) REFERENCES productos (id)
-    )""")
-
-    cursor.execute("""
-    CREATE TABLE IF NOT EXISTS abonos (
-        id INTEGER PRIMARY KEY AUTOINCREMENT,
-        id_cliente INTEGER NOT NULL,
-        fecha TEXT NOT NULL,
-        monto REAL NOT NULL,
-        FOREIGN KEY (id_cliente) REFERENCES clientes (id)
-    )""")
-
-    print("🔄 Limpiando datos antiguos y reiniciando contadores de ID...")
+    print("Limpiando datos antiguos y reiniciando contadores de ID...")
     cursor.execute("DELETE FROM detalle_ventas")
     cursor.execute("DELETE FROM ventas")
     cursor.execute("DELETE FROM abonos")
     cursor.execute("DELETE FROM usuarios")
     cursor.execute("DELETE FROM clientes")
     cursor.execute("DELETE FROM productos")
-    
-    # Reiniciar el autoincremento de IDs desde 1
-    cursor.execute("DELETE FROM sqlite_sequence WHERE name='clientes'")
-    cursor.execute("DELETE FROM sqlite_sequence WHERE name='usuarios'")
-    cursor.execute("DELETE FROM sqlite_sequence WHERE name='productos'")
 
-    print("👤 Cargando usuarios...")
+    # Reiniciar el autoincremento de IDs desde 1
+    cursor.execute("DELETE FROM sqlite_sequence WHERE name IN ('clientes', 'usuarios', 'productos')")
+
+    print("Cargando usuarios...")
     usuarios = [
         ('admin', generate_password_hash('admin123'), 'admin'),
         ('empleado', generate_password_hash('1234'), 'empleado'),
@@ -97,7 +37,7 @@ def cargar_datos_iniciales():
         usuarios
     )
 
-    print("👥 Cargando lista completa de clientes (iniciando desde el ID 1)...")
+    print("Cargando lista completa de clientes (iniciando desde el ID 1)...")
     clientes = [
         ('Cliente Mostrador (General)', '2222222222', '3000000000'),
         ('Aide de Perez', '', '3218933221'),
@@ -218,12 +158,13 @@ def cargar_datos_iniciales():
         ('Wilson Jimenez', '', '3127001122'),
         ('Yolanda Marin', '', '3104112233')
     ]
+    clientes = [(nombre, cedula_nit or None, telefono) for nombre, cedula_nit, telefono in clientes]
     cursor.executemany(
         "INSERT INTO clientes (nombre, cedula_nit, telefono) VALUES (?, ?, ?)",
         clientes
     )
 
-    print("📦 Cargando productos...")
+    print("Cargando productos...")
     productos = [
         ('Cemento Argos 50kg', 'Construcción', '50kg', 28000, 34000, 100, 10),
         ('Varilla 1/2 pulgada', 'Estructura', '6m', 18000, 23000, 150, 20),
@@ -236,7 +177,7 @@ def cargar_datos_iniciales():
 
     conn.commit()
     conn.close()
-    print("✅ ¡Carga finalizada con éxito! El 'Cliente Mostrador (General)' ahora tiene el ID 1.")
+    print("Carga finalizada con exito. El 'Cliente Mostrador (General)' ahora tiene el ID 1.")
 
 if __name__ == '__main__':
     cargar_datos_iniciales()

@@ -1,5 +1,5 @@
 <!DOCTYPE html>
-<html lang="es">
+<html lang="es" spellcheck="true">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
@@ -7,6 +7,7 @@
   <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
   <link href="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/css/tom-select.bootstrap5.min.css" rel="stylesheet">
   <script src="https://cdnjs.cloudflare.com/ajax/libs/html2pdf.js/0.10.1/html2pdf.bundle.min.js"></script>
+  <script src="https://unpkg.com/html5-qrcode@2.3.8/html5-qrcode.min.js"></script>
   <style>
     body {
       background-color: #f8f9fa;
@@ -68,6 +69,50 @@
         top: 0;
       }
     }
+
+    /* ── Selector tipo de entrega ── */
+    .btn.active-entrega {
+      box-shadow: 0 0 0 3px rgba(25, 135, 84, 0.4);
+    }
+    #btn-para-llevar.active-entrega {
+      box-shadow: 0 0 0 3px rgba(13, 110, 253, 0.4);
+    }
+
+    /* ── Barra de pestañas con scroll horizontal ── */
+    #myTab {
+      overflow-x: auto;
+      overflow-y: hidden;
+      flex-wrap: nowrap !important;
+      -webkit-overflow-scrolling: touch;
+      scrollbar-width: thin;
+    }
+    #myTab .nav-item { flex-shrink: 0; }
+    #myTab .nav-link { white-space: nowrap; }
+
+    /* ── Módulo código de barras ── */
+    #barcode-reader {
+      border-radius: 6px;
+      overflow: hidden;
+    }
+    #barcode-reader video {
+      width: 100% !important;
+      border-radius: 6px;
+    }
+    #panel-scan-resultado {
+      border-left: 4px solid #0d6efd;
+      background: #f0f6ff;
+      border-radius: 6px;
+      padding: 10px 14px;
+      font-size: 0.92rem;
+    }
+    #panel-scan-resultado.no-encontrado {
+      border-left-color: #dc3545;
+      background: #fff5f5;
+    }
+    .scan-badge-stock {
+      font-size: 0.8rem;
+      padding: 3px 8px;
+    }
   </style>
 </head>
 <body>
@@ -78,12 +123,24 @@
       <a class="navbar-brand fw-bold fs-4" href="#">🛠️ FERRETERÍA Y FÁBRICA DE FLEJES</a>
       
       <div class="d-flex align-items-center gap-3">
+        {% if rol != 'fabrica' and rol != 'pedidos' %}
         <!-- Botón de Notificaciones -->
         <button type="button" class="btn btn-warning position-relative fw-bold" onclick="abrirModalNotificaciones()">
           🔔 Reposición
           <span id="badge-notificaciones" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display: none;">
             0
           </span>
+        </button>
+        {% endif %}
+        {% if rol != 'fabrica' %}
+        <button type="button" class="btn btn-info position-relative fw-bold text-white" onclick="irAPedidos()">
+          🚚 Pedidos
+          <span id="badge-pedidos-nav" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display:none;">0</span>
+        </button>
+        {% endif %}
+        <button type="button" class="btn btn-success position-relative fw-bold" onclick="abrirModalNotificacionesFlejes()">
+          🧵 Flejes Listos
+          <span id="badge-notificaciones-flejes" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display:none;">0</span>
         </button>
 
         <span class="navbar-text text-white">
@@ -92,6 +149,23 @@
       </div>
     </div>
   </nav>
+
+  <!-- Modal de notificaciones de flejes listos -->
+  <div class="modal fade" id="modalNotificacionesFlejes" tabindex="-1">
+    <div class="modal-dialog modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header bg-success text-white">
+          <h5 class="modal-title">🧵 Flejes listos</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <ul id="lista-notificaciones-flejes" class="list-group">
+            <li class="list-group-item text-center text-muted">No hay notificaciones.</li>
+          </ul>
+        </div>
+      </div>
+    </div>
+  </div>
 
   <div class="container-fluid px-4">
     <!-- Banner de Alerta de stock -->
@@ -102,9 +176,11 @@
     </div>
 
     <!-- Navegación por pestañas -->
-    <ul class="nav nav-tabs" id="myTab" role="tablist">
+    <ul class="nav nav-tabs flex-nowrap overflow-auto" id="myTab" role="tablist" style="flex-wrap:nowrap!important;white-space:nowrap;">
+      {% set rol_restringido = rol in ['fabrica', 'pedidos'] %}
+      {% if not rol_restringido %}
       <li class="nav-item">
-        <button class="nav-link active" id="ventas-tab" data-bs-toggle="tab" data-bs-target="#ventas" type="button" onclick="cargarFormularioVentas()">🛒 Ventas / Facturación</button>
+        <button class="nav-link active" id="ventas-tab" data-bs-toggle="tab" data-bs-target="#ventas" type="button" onclick="cargarFormularioVentas().then(()=>document.getElementById('input-codigo-barras').focus())">🛒 Ventas / Facturación</button>
       </li>
       <li class="nav-item">
         <button class="nav-link" id="productos-tab" data-bs-toggle="tab" data-bs-target="#productos" type="button" onclick="cargarProductosTabla()">📦 Productos</button>
@@ -121,6 +197,30 @@
       <li class="nav-item">
         <button class="nav-link" id="facturas-tab" data-bs-toggle="tab" data-bs-target="#facturas" type="button" onclick="cargarFacturasTabla()">📄 Facturas de Ventas</button>
       </li>
+      {% endif %}
+      {% if rol != 'fabrica' %}
+      <li class="nav-item">
+        <button class="nav-link {{ 'active' if rol == 'pedidos' else '' }} position-relative" id="pedidos-tab" data-bs-toggle="tab" data-bs-target="#pedidos" type="button" onclick="activarSubtabPedidos('despachos')">
+          🚚 Pedidos
+          <span id="badge-pedidos" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display:none;">0</span>
+        </button>
+      </li>
+      {% endif %}
+      {% if not rol_restringido %}
+      <li class="nav-item">
+        <button class="nav-link" id="alquiler-tab" data-bs-toggle="tab" data-bs-target="#alquiler" type="button" onclick="cargarAlquileresActivos()">
+          🚜 Alquiler de Maquinaria
+        </button>
+      </li>
+      {% endif %}
+      {% if rol != 'pedidos' %}
+      <li class="nav-item">
+        <button class="nav-link {{ 'active' if rol == 'fabrica' else '' }} position-relative" id="flejes-tab" data-bs-toggle="tab" data-bs-target="#flejes" type="button" onclick="cargarOrdenesFlejes()">
+          🧵 Fábrica de Flejes
+          <span id="badge-flejes" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display:none;">0</span>
+        </button>
+      </li>
+      {% endif %}
       {% if rol == 'admin' %}
       <li class="nav-item">
         <button class="nav-link" id="usuarios-tab" data-bs-toggle="tab" data-bs-target="#usuarios" type="button" onclick="cargarUsuariosTabla()">🔑 Usuarios y Accesos</button>
@@ -134,10 +234,31 @@
     <div class="tab-content bg-white border border-top-0 p-4 rounded-bottom shadow-sm">
       
       <!-- Pestaña Ventas -->
-      <div class="tab-pane fade show active" id="ventas">
+      <div class="tab-pane fade {{ 'show active' if rol not in ['fabrica','pedidos'] else '' }}" id="ventas">
         <h4 class="mb-3">Nueva Venta</h4>
         
         <div class="card p-3 mb-4 bg-light border">
+          <!-- Tipo de entrega -->
+          <div class="mb-3">
+            <label class="form-label fw-bold">Tipo de Entrega:</label>
+            <div class="d-flex gap-2 flex-wrap">
+              <button type="button" id="btn-entrega-inmediata"
+                class="btn btn-success fw-bold active-entrega"
+                onclick="seleccionarTipoEntrega('entrega_inmediata')">
+                🏪 Para entregar en el negocio
+              </button>
+              <button type="button" id="btn-para-llevar"
+                class="btn btn-outline-primary fw-bold"
+                onclick="seleccionarTipoEntrega('para_llevar')">
+                🚚 Para llevar / Domicilio
+              </button>
+            </div>
+            <input type="hidden" id="input-tipo-entrega" value="entrega_inmediata">
+            <div id="aviso-pedido-consecutivo" class="alert alert-info mt-2 mb-0 py-2 d-none">
+              📋 Se generará automáticamente un <strong>número de pedido consecutivo</strong> al registrar esta venta.
+            </div>
+          </div>
+
           <div class="row g-3">
             <div class="col-md-5">
               <label for="select-cliente" class="form-label fw-bold">Cliente:</label>
@@ -152,9 +273,9 @@
                 <option value="credito">Crédito</option>
               </select>
             </div>
-            <div class="col-md-3">
+            <div class="col-md-3" id="bloque-direccion-venta">
               <label for="input-direccion-venta" class="form-label fw-bold">Dirección de Entrega:</label>
-              <input type="text" id="input-direccion-venta" class="form-control" placeholder="Dirección de envío/obra">
+              <input type="text" id="input-direccion-venta" class="form-control" placeholder="Dirección de envío/obra" spellcheck="true">
             </div>
           </div>
         </div>
@@ -164,7 +285,10 @@
           <div class="row g-3 align-items-end">
             <div class="col-md-4">
               <label for="input-codigo-barras" class="form-label fw-bold">Código de barras</label>
-              <input type="text" id="input-codigo-barras" class="form-control" placeholder="Escanee o escriba el código" autocomplete="off" onkeydown="procesarCodigoBarras(event)">
+              <div class="input-group">
+                <input type="text" id="input-codigo-barras" class="form-control" placeholder="Escanee o escriba el código" autocomplete="off" spellcheck="false" onkeydown="procesarCodigoBarras(event)">
+                <button type="button" class="btn btn-outline-secondary" title="Escanear con cámara" onclick="abrirCamaraVentas()">📷</button>
+              </div>
             </div>
             <div class="col-md-6">
               <label for="select-producto" class="form-label fw-bold">Seleccionar Producto:</label>
@@ -176,6 +300,19 @@
             </div>
             <div class="col-md-3">
               <button class="btn btn-success w-100 fw-bold" onclick="agregarProductoAlCarrito()">➕ Agregar a la lista</button>
+            </div>
+          </div>
+          <!-- Panel resultado escaneo código de barras -->
+          <div id="panel-scan-resultado" class="mt-3 d-none">
+            <div class="d-flex justify-content-between align-items-start">
+              <div>
+                <div class="fw-bold" id="scan-prod-nombre">—</div>
+                <div class="text-muted small" id="scan-prod-detalle">—</div>
+              </div>
+              <div class="text-end">
+                <div class="fw-bold text-primary" id="scan-prod-precio">—</div>
+                <span id="scan-prod-stock-badge" class="badge scan-badge-stock bg-success">Stock: —</span>
+              </div>
             </div>
           </div>
           <div id="detalle-producto-seleccionado" class="alert alert-info mt-3 mb-0 d-none">
@@ -190,8 +327,72 @@
               <div class="col-md-3"><strong>Stock mínimo:</strong> <span id="detalle-prod-minimo"></span></div>
             </div>
           </div>
-        </div>
 
+          <div class="card border-warning bg-warning-subtle mt-4">
+            <div class="card-body p-3">
+              <div class="d-flex justify-content-between align-items-center mb-3">
+                <h5 class="fw-bold mb-0 text-warning-emphasis">🧰 Flejes a medida / orden a fábrica</h5>
+                <span class="badge bg-warning text-dark">Pedido inmediato</span>
+              </div>
+              <div class="row g-2 align-items-end">
+                <div class="col-md-2">
+                  <label class="form-label fw-bold">Calibre</label>
+                  <select id="fleje-calibre" class="form-select">
+                    <option value="">Seleccione</option>
+                    <option value="1/4">1/4"</option>
+                    <option value="3/8">3/8"</option>
+                    <option value="9mm">9 mm</option>
+                    <option value="1/2">1/2"</option>
+                  </select>
+                </div>
+                <div class="col-md-2">
+                  <label class="form-label fw-bold">Ancho (cm)</label>
+                  <input type="number" step="0.1" id="fleje-ancho" class="form-control" value="10">
+                </div>
+                <div class="col-md-2">
+                  <label class="form-label fw-bold">Largo (cm)</label>
+                  <input type="number" step="0.1" id="fleje-largo" class="form-control" value="20">
+                </div>
+                <div class="col-md-2">
+                  <label class="form-label fw-bold">Gancho (cm)</label>
+                  <input type="number" step="0.1" id="fleje-gancho" class="form-control" value="5">
+                </div>
+                <div class="col-md-2">
+                  <label class="form-label fw-bold">Cantidad</label>
+                  <input type="number" min="1" id="fleje-cantidad" class="form-control" value="1">
+                </div>
+                <div class="col-md-2">
+                  <button type="button" class="btn btn-warning w-100 fw-bold" onclick="agregarFlejeAlPedido()">Agregar</button>
+                </div>
+              </div>
+
+              <div class="mt-3">
+                <div class="table-responsive">
+                  <table class="table table-sm table-bordered bg-white mb-0">
+                    <thead class="table-light">
+                      <tr>
+                        <th>Calibre</th>
+                        <th>Ancho x Largo</th>
+                        <th>Gancho</th>
+                        <th>Cantidad</th>
+                        <th>Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody id="tabla-flejes-pedido-body">
+                      <tr><td colspan="5" class="text-center text-muted">Sin flejes agregados aún.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+
+              <div class="mt-3 d-flex justify-content-between align-items-center gap-2">
+                <small class="text-muted">Se descontará el material del inventario de hierro al enviar la orden.</small>
+                <button type="button" class="btn btn-success fw-bold" onclick="enviarFlejesAFabrica()">📦 Enviar a Fábrica</button>
+              </div>
+            </div>
+          </div>
+        </div>
+ 
         <div class="table-responsive mb-3">
           <table class="table table-bordered align-middle">
             <thead class="table-light">
@@ -228,15 +429,23 @@
             </div>
             <div class="col-md-3">
               <label class="form-label fw-bold">Código de barras</label>
-              <input type="text" id="prod-codigo-barras" class="form-control" placeholder="Opcional">
+              <div class="input-group">
+                <input type="text" id="prod-codigo-barras" class="form-control" placeholder="Escanee o escriba" spellcheck="false"
+                  onkeydown="if(event.key==='Enter'){event.preventDefault();document.getElementById('prod-categoria').focus();}"
+                  autocomplete="off">
+                <button type="button" class="btn btn-outline-secondary" title="Escanear con cámara" onclick="abrirCamaraProducto()">
+                  📷
+                </button>
+              </div>
+              <small class="text-muted">Pistola USB o cámara</small>
             </div>
             <div class="col-md-3">
               <label class="form-label fw-bold">Categoría</label>
-              <input type="text" id="prod-categoria" class="form-control" placeholder="Ej: Flejes, Tuberías, Varillas">
+              <input type="text" id="prod-categoria" class="form-control" placeholder="Ej: Flejes, Tuberías, Varillas" spellcheck="true">
             </div>
             <div class="col-md-3">
               <label class="form-label fw-bold">Dimensiones / Medida</label>
-              <input type="text" id="prod-dimensiones" class="form-control" placeholder="Ej: 10x10 cm, 1/2 pulgada">
+              <input type="text" id="prod-dimensiones" class="form-control" placeholder="Ej: 10x10 cm, 1/2 pulgada" spellcheck="false">
             </div>
             <div class="col-md-2">
               <label class="form-label fw-bold">Precio Costo ($)</label>
@@ -267,9 +476,55 @@
             <div class="col-md-3"><select id="mov-producto" class="form-select" required><option value="">Producto</option></select></div>
             <div class="col-md-2"><select id="mov-tipo" class="form-select"><option value="entrada">Entrada</option><option value="salida">Salida</option><option value="ajuste">Fijar stock</option></select></div>
             <div class="col-md-2"><input id="mov-cantidad" type="number" min="1" class="form-control" placeholder="Cantidad" required></div>
-            <div class="col-md-3"><input id="mov-motivo" class="form-control" placeholder="Motivo" required></div>
+            <div class="col-md-3"><input id="mov-motivo" class="form-control" placeholder="Motivo" spellcheck="true" required></div>
             <div class="col-md-2"><button class="btn btn-warning w-100">Registrar movimiento</button></div>
           </form>
+        </div>
+
+        <div class="card p-3 mb-4 border-primary bg-light">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <h5 class="fw-bold mb-0">Inventario de Fábrica de Flejes</h5>
+            <button type="button" class="btn btn-outline-primary btn-sm fw-bold" onclick="cargarInventarioFlejes()">🔄 Actualizar</button>
+          </div>
+          <form id="form-inventario-hierro" onsubmit="guardarInventarioHierro(event)" class="row g-2 mb-3">
+            <div class="col-md-3">
+              <label class="form-label fw-bold">Calibre</label>
+              <select id="hierro-calibre" class="form-select" required>
+                <option value="">Seleccione</option>
+                <option value="1/4">1/4"</option>
+                <option value="3/8">3/8"</option>
+                <option value="9mm">9 mm</option>
+                <option value="1/2">1/2"</option>
+              </select>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-bold">Stock (kg)</label>
+              <input type="number" step="0.01" min="0" id="hierro-stock" class="form-control" required>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold">Observación</label>
+              <input type="text" id="hierro-observacion" class="form-control" placeholder="Ej: ingreso inicial, ajuste, compra" spellcheck="true">
+            </div>
+            <div class="col-md-2 d-flex align-items-end">
+              <button type="submit" class="btn btn-primary w-100 fw-bold">Guardar stock</button>
+            </div>
+          </form>
+
+          <div class="table-responsive">
+            <table class="table table-bordered align-middle mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Calibre</th>
+                  <th>Ø (mm)</th>
+                  <th>Stock (kg)</th>
+                  <th>Última actualización</th>
+                </tr>
+              </thead>
+              <tbody id="tabla-inventario-hierro">
+                <tr><td colspan="4" class="text-center text-muted">Cargando inventario...</td></tr>
+              </tbody>
+            </table>
+          </div>
         </div>
 
         <div class="table-responsive">
@@ -304,19 +559,19 @@
           <form id="form-cliente" onsubmit="guardarCliente(event)" class="row g-3">
             <div class="col-md-3">
               <label class="form-label fw-bold">Nombre Completo</label>
-              <input type="text" id="cli-nombre" class="form-control" required>
+              <input type="text" id="cli-nombre" class="form-control" required spellcheck="true">
             </div>
             <div class="col-md-3">
               <label class="form-label fw-bold">Cédula / NIT</label>
-              <input type="text" id="cli-cedula" class="form-control" required>
+              <input type="text" id="cli-cedula" class="form-control" required spellcheck="false">
             </div>
             <div class="col-md-2">
               <label class="form-label fw-bold">Teléfono</label>
-              <input type="text" id="cli-telefono" class="form-control">
+              <input type="text" id="cli-telefono" class="form-control" spellcheck="false">
             </div>
             <div class="col-md-2">
               <label class="form-label fw-bold">Dirección</label>
-              <input type="text" id="cli-direccion" class="form-control">
+              <input type="text" id="cli-direccion" class="form-control" spellcheck="true">
             </div>
             <div class="col-md-2 d-flex align-items-end">
               <button type="submit" id="btn-guardar-cliente" class="btn btn-primary w-100 fw-bold">Guardar</button>
@@ -447,6 +702,15 @@
       <div class="tab-pane fade" id="facturas">
         <h4 class="mb-3">Visualización y Reimpresión de Facturas</h4>
 
+        <div class="row g-2 mb-3">
+          <div class="col-md-4">
+            <input type="text" id="filtro-cliente-facturas" class="form-control" placeholder="🔍 Buscar por cliente..." spellcheck="true" oninput="cargarFacturasTabla()">
+          </div>
+          <div class="col-md-2">
+            <button type="button" class="btn btn-outline-secondary w-100" onclick="document.getElementById('filtro-cliente-facturas').value='';cargarFacturasTabla()">Limpiar</button>
+          </div>
+        </div>
+
         <div class="table-responsive mb-4">
           <table class="table table-hover align-middle border">
             <thead class="table-light">
@@ -467,6 +731,81 @@
       </div>
 
       {% if rol == 'admin' %}
+      <!-- Pestaña Fábrica de Flejes -->
+      <div class="tab-pane fade {{ 'show active' if rol == 'fabrica' else '' }}" id="flejes">
+        <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+          <h4 class="mb-0">🧵 Fábrica de Flejes / Figurado de Hierro</h4>
+          <button class="btn btn-outline-primary btn-sm fw-bold" onclick="cargarOrdenesFlejes()">🔄 Actualizar panel</button>
+        </div>
+
+        <div class="row g-3 mb-4">
+          <div class="col-md-4">
+            <div class="card border-primary h-100">
+              <div class="card-body">
+                <h6 class="text-primary fw-bold mb-1">Órdenes en cola</h6>
+                <div id="flejes-ordenes-cola" class="fs-3 fw-bold text-primary">0</div>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="card border-warning h-100">
+              <div class="card-body">
+                <h6 class="text-warning fw-bold mb-1">En figurado</h6>
+                <div id="flejes-ordenes-figurando" class="fs-3 fw-bold text-warning">0</div>
+              </div>
+            </div>
+          </div>
+          <div class="col-md-4">
+            <div class="card border-success h-100">
+              <div class="card-body">
+                <h6 class="text-success fw-bold mb-1">Completadas</h6>
+                <div id="flejes-ordenes-completadas" class="fs-3 fw-bold text-success">0</div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <div class="card border mb-4">
+          <div class="card-header bg-dark text-white fw-bold">Inventario de hierro</div>
+          <div class="card-body p-0">
+            <div class="table-responsive">
+              <table class="table table-sm mb-0 align-middle">
+                <thead class="table-light">
+                  <tr>
+                    <th>Calibre</th>
+                    <th>Ø</th>
+                    <th>Stock (kg)</th>
+                    <th>Última actualización</th>
+                  </tr>
+                </thead>
+                <tbody id="tabla-inventario-hierro">
+                  <tr><td colspan="4" class="text-center text-muted">Cargando inventario...</td></tr>
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+
+        <div class="table-responsive">
+          <table class="table table-bordered align-middle">
+            <thead class="table-light">
+              <tr>
+                <th>Orden</th>
+                <th>Cliente</th>
+                <th>Detalles</th>
+                <th>Kg</th>
+                <th>Estado</th>
+                <th>Fecha</th>
+                <th>Acción</th>
+              </tr>
+            </thead>
+            <tbody id="tabla-ordenes-flejes">
+              <tr><td colspan="7" class="text-center text-muted">Cargando órdenes...</td></tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+
       <!-- Pestaña Usuarios (Admin) -->
       <div class="tab-pane fade" id="usuarios">
         <h4 class="mb-3">Administración de Usuarios y Permisos</h4>
@@ -487,6 +826,10 @@
               <select id="user-rol" class="form-select">
                 <option value="empleado" selected>Empleado</option>
                 <option value="admin">Administrador</option>
+                <option value="bodega">Bodega</option>
+                <option value="motocarguero">Motocarguero</option>
+                <option value="fabrica">Fábrica de Flejes (solo esa pestaña)</option>
+                <option value="pedidos">Pedidos (solo esa pestaña)</option>
               </select>
             </div>
             <div class="col-md-2 d-flex align-items-end">
@@ -537,10 +880,10 @@
           <button class="btn btn-primary" onclick="guardarConfiguracion()">Guardar datos del negocio</button>
         </div>
         <form id="form-configuracion" class="row g-3 mb-4">
-          <div class="col-md-3"><label class="form-label">Nombre del negocio</label><input id="config-nombre" class="form-control"></div>
-          <div class="col-md-3"><label class="form-label">NIT</label><input id="config-nit" class="form-control"></div>
-          <div class="col-md-3"><label class="form-label">Teléfono</label><input id="config-telefono" class="form-control"></div>
-          <div class="col-md-3"><label class="form-label">Dirección</label><input id="config-direccion" class="form-control"></div>
+          <div class="col-md-3"><label class="form-label">Nombre del negocio</label><input id="config-nombre" class="form-control" spellcheck="true"></div>
+          <div class="col-md-3"><label class="form-label">NIT</label><input id="config-nit" class="form-control" spellcheck="false"></div>
+          <div class="col-md-3"><label class="form-label">Teléfono</label><input id="config-telefono" class="form-control" spellcheck="false"></div>
+          <div class="col-md-3"><label class="form-label">Dirección</label><input id="config-direccion" class="form-control" spellcheck="true"></div>
         </form>
         <div class="row g-4 mb-4">
           <div class="col-lg-6">
@@ -548,9 +891,9 @@
               <h5 class="fw-bold">Registrar gasto</h5>
               <form id="form-gasto" onsubmit="registrarGasto(event)" class="row g-2">
                 <div class="col-md-4"><input id="gasto-fecha" type="date" class="form-control" required></div>
-                <div class="col-md-4"><input id="gasto-categoria" class="form-control" placeholder="Categoría" required></div>
+                <div class="col-md-4"><input id="gasto-categoria" class="form-control" placeholder="Categoría" spellcheck="true" required></div>
                 <div class="col-md-4"><input id="gasto-monto" type="number" min="0.01" step="0.01" class="form-control" placeholder="Monto" required></div>
-                <div class="col-md-8"><input id="gasto-descripcion" class="form-control" placeholder="Descripción" required></div>
+                <div class="col-md-8"><input id="gasto-descripcion" class="form-control" placeholder="Descripción" spellcheck="true" required></div>
                 <div class="col-md-4"><button class="btn btn-warning w-100">Guardar gasto</button></div>
               </form>
             </div>
@@ -562,7 +905,7 @@
                 <div class="col-md-4"><input id="cierre-fecha" type="date" class="form-control" required></div>
                 <div class="col-md-4"><input id="cierre-contado" type="number" min="0" step="0.01" class="form-control" placeholder="Efectivo contado" required></div>
                 <div class="col-md-4"><button class="btn btn-dark w-100">Cerrar caja</button></div>
-                <div class="col-12"><input id="cierre-observaciones" class="form-control" placeholder="Observaciones"></div>
+                <div class="col-12"><input id="cierre-observaciones" class="form-control" placeholder="Observaciones" spellcheck="true"></div>
               </form>
               <div id="cierre-resultado" class="small mt-2"></div>
             </div>
@@ -581,6 +924,423 @@
       </div>
       {% endif %}
 
+      <!-- ══════════════ PESTAÑA PEDIDOS ══════════════ -->
+      <div class="tab-pane fade {{ 'show active' if rol == 'pedidos' else '' }}" id="pedidos">
+
+        <!-- Sub-pestañas: Despachos (para_llevar) | Pedidos manuales -->
+        <ul class="nav nav-pills mb-3 gap-2" id="pedidos-subtabs">
+          <li class="nav-item">
+            <button class="nav-link active fw-bold" id="subtab-despachos-btn"
+              onclick="activarSubtabPedidos('despachos')">
+              🚚 Cola de Despacho
+            </button>
+          </li>
+          <li class="nav-item">
+            <button class="nav-link fw-bold" id="subtab-manuales-btn"
+              onclick="activarSubtabPedidos('manuales')">
+              📋 Pedidos Manuales
+            </button>
+          </li>
+        </ul>
+
+        <!-- ── SUB-PANEL: COLA DE DESPACHO (ventas para_llevar) ── -->
+        <div id="subtab-despachos">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <h4 class="mb-0">🚚 Cola de Despacho — Pedidos Para Llevar</h4>
+            <div class="d-flex gap-2 align-items-center flex-wrap">
+              <select id="despacho-filtro-estado" class="form-select form-select-sm" style="width:auto"
+                      onchange="cargarDespachos()">
+                <option value="">Todos los estados</option>
+                <option value="pendiente_preparar">⏳ Pendiente por preparar</option>
+                <option value="preparando">📦 Preparando</option>
+                <option value="listo">✅ Listo para despacho</option>
+                <option value="entregado">🏠 Entregado</option>
+              </select>
+              <button class="btn btn-outline-secondary btn-sm" onclick="cargarDespachos()" title="Actualizar">🔄</button>
+            </div>
+          </div>
+
+          <div class="table-responsive">
+            <table class="table table-hover align-middle border">
+              <thead class="table-dark">
+                <tr>
+                  <th>Pedido #</th>
+                  <th>Cliente</th>
+                  <th>Productos</th>
+                  <th>Dirección Entrega</th>
+                  <th>Total</th>
+                  <th>Estado</th>
+                  <th>Fecha / Hora</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="tabla-despachos-body">
+                <tr><td colspan="8" class="text-center text-muted py-4">Haz clic en "Cola de Despacho" para cargar.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- ── SUB-PANEL: PEDIDOS MANUALES (módulo anterior) ── -->
+        <div id="subtab-manuales" class="d-none">
+          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+            <h4 class="mb-0">📋 Gestión de Pedidos</h4>
+            <div class="d-flex gap-2 align-items-center flex-wrap">
+              <select id="pedido-filtro-estado" class="form-select form-select-sm" style="width:auto" onchange="cargarPedidos()">
+                <option value="">Todos los estados</option>
+                <option value="pendiente">⏳ Pendiente</option>
+                <option value="alistando">📦 Alistando</option>
+                <option value="listo">✅ Listo para despacho</option>
+                <option value="en_camino">🛵 En camino</option>
+                <option value="entregado">🏠 Entregado</option>
+                <option value="cancelado">❌ Cancelado</option>
+              </select>
+              {% if rol in ['admin', 'empleado', 'bodega'] %}
+              <button class="btn btn-primary fw-bold" onclick="abrirModalNuevoPedido()">➕ Nuevo Pedido</button>
+              {% endif %}
+              <button class="btn btn-outline-secondary btn-sm" onclick="cargarPedidos()" title="Actualizar">🔄</button>
+            </div>
+          </div>
+
+          <div class="table-responsive">
+            <table class="table table-hover align-middle border">
+              <thead class="table-dark">
+                <tr>
+                  <th>#</th>
+                  <th>Cliente</th>
+                  <th>Dirección Entrega</th>
+                  <th>Total</th>
+                  <th>Estado</th>
+                  <th>Vendedor</th>
+                  <th>Bodega</th>
+                  <th>Motocarguero</th>
+                  <th>Fecha</th>
+                  <th>Acciones</th>
+                </tr>
+              </thead>
+              <tbody id="tabla-pedidos-body">
+                <tr><td colspan="10" class="text-center text-muted py-4">Haz clic en la pestaña para cargar los pedidos.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+      </div>
+      <!-- ═══════════════════════════════════════════ -->
+
+      <!-- PESTAÑA ALQUILER DE MAQUINARIA -->
+      <div class="tab-pane fade" id="alquiler">
+        <h4 class="mb-3">🚜 Alquiler de Maquinaria y Equipos</h4>
+
+        <div class="card p-3 mb-4 border">
+          <h5 class="mb-3">🧰 Registro independiente de equipos</h5>
+          <div class="row g-3">
+            <input type="hidden" id="equipo-alquiler-id">
+            <div class="col-md-4">
+              <label class="form-label fw-bold">Nombre del equipo</label>
+              <input type="text" id="equipo-alquiler-nombre" class="form-control" placeholder="Ej: Mezcladora, Rana, Formaleta">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold">Código interno</label>
+              <input type="text" id="equipo-alquiler-codigo" class="form-control" placeholder="Ej: F-001">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold">Categoría</label>
+              <input type="text" id="equipo-alquiler-categoria" class="form-control" placeholder="Ej: Formaleta, Mezcladora">
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-bold">Estado</label>
+              <select id="equipo-alquiler-estado" class="form-select">
+                <option value="Disponible">Disponible</option>
+                <option value="En Alquiler">En Alquiler</option>
+                <option value="En Mantenimiento">En Mantenimiento</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold">Tarifa por</label>
+              <select id="equipo-alquiler-tipo-tarifa" class="form-select">
+                <option value="dia">Día</option>
+                <option value="hora">Hora</option>
+                <option value="turno">Turno</option>
+                <option value="bulto">Bulto</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold">Tarifa base</label>
+              <input type="number" id="equipo-alquiler-tarifa" class="form-control" min="0" value="0">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold">Tarifa por hora</label>
+              <input type="number" id="equipo-alquiler-tarifa-hora" class="form-control" min="0" value="0">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold">Tarifa por turno</label>
+              <input type="number" id="equipo-alquiler-tarifa-turno" class="form-control" min="0" value="0">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold">Tarifa por bulto</label>
+              <input type="number" id="equipo-alquiler-tarifa-bulto" class="form-control" min="0" value="0">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold">Medidas / capacidad</label>
+              <input type="text" id="equipo-alquiler-medidas" class="form-control" placeholder="Ej: 0.50 x 1.20 m o 1.5 bultos">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold">Cantidad disponible</label>
+              <input type="number" id="equipo-alquiler-cantidad" class="form-control" min="0" value="1">
+            </div>
+            <div class="col-md-6">
+              <label class="form-label fw-bold">Especificaciones</label>
+              <input type="text" id="equipo-alquiler-especificaciones" class="form-control" placeholder="Ej: paneles, accesorios, capacidad, detalle técnico">
+            </div>
+            <div class="col-md-12">
+              <label class="form-label fw-bold">Observaciones</label>
+              <textarea id="equipo-alquiler-observaciones" class="form-control" rows="2" placeholder="Observaciones técnicas o del estado del equipo"></textarea>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label fw-bold">Equipo existente</label>
+              <select id="equipo-alquiler-listado" class="form-select"></select>
+            </div>
+          </div>
+          <div class="mt-3 d-flex gap-2 flex-wrap">
+            <button type="button" class="btn btn-primary fw-bold" onclick="guardarEquipoAlquiler()">💾 Guardar equipo</button>
+            <button type="button" class="btn btn-outline-primary" onclick="cargarEquipoSeleccionadoParaEditar()">Editar equipo seleccionado</button>
+            <button type="button" class="btn btn-outline-secondary" onclick="resetFormularioEquipoAlquiler()">Limpiar</button>
+          </div>
+        </div>
+
+        <div class="card p-3 mb-4 border">
+          <div class="row g-3 align-items-end">
+            <div class="col-md-4">
+              <label class="form-label fw-bold">Cliente</label>
+              <select id="alquiler-cliente" class="form-select"></select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label fw-bold">Fecha y hora de salida</label>
+              <input type="datetime-local" id="alquiler-fecha-salida" class="form-control">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label fw-bold">Fecha pactada de devolución</label>
+              <input type="datetime-local" id="alquiler-fecha-devolucion" class="form-control">
+            </div>
+          </div>
+        </div>
+
+        <div class="card p-3 mb-4 border">
+          <h5 class="mb-3">Agregar equipos al alquiler</h5>
+          <div class="row g-2 align-items-end">
+            <div class="col-md-4">
+              <label class="form-label fw-bold">Equipo</label>
+              <select id="alquiler-equipo-select" class="form-select"></select>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-bold">Medida / capacidad</label>
+              <select id="alquiler-medida-select" class="form-select">
+                <option value="">General</option>
+              </select>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-bold">Cantidad</label>
+              <input type="number" id="alquiler-cantidad" class="form-control" value="1" min="1">
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-bold">Garantía</label>
+              <input type="number" id="alquiler-deposito" class="form-control" value="0" min="0">
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-bold">Estado salida</label>
+              <select id="alquiler-estado-salida" class="form-select">
+                <option value="bueno">Bueno</option>
+                <option value="con_danos">Con daños</option>
+                <option value="faltante">Faltante</option>
+                <option value="otro">Otro</option>
+              </select>
+            </div>
+            <div class="col-md-2">
+              <button type="button" class="btn btn-success w-100 fw-bold" onclick="agregarEquipoAlquiler()">➕ Agregar</button>
+            </div>
+          </div>
+
+          <div class="table-responsive mt-3">
+            <table class="table table-bordered align-middle">
+              <thead class="table-light">
+                <tr>
+                  <th>Equipo</th>
+                  <th>Código</th>
+                  <th>Tarifa</th>
+                  <th>Cantidad</th>
+                  <th>Estado</th>
+                  <th>Acción</th>
+                </tr>
+              </thead>
+              <tbody id="tabla-alquiler-items">
+                <tr><td colspan="6" class="text-center text-muted">No hay equipos agregados aún.</td></tr>
+              </tbody>
+            </table>
+          </div>
+
+          <div class="mt-3">
+            <label class="form-label fw-bold">Notas de salida</label>
+            <textarea id="alquiler-notas" class="form-control" rows="3" placeholder="Detalle del estado de la máquina, accesorios, daños, observaciones..."></textarea>
+          </div>
+
+          <div class="mt-3 text-end">
+            <button class="btn btn-primary fw-bold" onclick="registrarAlquiler()">💾 Registrar salida de alquiler</button>
+          </div>
+        </div>
+
+        <div class="card p-3 border">
+          <h5 class="mb-3">📌 Alquileres activos y alertas</h5>
+          <div class="table-responsive">
+            <table class="table table-hover align-middle border">
+              <thead class="table-dark">
+                <tr>
+                  <th>ID</th>
+                  <th>Cliente</th>
+                  <th>Equipo</th>
+                  <th>Salida</th>
+                  <th>Devolución pactada</th>
+                  <th>Estado</th>
+                  <th>Acción</th>
+                </tr>
+              </thead>
+              <tbody id="tabla-alquiler-activos">
+                <tr><td colspan="7" class="text-center text-muted">Cargando alquileres activos...</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </div>
+
+  <!-- MODAL NUEVO PEDIDO -->
+  <div class="modal fade" id="modalNuevoPedido" tabindex="-1">
+    <div class="modal-dialog modal-xl">
+      <div class="modal-content">
+        <div class="modal-header bg-primary text-white">
+          <h5 class="modal-title fw-bold">➕ Nuevo Pedido</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row g-3 mb-3">
+            <div class="col-md-5">
+              <label class="form-label fw-bold">Cliente</label>
+              <select id="pedido-cliente" placeholder="Buscar cliente..."></select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label fw-bold">Dirección de Entrega</label>
+              <input type="text" id="pedido-direccion" class="form-control" placeholder="Dirección donde se entrega" spellcheck="true">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold">Observaciones</label>
+              <input type="text" id="pedido-observaciones" class="form-control" placeholder="Notas adicionales" spellcheck="true">
+            </div>
+          </div>
+
+          <div class="card p-3 mb-3 border">
+            <h6 class="fw-bold mb-2">Agregar Productos al Pedido</h6>
+            <div class="row g-2 align-items-end">
+              <div class="col-md-6">
+                <label class="form-label fw-bold">Producto</label>
+                <select id="pedido-select-producto" placeholder="Buscar producto..."></select>
+              </div>
+              <div class="col-md-2">
+                <label class="form-label fw-bold">Cantidad</label>
+                <input type="number" id="pedido-cantidad" class="form-control" value="1" min="1">
+              </div>
+              <div class="col-md-2">
+                <button type="button" class="btn btn-success w-100" onclick="agregarItemPedido()">➕ Agregar</button>
+              </div>
+            </div>
+          </div>
+
+          <div class="table-responsive">
+            <table class="table table-bordered align-middle">
+              <thead class="table-light">
+                <tr>
+                  <th>Producto</th>
+                  <th>Precio Unit.</th>
+                  <th>Cantidad</th>
+                  <th>Subtotal</th>
+                  <th style="width:50px"></th>
+                </tr>
+              </thead>
+              <tbody id="tabla-items-pedido">
+                <tr id="pedido-items-vacio"><td colspan="5" class="text-center text-muted">Sin productos. Agregue items arriba.</td></tr>
+              </tbody>
+              <tfoot>
+                <tr class="table-light fw-bold">
+                  <td colspan="3" class="text-end">Total Pedido:</td>
+                  <td id="pedido-total-texto" class="text-primary">$ 0 COP</td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+          <button type="button" class="btn btn-primary fw-bold" onclick="guardarPedido()">💾 Crear Pedido</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL DETALLE / ACCIONES PEDIDO -->
+  <div class="modal fade" id="modalDetallePedido" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header bg-dark text-white">
+          <h5 class="modal-title fw-bold">📋 Detalle del Pedido <span id="detalle-pedido-id"></span></h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="row g-2 mb-3 small">
+            <div class="col-md-4"><strong>Cliente:</strong> <span id="detalle-pedido-cliente"></span></div>
+            <div class="col-md-4"><strong>Teléfono:</strong> <span id="detalle-pedido-telefono"></span></div>
+            <div class="col-md-4"><strong>Estado:</strong> <span id="detalle-pedido-estado-badge"></span></div>
+            <div class="col-md-6"><strong>Dirección:</strong> <span id="detalle-pedido-direccion"></span></div>
+            <div class="col-md-6"><strong>Observaciones:</strong> <span id="detalle-pedido-obs"></span></div>
+            <div class="col-md-4"><strong>Vendedor:</strong> <span id="detalle-pedido-vendedor"></span></div>
+            <div class="col-md-4"><strong>Bodega:</strong> <span id="detalle-pedido-bodega"></span></div>
+            <div class="col-md-4"><strong>Motocarguero:</strong> <span id="detalle-pedido-moto"></span></div>
+            <div class="col-md-6"><strong>Creado:</strong> <span id="detalle-pedido-fecha"></span></div>
+            <div class="col-md-6"><strong>Actualizado:</strong> <span id="detalle-pedido-actualizado"></span></div>
+          </div>
+
+          <div class="table-responsive mb-3">
+            <table class="table table-bordered table-sm align-middle">
+              <thead class="table-light">
+                <tr><th>Producto</th><th>Dim.</th><th>Cant.</th><th>Precio Unit.</th><th>Subtotal</th><th>Stock</th></tr>
+              </thead>
+              <tbody id="detalle-pedido-items"></tbody>
+              <tfoot>
+                <tr class="fw-bold table-light">
+                  <td colspan="4" class="text-end">Total:</td>
+                  <td id="detalle-pedido-total" class="text-primary"></td>
+                  <td></td>
+                </tr>
+              </tfoot>
+            </table>
+          </div>
+
+          <!-- Acciones de cambio de estado según rol -->
+          <div id="detalle-pedido-acciones" class="card p-3 bg-light border">
+            <h6 class="fw-bold mb-2">Cambiar Estado</h6>
+            <div class="d-flex gap-2 flex-wrap align-items-end" id="botones-estado-pedido"></div>
+            <!-- Selector de motocarguero (visible al marcar listo) -->
+            <div id="bloque-asignar-moto" class="mt-2 d-none">
+              <label class="form-label fw-bold small">Asignar Motocarguero</label>
+              <select id="select-motocarguero-asignar" class="form-select form-select-sm" style="max-width:300px"></select>
+            </div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+        </div>
+      </div>
     </div>
   </div>
 
@@ -737,22 +1497,123 @@
     </div>
   </div>
 
+  <!-- MODAL LECTOR DE CÁMARA - CÓDIGO DE BARRAS -->
+  <div class="modal fade" id="modalCamaraBarcode" tabindex="-1" data-bs-backdrop="static">
+    <div class="modal-dialog modal-dialog-centered">
+      <div class="modal-content">
+        <div class="modal-header bg-dark text-white">
+          <h5 class="modal-title fw-bold">📷 Escanear Código de Barras</h5>
+          <button type="button" class="btn-close btn-close-white" onclick="cerrarCamara()"></button>
+        </div>
+        <div class="modal-body p-3">
+          <p class="text-muted small mb-2">Apunte la cámara al código de barras del producto. Se detectará automáticamente.</p>
+          <div id="barcode-reader" class="w-100 rounded overflow-hidden" style="min-height:250px;background:#000;"></div>
+          <div id="barcode-resultado" class="mt-3 d-none">
+            <div class="alert alert-success mb-0 py-2">
+              <strong>✅ Código detectado:</strong> <span id="barcode-codigo-detectado" class="fw-bold font-monospace"></span>
+            </div>
+          </div>
+          <div id="barcode-error" class="mt-2 d-none">
+            <div class="alert alert-warning mb-0 py-2 small" id="barcode-error-msg"></div>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" onclick="cerrarCamara()">Cancelar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
   <script src="https://cdn.jsdelivr.net/npm/tom-select@2.2.2/dist/js/tom-select.complete.min.js"></script>
 
   <script>
+    const ROL_ACTUAL = '{{ rol }}';
     let carrito = [];
+    let carritoFlejes = [];
     let productosLista = [];
     let clientesLista = [];
+    let equiposAlquilerLista = [];
     let tsCliente, tsProducto, tsProdNombre;
     let facturaActualId = null;
+    let alquilerItems = [];
+
       function monedaCOP(valor) {
         return `$ ${Math.round(Number(valor) || 0).toLocaleString('es-CO')} COP`;
       }
 
-    document.addEventListener('DOMContentLoaded', () => {
+      function escapeHtml(value) {
+        return String(value ?? '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;')
+          .replace(/'/g, '&#039;');
+      }
+
+      document.addEventListener('DOMContentLoaded', () => {
+      if (ROL_ACTUAL === 'fabrica') {
+        cargarOrdenesFlejes();
+        return;
+      }
+      if (ROL_ACTUAL === 'pedidos') {
+        activarSubtabPedidos('despachos');
+        return;
+      }
       cargarNotificaciones();
-      cargarFormularioVentas();
+      cargarFormularioVentas().then(() => {
+        document.getElementById('input-codigo-barras').focus();
+      });
+      cargarClientesAlquiler();
+      cargarCatalogoEquiposAlquiler();
+      cargarAlquileresActivos();
+      cargarOrdenesFlejes();
+    });
+
+    // ── Notificaciones de flejes listos (general + pedidos) ─────────────────
+    async function pollNotificacionesFlejes() {
+      try {
+        const res = await fetch('/api/fabrica/notificaciones');
+        if (!res.ok) return;
+        const data = await res.json();
+
+        const badgeGeneral = document.getElementById('badge-notificaciones-flejes');
+        if (badgeGeneral) {
+          if (data.total_general > 0) { badgeGeneral.textContent = data.total_general; badgeGeneral.style.display = 'inline-block'; }
+          else { badgeGeneral.style.display = 'none'; }
+        }
+
+        // Refuerzo del badge de Pedidos con las notificaciones de flejes listos aún no vistas ahí
+        if (typeof ultimoTotalFlejesPedidos !== 'undefined') {
+          ultimoTotalFlejesPedidos = Number(data.total_pedidos) || 0;
+          if (typeof actualizarBadgesPedidos === 'function') actualizarBadgesPedidos();
+        }
+
+        const lista = document.getElementById('lista-notificaciones-flejes');
+        if (lista) {
+          lista.innerHTML = data.notificaciones.length
+            ? data.notificaciones.map(n => `<li class="list-group-item ${n.leida ? '' : 'fw-bold'}">${escapeHtml(n.mensaje)}<br><small class="text-muted">${escapeHtml(n.fecha)}</small></li>`).join('')
+            : '<li class="list-group-item text-center text-muted">No hay notificaciones.</li>';
+        }
+      } catch (err) {
+        console.error('Error notificaciones de flejes:', err);
+      }
+    }
+
+    async function abrirModalNotificacionesFlejes() {
+      await pollNotificacionesFlejes();
+      new bootstrap.Modal(document.getElementById('modalNotificacionesFlejes')).show();
+      fetch('/api/fabrica/notificaciones/marcar_leidas', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ destino: 'general' })
+      }).then(() => {
+        const badge = document.getElementById('badge-notificaciones-flejes');
+        if (badge) badge.style.display = 'none';
+      });
+    }
+
+    document.addEventListener('DOMContentLoaded', () => {
+      pollNotificacionesFlejes();
+      setInterval(pollNotificacionesFlejes, 20000);
     });
 
     async function cargarNotificaciones() {
@@ -782,9 +1643,9 @@
               : '<span class="badge bg-warning text-dark">STOCK BAJO</span>';
             tbody.innerHTML += `
               <tr>
-                <td><strong>${p.nombre}</strong></td>
-                <td>${p.categoria}</td>
-                <td>${p.dimensiones}</td>
+                <td><strong>${escapeHtml(p.nombre || '')}</strong></td>
+                <td>${escapeHtml(p.categoria || '')}</td>
+                <td>${escapeHtml(p.dimensiones || '')}</td>
                 <td class="fw-bold text-danger">${p.stock_actual}</td>
                 <td>${p.stock_minimo}</td>
                 <td>${badgeUrgencia}</td>
@@ -802,6 +1663,415 @@
       modal.show();
     }
 
+    async function cargarCatalogoEquiposAlquiler() {
+      try {
+        const res = await fetch('/api/equipos');
+        if (!res.ok) throw new Error('Error');
+        equiposAlquilerLista = await res.json();
+        const select = document.getElementById('alquiler-equipo-select');
+        const listadoEditar = document.getElementById('equipo-alquiler-listado');
+        select.innerHTML = '<option value="">Seleccione un equipo</option>';
+        listadoEditar.innerHTML = '<option value="">Seleccione un equipo para editar</option>';
+        equiposAlquilerLista.filter(e => e.activo !== 0).forEach(e => {
+          const tarifa = e.tipo_tarifa === 'hora' ? Number(e.tarifa_hora || 0) : e.tipo_tarifa === 'turno' ? Number(e.tarifa_turno || 0) : e.tipo_tarifa === 'bulto' ? Number(e.tarifa_bulto || 0) : Number(e.tarifa || 0);
+          const etiquetaMedida = e.medidas ? ` | Medida: ${escapeHtml(e.medidas)}` : '';
+          const etiquetaCantidad = e.cantidad_disponible !== undefined ? ` | Disp: ${e.cantidad_disponible}` : '';
+          select.innerHTML += `<option value="${e.id}">${escapeHtml(e.nombre)} (${escapeHtml(e.codigo_interno)}) - ${monedaCOP(tarifa)} / ${escapeHtml(e.tipo_tarifa)}${etiquetaMedida}${etiquetaCantidad}</option>`;
+          listadoEditar.innerHTML += `<option value="${e.id}">${escapeHtml(e.nombre)} (${escapeHtml(e.codigo_interno)})</option>`;
+        });
+        const selectMedidas = document.getElementById('alquiler-medida-select');
+        selectMedidas.innerHTML = '<option value="">General</option>';
+      } catch (err) {
+        console.error('Error cargando catálogo de alquiler:', err);
+      }
+    }
+
+    function renderMedidasSelect() {
+      const select = document.getElementById('alquiler-equipo-select');
+      const medidaSelect = document.getElementById('alquiler-medida-select');
+      const equipo = equiposAlquilerLista.find(e => String(e.id) === String(select.value));
+      medidaSelect.innerHTML = '<option value="">General</option>';
+      if (!equipo || !equipo.medidas) return;
+      const medidas = String(equipo.medidas).split(';').map(v => v.trim()).filter(Boolean);
+      medidas.forEach(m => {
+        medidaSelect.innerHTML += `<option value="${escapeHtml(m)}">${escapeHtml(m)}</option>`;
+      });
+    }
+
+    async function cargarOrdenesFlejes() {
+      try {
+        const res = await fetch('/api/fabrica/ordenes');
+        if (!res.ok) throw new Error('No se pudo cargar el taller');
+        const ordenes = await res.json();
+        const tbody = document.getElementById('tabla-ordenes-flejes');
+        const badge = document.getElementById('badge-flejes');
+        const cola = document.getElementById('flejes-ordenes-cola');
+        const figurando = document.getElementById('flejes-ordenes-figurando');
+        const completadas = document.getElementById('flejes-ordenes-completadas');
+        const inventario = document.getElementById('tabla-inventario-hierro');
+
+        tbody.innerHTML = '';
+        if (!ordenes.length) {
+          tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">No hay órdenes actualmente.</td></tr>';
+        } else {
+          ordenes.forEach((orden) => {
+            const estadoBadge = orden.estado === 'En Cola'
+              ? '<span class="badge bg-primary">En Cola</span>'
+              : orden.estado === 'En Figurado'
+                ? '<span class="badge bg-warning text-dark">En Figurado</span>'
+                : '<span class="badge bg-success">Completado</span>';
+
+            tbody.innerHTML += `
+              <tr>
+                <td><strong>${escapeHtml(orden.numero_orden || '')}</strong></td>
+                <td>${escapeHtml(orden.cliente || 'Cliente')}</td>
+                <td>${escapeHtml(orden.detalles || orden.observaciones || 'Sin detalles')}</td>
+                <td>${Number(orden.kg_total || 0).toFixed(2)} kg</td>
+                <td>${estadoBadge}</td>
+                <td>${escapeHtml(orden.fecha_creacion || '')}</td>
+                <td>
+                  ${orden.estado !== 'Completado' ? `<button class="btn btn-sm btn-success" onclick="actualizarEstadoOrdenFleje(${orden.id}, 'Completado')">Completar</button>` : '<span class="text-success fw-bold">Listo</span>'}
+                </td>
+              </tr>
+            `;
+          });
+        }
+
+        const colaCount = ordenes.filter(o => o.estado === 'En Cola').length;
+        const figurandoCount = ordenes.filter(o => o.estado === 'En Figurado').length;
+        const completadasCount = ordenes.filter(o => o.estado === 'Completado').length;
+        cola.textContent = colaCount;
+        figurando.textContent = figurandoCount;
+        completadas.textContent = completadasCount;
+        const pendientes = colaCount + figurandoCount;
+        badge.textContent = pendientes;
+        badge.style.display = pendientes > 0 ? 'inline-block' : 'none';
+
+        if (inventario) {
+          fetch('/api/fabrica/inventario-hierro')
+            .then(r => r.ok ? r.json() : [])
+            .then((stock) => {
+              if (!stock.length) {
+                inventario.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Sin registros de hierro.</td></tr>';
+                return;
+              }
+              inventario.innerHTML = stock.map(item => `
+                <tr>
+                  <td>${escapeHtml(item.calibre || '—')}</td>
+                  <td>${Number(item.diametro_mm || 0).toFixed(2)} mm</td>
+                  <td>${Number(item.stock_kg || 0).toFixed(2)} kg</td>
+                  <td>${escapeHtml(item.ultimo_update || 'Sin fecha')}</td>
+                </tr>
+              `).join('');
+            })
+            .catch(() => {
+              inventario.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Inventario no disponible.</td></tr>';
+            });
+        }
+      } catch (err) {
+        console.error('Error cargando órdenes de flejes:', err);
+        document.getElementById('tabla-ordenes-flejes').innerHTML = '<tr><td colspan="7" class="text-center text-danger">No se pudo cargar el panel de producción.</td></tr>';
+      }
+    }
+
+    async function actualizarEstadoOrdenFleje(idOrden, nuevoEstado) {
+      try {
+        const res = await fetch(`/api/fabrica/ordenes/${idOrden}/estado`, {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ estado: nuevoEstado })
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'No se pudo actualizar el estado');
+        alert(`✅ Orden actualizada a ${nuevoEstado}`);
+        await cargarOrdenesFlejes();
+      } catch (err) {
+        alert(err.message || 'Error actualizando la orden');
+      }
+    }
+
+    document.getElementById('alquiler-equipo-select')?.addEventListener('change', renderMedidasSelect);
+
+    function resetFormularioEquipoAlquiler() {
+      document.getElementById('equipo-alquiler-id').value = '';
+      document.getElementById('equipo-alquiler-nombre').value = '';
+      document.getElementById('equipo-alquiler-codigo').value = '';
+      document.getElementById('equipo-alquiler-categoria').value = '';
+      document.getElementById('equipo-alquiler-estado').value = 'Disponible';
+      document.getElementById('equipo-alquiler-tipo-tarifa').value = 'dia';
+      document.getElementById('equipo-alquiler-tarifa').value = 0;
+      document.getElementById('equipo-alquiler-tarifa-hora').value = 0;
+      document.getElementById('equipo-alquiler-tarifa-turno').value = 0;
+      document.getElementById('equipo-alquiler-tarifa-bulto').value = 0;
+      document.getElementById('equipo-alquiler-medidas').value = '';
+      document.getElementById('equipo-alquiler-cantidad').value = 1;
+      document.getElementById('equipo-alquiler-especificaciones').value = '';
+      document.getElementById('equipo-alquiler-observaciones').value = '';
+    }
+
+    function cargarEquipoSeleccionadoParaEditar() {
+      const selected = document.getElementById('equipo-alquiler-listado').value;
+      if (!selected) {
+        alert('Seleccione un equipo de la lista para editar');
+        return;
+      }
+      const equipo = equiposAlquilerLista.find(e => String(e.id) === String(selected));
+      if (!equipo) return;
+      document.getElementById('equipo-alquiler-id').value = equipo.id;
+      document.getElementById('equipo-alquiler-nombre').value = equipo.nombre || '';
+      document.getElementById('equipo-alquiler-codigo').value = equipo.codigo_interno || '';
+      document.getElementById('equipo-alquiler-categoria').value = equipo.categoria || '';
+      document.getElementById('equipo-alquiler-estado').value = equipo.estado || 'Disponible';
+      document.getElementById('equipo-alquiler-tipo-tarifa').value = equipo.tipo_tarifa || 'dia';
+      document.getElementById('equipo-alquiler-tarifa').value = Number(equipo.tarifa || 0);
+      document.getElementById('equipo-alquiler-tarifa-hora').value = Number(equipo.tarifa_hora || 0);
+      document.getElementById('equipo-alquiler-tarifa-turno').value = Number(equipo.tarifa_turno || 0);
+      document.getElementById('equipo-alquiler-tarifa-bulto').value = Number(equipo.tarifa_bulto || 0);
+      document.getElementById('equipo-alquiler-medidas').value = equipo.medidas || '';
+      document.getElementById('equipo-alquiler-cantidad').value = Number(equipo.cantidad_disponible || 1);
+      document.getElementById('equipo-alquiler-especificaciones').value = equipo.especificaciones || '';
+      document.getElementById('equipo-alquiler-observaciones').value = equipo.observaciones || '';
+    }
+
+    async function guardarEquipoAlquiler() {
+      const id = document.getElementById('equipo-alquiler-id').value;
+      const payload = {
+        nombre: document.getElementById('equipo-alquiler-nombre').value,
+        codigo_interno: document.getElementById('equipo-alquiler-codigo').value,
+        categoria: document.getElementById('equipo-alquiler-categoria').value,
+        estado: document.getElementById('equipo-alquiler-estado').value,
+        tipo_tarifa: document.getElementById('equipo-alquiler-tipo-tarifa').value,
+        tarifa: Number(document.getElementById('equipo-alquiler-tarifa').value || 0),
+        tarifa_hora: Number(document.getElementById('equipo-alquiler-tarifa-hora').value || 0),
+        tarifa_turno: Number(document.getElementById('equipo-alquiler-tarifa-turno').value || 0),
+        tarifa_bulto: Number(document.getElementById('equipo-alquiler-tarifa-bulto').value || 0),
+        medidas: document.getElementById('equipo-alquiler-medidas').value,
+        especificaciones: document.getElementById('equipo-alquiler-especificaciones').value,
+        cantidad_disponible: Number(document.getElementById('equipo-alquiler-cantidad').value || 1),
+        cantidad_total: Number(document.getElementById('equipo-alquiler-cantidad').value || 1),
+        observaciones: document.getElementById('equipo-alquiler-observaciones').value
+      };
+
+      if (!payload.nombre || !payload.codigo_interno) {
+        alert('Debe completar nombre y código del equipo');
+        return;
+      }
+
+      const url = id ? `/api/equipos/${id}` : '/api/equipos';
+      const method = id ? 'PUT' : 'POST';
+      try {
+        const res = await fetch(url, {
+          method,
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'No se pudo guardar el equipo');
+        alert(id ? '✅ Equipo actualizado correctamente' : '✅ Equipo registrado correctamente');
+        resetFormularioEquipoAlquiler();
+        await cargarCatalogoEquiposAlquiler();
+      } catch (err) {
+        alert(err.message || 'Error guardando equipo');
+      }
+    }
+
+    async function cargarClientesAlquiler() {
+      try {
+        const res = await fetch('/api/clientes');
+        if (!res.ok) throw new Error('Error');
+        const clientes = await res.json();
+        const select = document.getElementById('alquiler-cliente');
+        select.innerHTML = '<option value="">Seleccione un cliente</option>';
+        clientes.forEach(c => {
+          select.innerHTML += `<option value="${c.id}">${escapeHtml(c.nombre || '')} (${escapeHtml(c.cedula_nit || 'Sin documento')})</option>`;
+        });
+      } catch (err) {
+        console.error('Error cargando clientes para alquiler:', err);
+      }
+    }
+
+    function agregarEquipoAlquiler() {
+      const id = document.getElementById('alquiler-equipo-select').value;
+      const cantidad = Number(document.getElementById('alquiler-cantidad').value || 1);
+      const estadoSalida = document.getElementById('alquiler-estado-salida').value;
+      const medidaSeleccionada = document.getElementById('alquiler-medida-select').value;
+
+      if (!id) {
+        alert('Seleccione un equipo para alquilar');
+        return;
+      }
+      if (cantidad <= 0) {
+        alert('La cantidad debe ser mayor a 0');
+        return;
+      }
+
+      const equipo = equiposAlquilerLista.find(e => String(e.id) === String(id));
+      if (!equipo) {
+        alert('Equipo no encontrado');
+        return;
+      }
+
+      alquilerItems.push({
+        id_equipo: Number(id),
+        nombre: equipo.nombre,
+        codigo: equipo.codigo_interno,
+        medida: medidaSeleccionada || equipo.medidas || 'General',
+        cantidad,
+        estado_salida: estadoSalida,
+        tarifa_tipo: equipo.tipo_tarifa,
+        tarifa_valor: equipo.tipo_tarifa === 'hora' ? Number(equipo.tarifa_hora || 0) : equipo.tipo_tarifa === 'turno' ? Number(equipo.tarifa_turno || 0) : equipo.tipo_tarifa === 'bulto' ? Number(equipo.tarifa_bulto || 0) : Number(equipo.tarifa || 0)
+      });
+
+      renderTablaAlquilerItems();
+    }
+
+    function renderTablaAlquilerItems() {
+      const tbody = document.getElementById('tabla-alquiler-items');
+      tbody.innerHTML = '';
+
+      if (alquilerItems.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">No hay equipos agregados aún.</td></tr>';
+        return;
+      }
+
+      alquilerItems.forEach((item, index) => {
+        tbody.innerHTML += `
+          <tr>
+            <td>${escapeHtml(item.nombre)}<br><small class="text-muted">${escapeHtml(item.medida || 'General')}</small></td>
+            <td>${escapeHtml(item.codigo)}</td>
+            <td>${monedaCOP(item.tarifa_valor)}</td>
+            <td>${item.cantidad}</td>
+            <td>${escapeHtml(item.estado_salida)}</td>
+            <td><button class="btn btn-sm btn-danger" onclick="eliminarEquipoAlquiler(${index})">Quitar</button></td>
+          </tr>
+        `;
+      });
+    }
+
+    function eliminarEquipoAlquiler(index) {
+      alquilerItems.splice(index, 1);
+      renderTablaAlquilerItems();
+    }
+
+    async function registrarAlquiler() {
+      const payload = {
+        id_cliente: document.getElementById('alquiler-cliente').value,
+        fecha_salida: document.getElementById('alquiler-fecha-salida').value,
+        fecha_devolucion_pactada: document.getElementById('alquiler-fecha-devolucion').value,
+        valor_deposito: Number(document.getElementById('alquiler-deposito').value || 0),
+        notas_salida: document.getElementById('alquiler-notas').value,
+        equipos: alquilerItems.map(item => ({
+          id_equipo: item.id_equipo,
+          cantidad: item.cantidad,
+          estado_salida: item.estado_salida,
+          tarifa_tipo: item.tarifa_tipo,
+          tarifa_valor: item.tarifa_valor,
+          medida: item.medida
+        }))
+      };
+
+      if (!payload.id_cliente) {
+        alert('Seleccione un cliente');
+        return;
+      }
+      if (!payload.fecha_salida || !payload.fecha_devolucion_pactada) {
+        alert('Debe ingresar la fecha de salida y la fecha pactada de devolución');
+        return;
+      }
+      if (alquilerItems.length === 0) {
+        alert('Agregue al menos un equipo al alquiler');
+        return;
+      }
+
+      try {
+        const res = await fetch('/api/alquileres', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          throw new Error(data.error || 'No se pudo registrar el alquiler');
+        }
+        alert('✅ Alquiler registrado correctamente');
+        alquilerItems = [];
+        renderTablaAlquilerItems();
+        document.getElementById('alquiler-notas').value = '';
+        document.getElementById('alquiler-deposito').value = 0;
+        await cargarCatalogoEquiposAlquiler();
+        await cargarAlquileresActivos();
+      } catch (err) {
+        alert(err.message || 'Error al registrar alquiler');
+      }
+    }
+
+    async function cargarAlquileresActivos() {
+      try {
+        const res = await fetch('/api/alquileres/activos');
+        if (!res.ok) throw new Error('Error');
+        const rows = await res.json();
+        const tbody = document.getElementById('tabla-alquiler-activos');
+        tbody.innerHTML = '';
+
+        if (!rows.length) {
+          tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">No hay alquileres activos en este momento.</td></tr>';
+          return;
+        }
+
+        rows.forEach((r) => {
+          const fechaActual = new Date();
+          const fechaLimite = new Date(r.fecha_devolucion_pactada);
+          const vencido = fechaLimite < fechaActual;
+          tbody.innerHTML += `
+            <tr class="${vencido ? 'table-danger' : ''}">
+              <td>${r.id}</td>
+              <td>${escapeHtml(r.cliente)}</td>
+              <td>${escapeHtml(r.equipo)}<br><small class="text-muted">${escapeHtml(r.codigo_interno || '')}</small></td>
+              <td>${escapeHtml(r.fecha_salida)}</td>
+              <td>${escapeHtml(r.fecha_devolucion_pactada)}</td>
+              <td>${vencido ? '<span class="badge bg-danger">Vencido</span>' : '<span class="badge bg-success">Activo</span>'}</td>
+              <td>
+                <button class="btn btn-sm btn-warning" onclick="abrirDevolucionAlquiler(${r.id})">Devolver</button>
+              </td>
+            </tr>
+          `;
+        });
+      } catch (err) {
+        console.error('Error cargando alquileres:', err);
+      }
+    }
+
+    function abrirDevolucionAlquiler(idAlquiler) {
+      const fechaActual = new Date();
+      const fechaIso = new Date(fechaActual.getTime() - fechaActual.getTimezoneOffset() * 60000).toISOString().slice(0, 16);
+      const notas = prompt('Notas de devolución (opcional):', '');
+      const cargosExtra = prompt('Cobros extra (daños, limpieza, combustible):', '0');
+      const descuento = prompt('Descuento aplicado (opcional):', '0');
+      const estadoRetorno = prompt('Estado de retorno (bueno/con_danos/faltante/otro):', 'bueno');
+
+      const payload = {
+        fecha_devolucion_real: fechaIso,
+        notas_devolucion: notas || '',
+        cargos_extra: Number(cargosExtra || 0),
+        descuento: Number(descuento || 0),
+        estado_retorno: estadoRetorno || 'bueno'
+      };
+
+      fetch(`/api/alquileres/${idAlquiler}/devolver`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      })
+      .then(async res => {
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'No se pudo registrar la devolución');
+        alert(`✅ Devolución registrada. Total final: ${monedaCOP(data.total_final)}`);
+        return cargarAlquileresActivos();
+      })
+      .then(() => cargarCatalogoEquiposAlquiler())
+      .catch(err => alert(err.message || 'Error al devolver alquiler'));
+    }
+
     async function cargarFormularioVentas() {
       const resClientes = await fetch('/api/clientes');
       clientesLista = await resClientes.json();
@@ -810,17 +2080,29 @@
       productosLista = await resProds.json();
 
       if (tsCliente) tsCliente.destroy();
+      const defaultClienteId = clientesLista.length ? String(clientesLista[0].id) : '';
       tsCliente = new TomSelect('#select-cliente', {
-        options: clientesLista.map(c => ({ value: c.id, text: `${c.nombre} (${c.cedula_nit || 'Sin doc'})` })),
-        items: ['1'],
+        options: clientesLista.map(c => ({ value: String(c.id), text: `${c.nombre} (${c.cedula_nit || 'Sin doc'})` })),
+        items: defaultClienteId ? [defaultClienteId] : [],
         create: false,
+        placeholder: 'Buscar cliente...',
         onChange: function(val) {
-          const cli = clientesLista.find(c => c.id == val);
-          if (cli) {
-            document.getElementById('input-direccion-venta').value = cli.direccion || '';
+          const selectedId = Array.isArray(val) ? val[0] : val;
+          const cli = clientesLista.find(c => String(c.id) === String(selectedId));
+          const direccionInput = document.getElementById('input-direccion-venta');
+          if (direccionInput) {
+            direccionInput.value = cli && cli.direccion ? cli.direccion : '';
           }
         }
       });
+
+      if (defaultClienteId) {
+        const direccionInput = document.getElementById('input-direccion-venta');
+        const clienteDefault = clientesLista.find(c => String(c.id) === defaultClienteId);
+        if (direccionInput && clienteDefault) {
+          direccionInput.value = clienteDefault.direccion || '';
+        }
+      }
 
       if (tsProducto) tsProducto.destroy();
       tsProducto = new TomSelect('#select-producto', {
@@ -835,18 +2117,140 @@
       });
     }
 
+    function agregarFlejeAlPedido() {
+      const calibre = document.getElementById('fleje-calibre').value.trim();
+      const ancho = Number(document.getElementById('fleje-ancho').value || 0);
+      const largo = Number(document.getElementById('fleje-largo').value || 0);
+      const gancho = Number(document.getElementById('fleje-gancho').value || 0);
+      const cantidad = Number(document.getElementById('fleje-cantidad').value || 0);
+
+      if (!calibre || ancho <= 0 || largo <= 0 || cantidad <= 0) {
+        alert('Complete calibre, ancho, largo y cantidad para el fleje.');
+        return;
+      }
+
+      carritoFlejes.push({
+        calibre,
+        ancho_cm: ancho,
+        largo_cm: largo,
+        largo_gancho_cm: gancho,
+        cantidad_piezas: cantidad
+      });
+
+      renderTablaFlejesPedido();
+      document.getElementById('fleje-calibre').value = '';
+      document.getElementById('fleje-ancho').value = 10;
+      document.getElementById('fleje-largo').value = 20;
+      document.getElementById('fleje-gancho').value = 5;
+      document.getElementById('fleje-cantidad').value = 1;
+    }
+
+    function renderTablaFlejesPedido() {
+      const tbody = document.getElementById('tabla-flejes-pedido-body');
+      if (!tbody) return;
+      tbody.innerHTML = '';
+
+      if (carritoFlejes.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Sin flejes agregados aún.</td></tr>';
+        return;
+      }
+
+      carritoFlejes.forEach((item, index) => {
+        tbody.innerHTML += `
+          <tr>
+            <td>${escapeHtml(item.calibre)}</td>
+            <td>${Number(item.ancho_cm).toFixed(1)} x ${Number(item.largo_cm).toFixed(1)} cm</td>
+            <td>${Number(item.largo_gancho_cm).toFixed(1)} cm</td>
+            <td>${item.cantidad_piezas}</td>
+            <td><button type="button" class="btn btn-sm btn-danger" onclick="eliminarFlejeDelPedido(${index})">Quitar</button></td>
+          </tr>
+        `;
+      });
+    }
+
+    function eliminarFlejeDelPedido(index) {
+      carritoFlejes.splice(index, 1);
+      renderTablaFlejesPedido();
+    }
+
+    async function enviarFlejesAFabrica() {
+      if (carritoFlejes.length === 0) {
+        alert('Agregue al menos un fleje para enviar a la fábrica.');
+        return;
+      }
+
+      const idCliente = document.getElementById('select-cliente')?.value;
+      if (!idCliente) {
+        alert('Seleccione un cliente antes de enviar la orden a la fábrica.');
+        return;
+      }
+
+      try {
+        const payload = {
+          id_cliente: Number(idCliente),
+          observaciones: 'Pedido generado desde ventas / facturación',
+          items: carritoFlejes
+        };
+
+        const res = await fetch('/api/fabrica/ordenes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+
+        if (!res.ok) throw new Error(data.error || 'No se pudo crear la orden');
+
+        alert(`✅ ${data.mensaje}\nOrden: ${data.numero_orden}`);
+        carritoFlejes = [];
+        renderTablaFlejesPedido();
+        await cargarOrdenesFlejes();
+      } catch (err) {
+        alert(err.message || 'Error al enviar la orden a la fábrica');
+      }
+    }
+
     function procesarCodigoBarras(event) {
       if (event.key !== 'Enter') return;
       event.preventDefault();
       const codigo = event.target.value.trim();
+      if (!codigo) return;
+      buscarYMostrarProducto(codigo, true);
+      event.target.value = '';
+    }
+
+    function buscarYMostrarProducto(codigo, agregarAlCarrito = false) {
+      const panel = document.getElementById('panel-scan-resultado');
       const producto = productosLista.find(p => p.codigo_barras === codigo);
+
       if (!producto) {
-        alert('No existe un producto con ese código de barras. Regístrelo desde Inventario de Productos.');
+        panel.className = 'mt-3 panel-scan-resultado no-encontrado p-2 rounded';
+        panel.classList.remove('d-none');
+        document.getElementById('scan-prod-nombre').textContent = '❌ Producto no encontrado';
+        document.getElementById('scan-prod-detalle').textContent = `Código: ${codigo} — Regístrelo en Inventario de Productos`;
+        document.getElementById('scan-prod-precio').textContent = '—';
+        document.getElementById('scan-prod-stock-badge').textContent = '—';
+        document.getElementById('scan-prod-stock-badge').className = 'badge scan-badge-stock bg-danger';
         return;
       }
-      tsProducto.setValue(String(producto.id), true);
-      agregarProductoAlCarrito();
-      event.target.value = '';
+
+      // Mostrar panel con info del producto
+      panel.className = 'mt-3 panel-scan-resultado p-2 rounded';
+      panel.classList.remove('d-none');
+      document.getElementById('scan-prod-nombre').textContent = `✅ ${producto.nombre}${producto.dimensiones ? ' [' + producto.dimensiones + ']' : ''}`;
+      document.getElementById('scan-prod-detalle').textContent = `Categoría: ${producto.categoria || '—'} | Código: ${codigo}`;
+      document.getElementById('scan-prod-precio').textContent = monedaCOP(producto.precio_venta);
+      const stockBadge = document.getElementById('scan-prod-stock-badge');
+      stockBadge.textContent = `Stock: ${producto.stock_actual}`;
+      stockBadge.className = `badge scan-badge-stock ${producto.stock_actual <= 0 ? 'bg-danger' : producto.stock_actual <= producto.stock_minimo ? 'bg-warning text-dark' : 'bg-success'}`;
+
+      if (agregarAlCarrito) {
+        tsProducto.setValue(String(producto.id), true);
+        agregarProductoAlCarrito();
+      }
+
+      // Ocultar panel después de 4 segundos
+      setTimeout(() => panel.classList.add('d-none'), 4000);
     }
 
     function mostrarDetallesProducto(idProducto) {
@@ -920,7 +2324,7 @@
         total += item.subtotal;
         tbody.innerHTML += `
           <tr>
-            <td>${item.nombre}</td>
+              <td>${escapeHtml(item.nombre)}</td>
             <td>${monedaCOP(item.precio)}</td>
             <td>${item.cantidad}</td>
             <td class="fw-bold">${monedaCOP(item.subtotal)}</td>
@@ -947,6 +2351,34 @@
       document.getElementById('input-direccion-venta').value = '';
       document.getElementById('input-cantidad').value = 1;
       document.getElementById('detalle-producto-seleccionado').classList.add('d-none');
+      // Resetear tipo de entrega a "mostrador"
+      seleccionarTipoEntrega('entrega_inmediata');
+    }
+
+    // ── Selector tipo de entrega ──────────────────────────────────────────────
+    function seleccionarTipoEntrega(tipo) {
+      document.getElementById('input-tipo-entrega').value = tipo;
+
+      const btnMostrador  = document.getElementById('btn-entrega-inmediata');
+      const btnLlevar     = document.getElementById('btn-para-llevar');
+      const avisoConsec   = document.getElementById('aviso-pedido-consecutivo');
+      const bloqueDireccion = document.getElementById('bloque-direccion-venta');
+
+      if (tipo === 'para_llevar') {
+        btnLlevar.classList.remove('btn-outline-primary');
+        btnLlevar.classList.add('btn-primary', 'active-entrega');
+        btnMostrador.classList.remove('btn-success', 'active-entrega');
+        btnMostrador.classList.add('btn-outline-success');
+        avisoConsec.classList.remove('d-none');
+        bloqueDireccion.querySelector('label').textContent = 'Dirección de Entrega *';
+      } else {
+        btnMostrador.classList.remove('btn-outline-success');
+        btnMostrador.classList.add('btn-success', 'active-entrega');
+        btnLlevar.classList.remove('btn-primary', 'active-entrega');
+        btnLlevar.classList.add('btn-outline-primary');
+        avisoConsec.classList.add('d-none');
+        bloqueDireccion.querySelector('label').textContent = 'Dirección de Entrega:';
+      }
     }
 
     async function procesarVenta() {
@@ -955,10 +2387,20 @@
         return;
       }
 
+      const tipoEntrega = document.getElementById('input-tipo-entrega').value;
+      const direccion   = document.getElementById('input-direccion-venta').value.trim();
+
+      if (tipoEntrega === 'para_llevar' && !direccion) {
+        alert('Para pedidos de domicilio debe ingresar la dirección de entrega.');
+        document.getElementById('input-direccion-venta').focus();
+        return;
+      }
+
       const payload = {
-        id_cliente: parseInt(document.getElementById('select-cliente').value),
-        tipo_pago: document.getElementById('select-tipo-pago').value,
-        direccion: document.getElementById('input-direccion-venta').value,
+        id_cliente:    parseInt(document.getElementById('select-cliente').value),
+        tipo_pago:     document.getElementById('select-tipo-pago').value,
+        direccion:     direccion,
+        tipo_entrega:  tipoEntrega,
         items: carrito.map(i => ({ id_producto: i.id_producto, cantidad: i.cantidad }))
       };
 
@@ -970,7 +2412,11 @@
 
       const data = await res.json();
       if (res.ok) {
-        alert(data.mensaje);
+        if (data.numero_pedido) {
+          alert(`✅ ${data.mensaje}\n\n🚚 Pedido #${data.numero_pedido} enviado a la cola de despacho.`);
+        } else {
+          alert(data.mensaje);
+        }
         await cargarFormularioVentas();
         limpiarFormularioVenta();
         cargarNotificaciones();
@@ -985,7 +2431,7 @@
       productosLista = await res.json();
       const movimientoProducto = document.getElementById('mov-producto');
       if (movimientoProducto) {
-        movimientoProducto.innerHTML = '<option value="">Producto</option>' + productosLista.map(p => `<option value="${p.id}">${p.nombre} (stock: ${p.stock_actual})</option>`).join('');
+        movimientoProducto.innerHTML = '<option value="">Producto</option>' + productosLista.map(p => `<option value="${p.id}">${escapeHtml(p.nombre || '')} (stock: ${p.stock_actual})</option>`).join('');
       }
 
       const tbody = document.getElementById('tabla-productos-body');
@@ -1019,6 +2465,8 @@
           mostrarDatosProductoInventario(val);
         }
       });
+
+      await cargarInventarioFlejes();
     }
 
     function mostrarDatosProductoInventario(idProducto) {
@@ -1105,25 +2553,39 @@
     }
 
     async function cargarClientesTabla() {
-      const res = await fetch('/api/clientes');
-      const clientes = await res.json();
-      clientesLista = clientes;
-
       const tbody = document.getElementById('tabla-clientes-body');
-      tbody.innerHTML = '';
+      tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">Cargando clientes...</td></tr>';
+      try {
+        const res = await fetch('/api/clientes');
+        if (!res.ok) {
+          tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger">Error al cargar clientes (código ${res.status}). Intente recargar la página.</td></tr>`;
+          return;
+        }
+        const clientes = await res.json();
+        clientesLista = clientes;
+        tbody.innerHTML = '';
 
-      clientes.forEach(c => {
-        tbody.innerHTML += `
-          <tr>
-            <td>${c.id}</td>
-            <td><strong>${c.nombre}</strong></td>
-            <td>${c.cedula_nit || ''}</td>
-            <td>${c.telefono || ''}</td>
-            <td>${c.direccion || ''}</td>
-            <td><button type="button" class="btn btn-sm btn-warning" onclick="editarCliente(${c.id})">Editar</button> <button type="button" class="btn btn-sm btn-outline-primary" onclick="verHistorialCliente(${c.id})">Compras</button></td>
-          </tr>
-        `;
-      });
+        if (clientes.length === 0) {
+          tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">No hay clientes registrados.</td></tr>';
+          return;
+        }
+
+        clientes.forEach(c => {
+          tbody.innerHTML += `
+            <tr>
+              <td>${c.id}</td>
+              <td><strong>${escapeHtml(c.nombre)}</strong></td>
+              <td>${escapeHtml(c.cedula_nit || '')}</td>
+              <td>${escapeHtml(c.telefono || '')}</td>
+              <td>${escapeHtml(c.direccion || '')}</td>
+              <td><button type="button" class="btn btn-sm btn-warning" onclick="editarCliente(${c.id})">Editar</button> <button type="button" class="btn btn-sm btn-outline-primary" onclick="verHistorialCliente(${c.id})">Compras</button></td>
+            </tr>
+          `;
+        });
+      } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger">No se pudo conectar con el servidor. Verifique que la aplicación esté corriendo.</td></tr>`;
+        console.error('Error cargando clientes:', err);
+      }
     }
 
 		async function guardarCliente(e) {
@@ -1179,8 +2641,8 @@
 			tbody.innerHTML = '';
 			select.innerHTML = '<option value="">Seleccione un cliente</option>';
 			creditos.forEach(c => {
-        tbody.innerHTML += `<tr><td>${c.id_cliente}</td><td>${c.nombre}</td><td>${c.telefono || ''}</td><td>${c.direccion || ''}</td><td class="fw-bold text-danger">${monedaCOP(c.deuda_total)}</td></tr>`;
-        select.innerHTML += `<option value="${c.id_cliente}">${c.nombre} - ${monedaCOP(c.deuda_total)}</option>`;
+			  tbody.innerHTML += `<tr><td>${c.id_cliente}</td><td>${escapeHtml(c.nombre)}</td><td>${escapeHtml(c.telefono || '')}</td><td>${escapeHtml(c.direccion || '')}</td><td class="fw-bold text-danger">${monedaCOP(c.deuda_total)}</td></tr>`;
+			  select.innerHTML += `<option value="${c.id_cliente}">${escapeHtml(c.nombre)} - ${monedaCOP(c.deuda_total)}</option>`;
 			});
 			if (creditos.length === 0) tbody.innerHTML = '<tr><td colspan="5" class="text-center text-success">No hay créditos pendientes.</td></tr>';
 		}
@@ -1314,22 +2776,26 @@
 			const tbody = document.getElementById('tabla-historial-body');
 			tbody.innerHTML = '';
 			ventas.forEach(v => {
-        tbody.innerHTML += `<tr><td>${v.id}</td><td>${v.fecha_dia} ${v.hora}</td><td>${v.cliente}</td><td>${v.direccion}</td><td>${v.productos_detalle || ''}</td><td>${v.tipo_pago}</td><td>${monedaCOP(v.total_venta)}</td></tr>`;
+			  tbody.innerHTML += `<tr><td>${v.id}</td><td>${escapeHtml(v.fecha_dia)} ${escapeHtml(v.hora)}</td><td>${escapeHtml(v.cliente)}</td><td>${escapeHtml(v.direccion)}</td><td>${escapeHtml(v.productos_detalle || '')}</td><td>${escapeHtml(v.tipo_pago)}</td><td>${monedaCOP(v.total_venta)}</td></tr>`;
 			});
 			if (ventas.length === 0) tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">No hay ventas para esta fecha.</td></tr>';
 		}
 
 		async function cargarFacturasTabla() {
 			const res = await fetch('/api/ventas');
-			const ventas = await res.json();
+			let ventas = await res.json();
+			const filtroCliente = (document.getElementById('filtro-cliente-facturas')?.value || '').trim().toLowerCase();
+			if (filtroCliente) {
+			  ventas = ventas.filter(v => (v.cliente || '').toLowerCase().includes(filtroCliente));
+			}
 			const tbody = document.getElementById('tabla-facturas-body');
 			tbody.innerHTML = '';
         ventas.forEach(v => {
           const estado = v.anulada ? '<span class="badge bg-danger">Anulada</span>' : '<span class="badge bg-success">Vigente</span>';
           const anular = v.anulada ? '' : `<button class="btn btn-sm btn-outline-danger" onclick="anularVenta(${v.id})">Anular</button>`;
-          tbody.innerHTML += `<tr><td>${v.id}</td><td>${v.fecha_dia} ${v.hora}</td><td>${v.cliente}</td><td>${v.tipo_pago}</td><td>${monedaCOP(v.total_venta)}</td><td>${estado} <button class="btn btn-sm btn-primary" onclick="verFactura(${v.id})">Ver</button> ${anular}</td></tr>`;
+			    tbody.innerHTML += `<tr><td>${v.id}</td><td>${escapeHtml(v.fecha_dia)} ${escapeHtml(v.hora)}</td><td>${escapeHtml(v.cliente)}</td><td>${escapeHtml(v.tipo_pago)}</td><td>${monedaCOP(v.total_venta)}</td><td>${estado} <button class="btn btn-sm btn-primary" onclick="verFactura(${v.id})">Ver</button> ${anular}</td></tr>`;
 			});
-			if (ventas.length === 0) tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">No hay facturas registradas.</td></tr>';
+			if (ventas.length === 0) tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">${filtroCliente ? 'No hay facturas para ese cliente.' : 'No hay facturas registradas.'}</td></tr>`;
 		}
 
     async function anularVenta(id) {
@@ -1358,7 +2824,7 @@
 			document.getElementById('edit-fac-nit').value = factura.cedula_nit || '';
 			document.getElementById('edit-fac-tel').value = factura.telefono || '';
 			document.getElementById('edit-fac-dir').value = factura.direccion || '';
-        document.getElementById('fac-items-body').innerHTML = factura.items.map(i => `<tr><td>${i.nombre}</td><td class="text-center">${i.cantidad}</td><td class="text-end">${monedaCOP(i.precio_unitario)}</td><td class="text-end">${monedaCOP(i.subtotal)}</td></tr>`).join('');
+        document.getElementById('fac-items-body').innerHTML = factura.items.map(i => `<tr><td>${escapeHtml(i.nombre)}</td><td class="text-center">${i.cantidad}</td><td class="text-end">${monedaCOP(i.precio_unitario)}</td><td class="text-end">${monedaCOP(i.subtotal)}</td></tr>`).join('');
         document.getElementById('fac-total').innerText = monedaCOP(factura.total_venta);
 			new bootstrap.Modal(document.getElementById('modalFactura')).show();
 		}
@@ -1386,7 +2852,7 @@
 			const tbody = document.getElementById('tabla-usuarios-body');
 			tbody.innerHTML = '';
 			usuarios.forEach(u => {
-				tbody.innerHTML += `<tr><td>${u.id}</td><td>${u.usuario}</td><td>${u.rol}</td><td><button class="btn btn-sm btn-warning" onclick="cambiarClaveUsuario(${u.id})">Cambiar clave</button> <button class="btn btn-sm btn-danger" onclick="eliminarUsuario(${u.id})">Eliminar</button></td></tr>`;
+				tbody.innerHTML += `<tr><td>${u.id}</td><td>${escapeHtml(u.usuario || '')}</td><td>${escapeHtml(u.rol || '')}</td><td><button class="btn btn-sm btn-warning" onclick="cambiarClaveUsuario(${u.id})">Cambiar clave</button> <button class="btn btn-sm btn-danger" onclick="eliminarUsuario(${u.id})">Eliminar</button></td></tr>`;
 			});
 		}
 
@@ -1444,7 +2910,7 @@
       document.getElementById('gasto-fecha').value = document.getElementById('gasto-fecha').value || fechaHoy;
       document.getElementById('cierre-fecha').value = document.getElementById('cierre-fecha').value || fechaHoy;
       const movimientoProducto = document.getElementById('mov-producto');
-      if (movimientoProducto) movimientoProducto.innerHTML = '<option value="">Producto</option>' + productosAdmin.map(p => `<option value="${p.id}">${p.nombre} (stock: ${p.stock_actual})</option>`).join('');
+      if (movimientoProducto) movimientoProducto.innerHTML = '<option value="">Producto</option>' + productosAdmin.map(p => `<option value="${p.id}">${escapeHtml(p.nombre || '')} (stock: ${p.stock_actual})</option>`).join('');
       const topBody = document.getElementById('tabla-mas-vendidos-body');
       topBody.innerHTML = reporte.mas_vendidos.length
         ? reporte.mas_vendidos.map(p => `<tr><td>${p.nombre}</td><td>${p.cantidad}</td></tr>`).join('')
@@ -1498,6 +2964,61 @@
       if (res.ok) { document.getElementById('form-movimiento').reset(); cargarAdministracion(); cargarProductosTabla(); }
     }
 
+    async function cargarInventarioFlejes() {
+      const tbody = document.getElementById('tabla-inventario-hierro');
+      if (!tbody) return;
+      tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Cargando inventario...</td></tr>';
+      try {
+        const res = await fetch('/api/fabrica/inventario-hierro');
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'No se pudo cargar el inventario');
+        tbody.innerHTML = '';
+        if (!data.length) {
+          tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Sin registros de hierro.</td></tr>';
+          return;
+        }
+        data.forEach(item => {
+          tbody.innerHTML += `
+            <tr>
+              <td>${escapeHtml(item.calibre || '—')}</td>
+              <td>${Number(item.diametro_mm || 0).toFixed(2)} mm</td>
+              <td>${Number(item.stock_kg || 0).toFixed(2)} kg</td>
+              <td>${escapeHtml(item.ultimo_update || 'Sin fecha')}</td>
+            </tr>
+          `;
+        });
+      } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="4" class="text-center text-danger">${escapeHtml(err.message || 'Inventario no disponible.')}</td></tr>`;
+      }
+    }
+
+    async function guardarInventarioHierro(event) {
+      event.preventDefault();
+      const payload = {
+        calibre: document.getElementById('hierro-calibre').value.trim(),
+        stock_kg: Number(document.getElementById('hierro-stock').value || 0),
+        observacion: document.getElementById('hierro-observacion').value.trim()
+      };
+      if (!payload.calibre) {
+        alert('Seleccione un calibre para el inventario de fábrica.');
+        return;
+      }
+      try {
+        const res = await fetch('/api/fabrica/inventario-hierro', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) throw new Error(data.error || 'No se pudo guardar el inventario');
+        alert(data.mensaje || 'Inventario actualizado correctamente');
+        document.getElementById('form-inventario-hierro').reset();
+        await cargarInventarioFlejes();
+      } catch (err) {
+        alert(err.message || 'Error al guardar inventario de fábrica');
+      }
+    }
+
     async function guardarConfiguracion() {
       const payload = {
         nombre: document.getElementById('config-nombre').value,
@@ -1508,6 +3029,459 @@
       const res = await fetch('/api/configuracion', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json();
       alert(res.ok ? data.mensaje : `Error: ${data.error}`);
+    }
+
+    // ══════════════════════════════════════════════
+    //  MÓDULO CÁMARA - CÓDIGO DE BARRAS (html5-qrcode)
+    // ══════════════════════════════════════════════
+    let html5QrScanner = null;
+    let modoEscaneo = null; // 'producto' | 'ventas'
+
+    function abrirCamaraProducto() {
+      modoEscaneo = 'producto';
+      _abrirModalCamara();
+    }
+
+    function abrirCamaraVentas() {
+      modoEscaneo = 'ventas';
+      _abrirModalCamara();
+    }
+
+    function _abrirModalCamara() {
+      const resultadoDiv = document.getElementById('barcode-resultado');
+      const errorDiv = document.getElementById('barcode-error');
+      resultadoDiv.classList.add('d-none');
+      errorDiv.classList.add('d-none');
+
+      const modal = new bootstrap.Modal(document.getElementById('modalCamaraBarcode'));
+      modal.show();
+
+      // Esperar a que el modal esté visible antes de iniciar la cámara
+      document.getElementById('modalCamaraBarcode').addEventListener('shown.bs.modal', _iniciarCamara, { once: true });
+    }
+
+    function _iniciarCamara() {
+      if (html5QrScanner) {
+        html5QrScanner.clear().catch(() => {});
+      }
+
+      html5QrScanner = new Html5Qrcode('barcode-reader');
+
+      const config = {
+        fps: 10,
+        qrbox: { width: 280, height: 120 },
+        formatsToSupport: [
+          Html5QrcodeSupportedFormats.EAN_13,
+          Html5QrcodeSupportedFormats.EAN_8,
+          Html5QrcodeSupportedFormats.CODE_128,
+          Html5QrcodeSupportedFormats.CODE_39,
+          Html5QrcodeSupportedFormats.UPC_A,
+          Html5QrcodeSupportedFormats.UPC_E,
+          Html5QrcodeSupportedFormats.ITF,
+        ]
+      };
+
+      html5QrScanner.start(
+        { facingMode: 'environment' },  // cámara trasera en móvil
+        config,
+        (codigoDetectado) => _onCodigoDetectado(codigoDetectado),
+        () => {}  // errores de frame (silenciados)
+      ).catch((err) => {
+        const errorDiv = document.getElementById('barcode-error');
+        document.getElementById('barcode-error-msg').textContent =
+          `No se pudo acceder a la cámara: ${err}. Verifique los permisos del navegador.`;
+        errorDiv.classList.remove('d-none');
+      });
+    }
+
+    function _onCodigoDetectado(codigo) {
+      // Mostrar código detectado en el modal
+      document.getElementById('barcode-codigo-detectado').textContent = codigo;
+      document.getElementById('barcode-resultado').classList.remove('d-none');
+
+      // Detener cámara
+      if (html5QrScanner) {
+        html5QrScanner.stop().catch(() => {});
+      }
+
+      // Cerrar modal después de 800ms (para que el usuario vea el resultado)
+      setTimeout(() => {
+        const modalEl = document.getElementById('modalCamaraBarcode');
+        const modal = bootstrap.Modal.getInstance(modalEl);
+        if (modal) modal.hide();
+
+        // Aplicar el código según el modo
+        if (modoEscaneo === 'producto') {
+          document.getElementById('prod-codigo-barras').value = codigo;
+          document.getElementById('prod-categoria').focus();
+        } else if (modoEscaneo === 'ventas') {
+          document.getElementById('input-codigo-barras').value = codigo;
+          buscarYMostrarProducto(codigo, true);
+        }
+        modoEscaneo = null;
+      }, 800);
+    }
+
+    function cerrarCamara() {
+      if (html5QrScanner) {
+        html5QrScanner.stop().catch(() => {}).finally(() => {
+          html5QrScanner.clear().catch(() => {});
+          html5QrScanner = null;
+        });
+      }
+      const modalEl = document.getElementById('modalCamaraBarcode');
+      const modal = bootstrap.Modal.getInstance(modalEl);
+      if (modal) modal.hide();
+      modoEscaneo = null;
+    }
+
+    // Limpiar cámara si el modal se cierra con X o backdrop
+    document.addEventListener('DOMContentLoaded', () => {
+      document.getElementById('modalCamaraBarcode').addEventListener('hidden.bs.modal', () => {
+        if (html5QrScanner) {
+          html5QrScanner.stop().catch(() => {});
+        }
+      });
+    });
+
+    // ══════════════════════════════════════════════════════════════════════
+    //  MÓDULO DE PEDIDOS
+    // ══════════════════════════════════════════════════════════════════════
+    let itemsPedidoActual = [];
+    let pedidoDetalleActual = null;
+    let tsPedidoCliente = null;
+    let tsPedidoProducto = null;
+
+    const ESTADO_INFO = {
+      pendiente:  { label: '⏳ Pendiente',        color: 'warning text-dark' },
+      alistando:  { label: '📦 Alistando',         color: 'info text-dark'   },
+      listo:      { label: '✅ Listo p/despacho',  color: 'success'          },
+      en_camino:  { label: '🛵 En camino',         color: 'primary'          },
+      entregado:  { label: '🏠 Entregado',         color: 'secondary'        },
+      cancelado:  { label: '❌ Cancelado',         color: 'danger'           },
+    };
+
+    const TRANSICIONES_FRONT = {
+      pendiente: { admin: ['alistando','cancelado'], empleado: ['cancelado'], bodega: ['alistando','cancelado'] },
+      alistando: { admin: ['listo','pendiente','cancelado'], bodega: ['listo','pendiente','cancelado'] },
+      listo:     { admin: ['en_camino','cancelado'], bodega: ['en_camino'], motocarguero: ['en_camino'] },
+      en_camino: { admin: ['entregado','listo'], motocarguero: ['entregado'] },
+      entregado: { admin: ['en_camino'] },
+      cancelado: { admin: ['pendiente'] },
+    };
+
+    // ── Polling cada 20s ─────────────────────────────────────────────────────
+    let ultimoTotalPedidos = 0;
+    let ultimoTotalFlejesPedidos = 0;
+
+    function actualizarBadgesPedidos() {
+      const total = ultimoTotalPedidos + ultimoTotalFlejesPedidos;
+      ['badge-pedidos','badge-pedidos-nav'].forEach(id => {
+        const el = document.getElementById(id);
+        if (!el) return;
+        if (total > 0) { el.textContent = total; el.style.display = 'inline-block'; }
+        else { el.style.display = 'none'; }
+      });
+    }
+
+    async function pollNotificacionesPedidos() {
+      try {
+        const res = await fetch('/api/pedidos/notificaciones');
+        if (!res.ok) return;
+        const data = await res.json();
+        ultimoTotalPedidos = Number(data.total) || 0;
+        actualizarBadgesPedidos();
+      } catch(e) {}
+    }
+    document.addEventListener('DOMContentLoaded', () => {
+      pollNotificacionesPedidos();
+      setInterval(pollNotificacionesPedidos, 20000);
+    });
+
+    function irAPedidos() {
+      const tab = document.getElementById('pedidos-tab');
+      if (tab) { bootstrap.Tab.getOrCreateInstance(tab).show(); activarSubtabPedidos('despachos'); }
+    }
+
+    // ── Tabla de pedidos ─────────────────────────────────────────────────────
+    function activarSubtabPedidos(tipo) {
+      const mostrarDespachos = tipo === 'despachos';
+      document.getElementById('subtab-despachos').classList.toggle('d-none', !mostrarDespachos);
+      document.getElementById('subtab-manuales').classList.toggle('d-none', mostrarDespachos);
+      document.getElementById('subtab-despachos-btn').classList.toggle('active', mostrarDespachos);
+      document.getElementById('subtab-manuales-btn').classList.toggle('active', !mostrarDespachos);
+      if (mostrarDespachos) cargarDespachos();
+      else cargarPedidos();
+
+      // Al entrar a Pedidos, marcar como vistas las notificaciones de flejes listos que llegan aquí
+      fetch('/api/fabrica/notificaciones/marcar_leidas', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ destino: 'pedidos' })
+      }).catch(() => {});
+    }
+
+    async function cargarDespachos() {
+      const tbody = document.getElementById('tabla-despachos-body');
+      const estado = document.getElementById('despacho-filtro-estado').value;
+      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">Cargando...</td></tr>';
+      try {
+        const url = '/api/ventas/despachos' + (estado ? '?estado=' + encodeURIComponent(estado) : '');
+        const res = await fetch(url);
+        const despachos = await res.json();
+        if (!res.ok) throw new Error(despachos.error || `Error ${res.status}`);
+        if (!despachos.length) {
+          tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No hay pedidos para llevar.</td></tr>';
+          return;
+        }
+
+        tbody.innerHTML = despachos.map(p => {
+          const estadoInfo = {
+            pendiente_preparar: ['⏳ Pendiente por preparar', 'warning text-dark'],
+            preparando: ['📦 Preparando', 'info text-dark'],
+            listo: ['✅ Listo para despacho', 'success'],
+            entregado: ['🏠 Entregado', 'secondary']
+          }[p.estado_despacho] || [p.estado_despacho, 'secondary'];
+          const siguiente = {
+            pendiente_preparar: ['preparando', '📦 Preparar'],
+            preparando: ['listo', '✅ Marcar listo'],
+            listo: ['entregado', '🏠 Marcar entregado']
+          }[p.estado_despacho];
+          const accion = siguiente
+            ? `<button class="btn btn-sm btn-outline-primary" onclick="actualizarEstadoDespacho(${p.id_venta}, '${siguiente[0]}')">${siguiente[1]}</button>`
+            : '';
+          return `<tr>
+            <td class="fw-bold">#${p.numero_pedido}</td>
+            <td>${escapeHtml(p.cliente)}<br><small class="text-muted">${escapeHtml(p.telefono || '')}</small></td>
+            <td class="small">${escapeHtml(p.productos)}</td>
+            <td class="small">${escapeHtml(p.direccion || '—')}</td>
+            <td class="fw-bold text-primary">${monedaCOP(p.total_venta)}</td>
+            <td><span class="badge bg-${estadoInfo[1]}">${estadoInfo[0]}</span></td>
+            <td class="small">${escapeHtml(`${p.fecha_dia} ${p.hora}`)}</td>
+            <td>${accion}</td>
+          </tr>`;
+        }).join('');
+      } catch (err) {
+        tbody.innerHTML = `<tr><td colspan="8" class="text-danger text-center">${escapeHtml(err.message || 'No se pudo cargar la cola de despacho.')}</td></tr>`;
+      }
+    }
+
+    async function actualizarEstadoDespacho(idVenta, estadoDespacho) {
+      const res = await fetch(`/api/ventas/${idVenta}/estado_despacho`, {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ estado_despacho: estadoDespacho })
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert('Error: ' + data.error);
+        return;
+      }
+      cargarDespachos();
+    }
+
+    async function cargarPedidos() {
+      const tbody = document.getElementById('tabla-pedidos-body');
+      tbody.innerHTML = '<tr><td colspan="10" class="text-center text-muted py-3">Cargando...</td></tr>';
+      const estado = document.getElementById('pedido-filtro-estado').value;
+      try {
+        const res = await fetch('/api/pedidos' + (estado ? '?estado=' + estado : ''));
+        if (!res.ok) { tbody.innerHTML = `<tr><td colspan="10" class="text-danger text-center">Error ${res.status}</td></tr>`; return; }
+        const pedidos = await res.json();
+        tbody.innerHTML = '';
+        if (!pedidos.length) {
+          tbody.innerHTML = '<tr><td colspan="10" class="text-center text-muted py-4">No hay pedidos para mostrar.</td></tr>';
+          return;
+        }
+        pedidos.forEach(p => {
+          const info  = ESTADO_INFO[p.estado] || { label: p.estado, color: 'secondary' };
+          const fecha = (p.fecha_creacion || '').slice(0, 16);
+          tbody.innerHTML += `
+            <tr>
+              <td class="fw-bold">#${p.id}</td>
+              <td>${escapeHtml(p.nombre_cliente)}<br><small class="text-muted">${escapeHtml(p.telefono_cliente||'')}</small></td>
+              <td class="small">${escapeHtml(p.direccion_entrega||'—')}</td>
+              <td class="fw-bold text-primary">${monedaCOP(p.total_pedido)}</td>
+              <td><span class="badge bg-${info.color}">${escapeHtml(info.label)}</span></td>
+              <td class="small">${escapeHtml(p.usuario_vendedor)}</td>
+              <td class="small">${escapeHtml(p.usuario_bodega||'—')}</td>
+              <td class="small">${escapeHtml(p.nombre_motocarguero||'—')}</td>
+              <td class="small">${escapeHtml(fecha)}</td>
+              <td><button class="btn btn-sm btn-outline-dark" onclick="abrirDetallePedido(${p.id})">Ver / Gestionar</button></td>
+            </tr>`;
+        });
+        pollNotificacionesPedidos();
+      } catch(e) {
+        tbody.innerHTML = '<tr><td colspan="10" class="text-danger text-center">No se pudo conectar.</td></tr>';
+      }
+    }
+
+    // ── Nuevo pedido ─────────────────────────────────────────────────────────
+    function abrirModalNuevoPedido() {
+      itemsPedidoActual = [];
+      renderItemsPedido();
+      if (tsPedidoCliente) tsPedidoCliente.destroy();
+      tsPedidoCliente = new TomSelect('#pedido-cliente', {
+        options: clientesLista.map(c => ({ value: c.id, text: `${c.nombre} (${c.cedula_nit||'Sin doc'})` })),
+        create: false,
+        onChange: val => {
+          const cli = clientesLista.find(c => c.id == val);
+          if (cli) document.getElementById('pedido-direccion').value = cli.direccion || '';
+        }
+      });
+      if (tsPedidoProducto) tsPedidoProducto.destroy();
+      tsPedidoProducto = new TomSelect('#pedido-select-producto', {
+        options: productosLista.map(p => ({
+          value: p.id,
+          text: `${p.nombre}${p.dimensiones?' ['+p.dimensiones+']':''} — ${monedaCOP(p.precio_venta)} (Stock: ${p.stock_actual})`
+        })),
+        create: false
+      });
+      document.getElementById('pedido-observaciones').value = '';
+      new bootstrap.Modal(document.getElementById('modalNuevoPedido')).show();
+    }
+
+    function agregarItemPedido() {
+      const idProd = tsPedidoProducto ? tsPedidoProducto.getValue() : '';
+      const cantidad = parseInt(document.getElementById('pedido-cantidad').value) || 1;
+      if (!idProd) { alert('Seleccione un producto.'); return; }
+      const prod = productosLista.find(p => String(p.id) === String(idProd));
+      if (!prod) return;
+      const existe = itemsPedidoActual.find(i => i.id_producto == idProd);
+      if (existe) { existe.cantidad += cantidad; }
+      else { itemsPedidoActual.push({ id_producto: prod.id, nombre: prod.nombre, dimensiones: prod.dimensiones||'', precio: prod.precio_venta, cantidad }); }
+      renderItemsPedido();
+      if (tsPedidoProducto) tsPedidoProducto.clear();
+      document.getElementById('pedido-cantidad').value = 1;
+    }
+
+    function quitarItemPedido(idx) {
+      itemsPedidoActual.splice(idx, 1);
+      renderItemsPedido();
+    }
+
+    function renderItemsPedido() {
+      const tbody = document.getElementById('tabla-items-pedido');
+      if (!itemsPedidoActual.length) {
+        tbody.innerHTML = '<tr id="pedido-items-vacio"><td colspan="5" class="text-center text-muted">Sin productos. Agregue items arriba.</td></tr>';
+        document.getElementById('pedido-total-texto').textContent = '$ 0 COP';
+        return;
+      }
+      let total = 0;
+      tbody.innerHTML = '';
+      itemsPedidoActual.forEach((item, idx) => {
+        const sub = item.precio * item.cantidad;
+        total += sub;
+        tbody.innerHTML += `
+          <tr>
+            <td>${escapeHtml(item.nombre)}${item.dimensiones ? ' <small class="text-muted">[' + escapeHtml(item.dimensiones) + ']</small>' : ''}</td>
+            <td>${monedaCOP(item.precio)}</td>
+            <td><input type="number" class="form-control form-control-sm" style="width:80px" value="${item.cantidad}" min="1"
+                  onchange="itemsPedidoActual[${idx}].cantidad=parseInt(this.value)||1;renderItemsPedido()"></td>
+            <td>${monedaCOP(sub)}</td>
+            <td><button class="btn btn-sm btn-outline-danger" onclick="quitarItemPedido(${idx})">✕</button></td>
+          </tr>`;
+      });
+      document.getElementById('pedido-total-texto').textContent = monedaCOP(total);
+    }
+
+    async function guardarPedido() {
+      const idCliente = tsPedidoCliente ? tsPedidoCliente.getValue() : '';
+      if (!idCliente) { alert('Seleccione un cliente.'); return; }
+      if (!itemsPedidoActual.length) { alert('Agregue al menos un producto.'); return; }
+      const payload = {
+        id_cliente: parseInt(idCliente),
+        direccion_entrega: document.getElementById('pedido-direccion').value.trim(),
+        observaciones: document.getElementById('pedido-observaciones').value.trim(),
+        items: itemsPedidoActual.map(i => ({ id_producto: i.id_producto, cantidad: i.cantidad }))
+      };
+      const res = await fetch('/api/pedidos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+      const data = await res.json();
+      if (res.ok) {
+        alert(`Pedido #${data.id_pedido} creado. Total: ${monedaCOP(data.total)}`);
+        bootstrap.Modal.getInstance(document.getElementById('modalNuevoPedido')).hide();
+        cargarPedidos();
+        pollNotificacionesPedidos();
+      } else {
+        alert('Error: ' + data.error);
+      }
+    }
+
+    // ── Detalle y cambio de estado ────────────────────────────────────────────
+    async function abrirDetallePedido(id) {
+      const res = await fetch(`/api/pedidos/${id}`);
+      if (!res.ok) { alert('No se pudo cargar el pedido.'); return; }
+      const p = await res.json();
+      pedidoDetalleActual = p;
+      const info = ESTADO_INFO[p.estado] || { label: p.estado, color: 'secondary' };
+      document.getElementById('detalle-pedido-id').textContent       = '#' + p.id;
+      document.getElementById('detalle-pedido-cliente').textContent   = p.nombre_cliente;
+      document.getElementById('detalle-pedido-telefono').textContent  = p.telefono_cliente || '—';
+      document.getElementById('detalle-pedido-estado-badge').innerHTML = `<span class="badge bg-${info.color}">${info.label}</span>`;
+      document.getElementById('detalle-pedido-direccion').textContent  = p.direccion_entrega || '—';
+      document.getElementById('detalle-pedido-obs').textContent        = p.observaciones || '—';
+      document.getElementById('detalle-pedido-vendedor').textContent   = p.usuario_vendedor;
+      document.getElementById('detalle-pedido-bodega').textContent     = p.usuario_bodega || '—';
+      document.getElementById('detalle-pedido-moto').textContent       = p.nombre_motocarguero || 'Sin asignar';
+      document.getElementById('detalle-pedido-fecha').textContent      = p.fecha_creacion;
+      document.getElementById('detalle-pedido-actualizado').textContent= p.fecha_actualizacion || '—';
+      document.getElementById('detalle-pedido-total').textContent      = monedaCOP(p.total_pedido);
+
+      document.getElementById('detalle-pedido-items').innerHTML = (p.items||[]).map(i => `
+        <tr>
+          <td>${i.nombre}</td>
+          <td class="small text-muted">${i.dimensiones||'—'}</td>
+          <td>${i.cantidad}</td>
+          <td>${monedaCOP(i.precio_unitario)}</td>
+          <td>${monedaCOP(i.subtotal)}</td>
+          <td><span class="badge ${i.stock_actual<=0?'bg-danger':i.stock_actual<=5?'bg-warning text-dark':'bg-success'}">${i.stock_actual}</span></td>
+        </tr>`).join('');
+
+      const permisosRol = ((TRANSICIONES_FRONT[p.estado] || {})[ROL_ACTUAL]) || [];
+      const botonesDiv  = document.getElementById('botones-estado-pedido');
+      botonesDiv.innerHTML = '';
+      if (!permisosRol.length) {
+        botonesDiv.innerHTML = '<p class="text-muted small mb-0">Sin acciones disponibles para tu rol en este estado.</p>';
+      } else {
+        permisosRol.forEach(est => {
+          const ei = ESTADO_INFO[est] || { label: est, color: 'secondary' };
+          botonesDiv.innerHTML += `<button class="btn btn-${ei.color} fw-bold" onclick="ejecutarCambioEstado(${p.id},'${est}')">${ei.label}</button>`;
+        });
+      }
+
+      const bloqueMoto = document.getElementById('bloque-asignar-moto');
+      if (['admin','bodega'].includes(ROL_ACTUAL) && permisosRol.includes('listo')) {
+        bloqueMoto.classList.remove('d-none');
+        cargarSelectMotocargueros();
+      } else {
+        bloqueMoto.classList.add('d-none');
+      }
+      new bootstrap.Modal(document.getElementById('modalDetallePedido')).show();
+    }
+
+    async function cargarSelectMotocargueros() {
+      const sel = document.getElementById('select-motocarguero-asignar');
+      sel.innerHTML = '<option value="">Sin asignar</option>';
+      try {
+        const res  = await fetch('/api/usuarios/motocargueros');
+        const motos = await res.json();
+        motos.forEach(m => { sel.innerHTML += `<option value="${m.id}">${escapeHtml(m.nombre || '')}</option>`; });
+      } catch(e) {}
+    }
+
+    async function ejecutarCambioEstado(id, nuevoEstado) {
+      const idMoto = document.getElementById('select-motocarguero-asignar')?.value || null;
+      const payload = { estado: nuevoEstado };
+      if (idMoto) payload.id_motocarguero = parseInt(idMoto);
+      const res = await fetch(`/api/pedidos/${id}/estado`, {
+        method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if (res.ok) {
+        bootstrap.Modal.getInstance(document.getElementById('modalDetallePedido')).hide();
+        cargarPedidos();
+        pollNotificacionesPedidos();
+      } else {
+        alert('Error: ' + data.error);
+      }
     }
 
   </script>

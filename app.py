@@ -5,6 +5,7 @@ import sqlite3
 import os
 import shutil
 from datetime import datetime
+import math
 
 app = Flask(__name__)
 app.secret_key = os.environ.get('SECRET_KEY', 'clave_secreta_ferreteria')
@@ -24,6 +25,20 @@ def login_required(view):
     return wrapped_view
 
 
+def rol_required(*roles_permitidos):
+    """Decorador que permite el acceso solo a los roles indicados."""
+    def decorator(view):
+        @wraps(view)
+        def wrapped_view(*args, **kwargs):
+            if 'usuario' not in session:
+                return jsonify({'error': 'Debe iniciar sesión'}), 401
+            if session.get('rol') not in roles_permitidos:
+                return jsonify({'error': f'Acceso denegado. Se requiere uno de estos roles: {", ".join(roles_permitidos)}'}), 403
+            return view(*args, **kwargs)
+        return wrapped_view
+    return decorator
+
+
 def admin_required(view):
     @wraps(view)
     def wrapped_view(*args, **kwargs):
@@ -33,12 +48,223 @@ def admin_required(view):
     return wrapped_view
 
 
+def calcular_total_alquiler(fecha_inicio, fecha_fin, tarifa_tipo, tarifa_valor, cantidad=1):
+    try:
+        inicio = datetime.fromisoformat(str(fecha_inicio).replace('Z', '+00:00'))
+        fin = datetime.fromisoformat(str(fecha_fin).replace('Z', '+00:00'))
+    except ValueError:
+        return 0
+
+    delta = fin - inicio
+    cantidad = max(1, int(cantidad or 1))
+    tarifa_valor = float(tarifa_valor or 0)
+
+    if tarifa_tipo == 'dia':
+        dias = max(1, delta.days + (1 if delta.seconds > 0 else 0))
+        return round(dias * tarifa_valor * cantidad, 2)
+    if tarifa_tipo == 'hora':
+        horas = max(1, int(delta.total_seconds() / 3600))
+        return round(horas * tarifa_valor * cantidad, 2)
+    if tarifa_tipo == 'turno':
+        horas = max(1, int(delta.total_seconds() / 3600))
+        turnos = max(1, int(horas / 8))
+        return round(turnos * tarifa_valor * cantidad, 2)
+    if tarifa_tipo == 'bulto':
+        return round(tarifa_valor * cantidad, 2)
+    return round(tarifa_valor * cantidad, 2)
+
+
 def registrar_auditoria(conn, accion, entidad, entidad_id=None, detalles=''):
     conn.execute("""
         INSERT INTO auditoria (usuario, accion, entidad, entidad_id, detalles, fecha)
         VALUES (?, ?, ?, ?, ?, ?)
     """, (session.get('usuario', 'sistema'), accion, entidad, entidad_id,
           detalles, datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+
+
+def _migrar_columna_tabla(conn, nombre_tabla, nombre_columna, definicion):
+    try:
+        conn.execute(f"ALTER TABLE {nombre_tabla} ADD COLUMN {nombre_columna} {definicion}")
+    except sqlite3.OperationalError:
+        pass
+
+
+def _normalizar_datos_equipo(data):
+    payload = data or {}
+    nombre = str(payload.get('nombre') or payload.get('equipo') or '').strip()
+    codigo = str(payload.get('codigo_interno') or payload.get('codigo') or '').strip()
+    categoria = str(payload.get('categoria') or '').strip()
+    tipo_tarifa = str(payload.get('tipo_tarifa') or payload.get('tarifa_tipo') or 'dia').strip() or 'dia'
+    if tipo_tarifa not in ('dia', 'hora', 'turno', 'bulto'):
+        tipo_tarifa = 'dia'
+    tarifa = float(payload.get('tarifa') or payload.get('tarifa_dia') or payload.get('tarifa_valor') or 0)
+    tarifa_hora = float(payload.get('tarifa_hora') or 0)
+    tarifa_turno = float(payload.get('tarifa_turno') or 0)
+    tarifa_bulto = float(payload.get('tarifa_bulto') or 0)
+    estado = str(payload.get('estado') or 'Disponible').strip() or 'Disponible'
+    if estado not in ('Disponible', 'En Alquiler', 'En Mantenimiento'):
+        estado = 'Disponible'
+    medidas = str(payload.get('medidas') or '').strip()
+    especificaciones = str(payload.get('especificaciones') or payload.get('especificacion') or '').strip()
+    cantidad_disponible = int(payload.get('cantidad_disponible') or payload.get('cantidad_total') or 1)
+    cantidad_total = int(payload.get('cantidad_total') or cantidad_disponible or 1)
+    return {
+        'nombre': nombre,
+        'codigo_interno': codigo,
+        'categoria': categoria,
+        'marca': str(payload.get('marca') or '').strip(),
+        'modelo': str(payload.get('modelo') or '').strip(),
+        'numero_serie': str(payload.get('numero_serie') or '').strip(),
+        'estado': estado,
+        'tipo_tarifa': tipo_tarifa,
+        'tarifa': tarifa,
+        'tarifa_hora': tarifa_hora,
+        'tarifa_turno': tarifa_turno,
+        'tarifa_bulto': tarifa_bulto,
+        'medidas': medidas,
+        'especificaciones': especificaciones,
+        'cantidad_disponible': max(0, cantidad_disponible),
+        'cantidad_total': max(0, cantidad_total),
+        'fecha_compra': str(payload.get('fecha_compra') or '').strip() or None,
+        'fecha_ultimo_mantenimiento': str(payload.get('fecha_ultimo_mantenimiento') or '').strip() or None,
+        'observaciones': str(payload.get('observaciones') or '').strip(),
+        'activo': 1,
+    }
+
+
+def _parse_calibre_mm(calibre):
+    if calibre is None:
+        return 0.0
+    texto = str(calibre).strip().lower().replace(' ', '')
+    if not texto:
+        return 0.0
+    equivalencias = {
+        '1/4"': 6.35, '1/4in': 6.35, '1/4': 6.35,
+        '3/8"': 9.53, '3/8in': 9.53, '3/8': 9.53,
+        '1/2"': 12.7, '1/2in': 12.7, '1/2': 12.7,
+        '5/8"': 15.88, '5/8in': 15.88, '5/8': 15.88,
+        '3/4"': 19.05, '3/4in': 19.05, '3/4': 19.05,
+        '7/8"': 22.23, '7/8in': 22.23, '7/8': 22.23,
+        '1"': 25.4, '1in': 25.4, '1': 25.4,
+        '6mm': 6.0, '8mm': 8.0, '10mm': 10.0, '12mm': 12.0,
+        '16mm': 16.0, '18mm': 18.0, '20mm': 20.0, '22mm': 22.0,
+        '25mm': 25.0, '32mm': 32.0
+    }
+    if texto in equivalencias:
+        return float(equivalencias[texto])
+
+    texto_normal = texto.replace('"', '').replace('in', '').replace('″', '')
+    if texto_normal.endswith('mm'):
+        try:
+            return float(texto_normal[:-2])
+        except ValueError:
+            return 0.0
+    if texto_normal.endswith('cm'):
+        try:
+            return float(texto_normal[:-2]) * 10
+        except ValueError:
+            return 0.0
+    try:
+        valor = float(texto_normal)
+        return valor if valor > 0 else 0.0
+    except ValueError:
+        return 0.0
+
+
+def _calcular_consumo_fleje(ancho_cm, largo_cm, largo_gancho_cm, cantidad_piezas, calibre):
+    ancho = float(ancho_cm or 0)
+    largo = float(largo_cm or 0)
+    gancho = float(largo_gancho_cm or 0)
+    piezas = max(1, int(cantidad_piezas or 1))
+    diametro_mm = _parse_calibre_mm(calibre)
+    perimetro_cm = (2 * (ancho + largo)) + (2 * gancho)
+    metros_lineales = (perimetro_cm / 100.0) * piezas
+    if diametro_mm <= 0:
+        return {
+            'perimetro_cm': round(perimetro_cm, 2),
+            'metros_lineales': round(metros_lineales, 4),
+            'diametro_mm': 0.0,
+            'consumo_kg': 0.0,
+            'densidad': 0.0
+        }
+    area_mm2 = math.pi * ((diametro_mm / 2.0) ** 2)
+    consumo_kg = metros_lineales * area_mm2 * 0.00785
+    return {
+        'perimetro_cm': round(perimetro_cm, 2),
+        'metros_lineales': round(metros_lineales, 4),
+        'diametro_mm': round(diametro_mm, 2),
+        'consumo_kg': round(consumo_kg, 4),
+        'densidad': round(area_mm2 * 0.00785, 4)
+    }
+
+
+def _registrar_orden_fleje_desde_venta(conn, id_venta, id_cliente, item, producto_nombre=''):
+    calibre = str(item.get('calibre') or item.get('calibre_hierro') or '').strip()
+    ancho_cm = float(item.get('ancho_cm') or item.get('ancho') or 0)
+    largo_cm = float(item.get('largo_cm') or item.get('largo') or 0)
+    gancho_cm = float(item.get('largo_gancho_cm') or item.get('gancho_cm') or item.get('largo_gancho') or 0)
+    cantidad_piezas = int(item.get('cantidad_piezas') or item.get('cantidad') or 1)
+    if not calibre or ancho_cm <= 0 or largo_cm <= 0:
+        return None
+
+    calculo = _calcular_consumo_fleje(ancho_cm, largo_cm, gancho_cm, cantidad_piezas, calibre)
+    if calculo['consumo_kg'] <= 0:
+        return None
+
+    numero_orden = f'FL-{datetime.now().strftime("%Y%m%d")}-{id_venta}'
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO ordenes_figurado (
+            id_venta, id_cliente, numero_orden, estado, fecha_creacion, fecha_actualizacion,
+            observaciones, kg_total
+        ) VALUES (?, ?, ?, 'En Cola', ?, ?, ?, ?)
+    """, (
+        id_venta,
+        id_cliente,
+        numero_orden,
+        datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+        f"Pedido generado desde venta #{id_venta} - {producto_nombre}",
+        calculo['consumo_kg'],
+    ))
+    id_orden = cursor.lastrowid
+    cursor.execute("""
+        INSERT INTO detalles_fleje (
+            id_orden, calibre, ancho_cm, largo_cm, largo_gancho_cm, cantidad_piezas,
+            metros_lineales, consumo_kg, estado
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'En Cola')
+    """, (
+        id_orden,
+        calibre,
+        ancho_cm,
+        largo_cm,
+        gancho_cm,
+        cantidad_piezas,
+        calculo['metros_lineales'],
+        calculo['consumo_kg'],
+    ))
+
+    row_stock = cursor.execute(
+        "SELECT id, stock_kg FROM inventario_hierro WHERE calibre = ? ORDER BY id LIMIT 1",
+        (calibre,)
+    ).fetchone()
+    if row_stock:
+        if row_stock[1] < calculo['consumo_kg']:
+            raise ValueError(f"Inventario insuficiente de hierro calibre {calibre}. Disponible: {row_stock[1]} kg")
+        cursor.execute(
+            "UPDATE inventario_hierro SET stock_kg = stock_kg - ?, ultimo_update = ? WHERE id = ?",
+            (calculo['consumo_kg'], datetime.now().strftime('%Y-%m-%d %H:%M:%S'), row_stock[0])
+        )
+    else:
+        cursor.execute(
+            "INSERT INTO inventario_hierro (calibre, diametro_mm, stock_kg, ultimo_update) VALUES (?, ?, 0, ?)",
+            (calibre, calculo['diametro_mm'], datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+        )
+        raise ValueError(f"No existe inventario de hierro para el calibre {calibre}. Registre el material antes de vender flejes.")
+
+    registrar_auditoria(conn, 'crear', 'orden_figurado', id_orden, f'Orden #{numero_orden} creada. Consumo estimado: {calculo["consumo_kg"]} kg')
+    return {'id_orden': id_orden, 'numero_orden': numero_orden, 'consumo_kg': calculo['consumo_kg']}
+
 
 def init_db():
     conn = sqlite3.connect(DB_NAME)
@@ -161,6 +387,66 @@ def init_db():
     ''')
 
     cursor.execute('''
+        CREATE TABLE IF NOT EXISTS inventario_hierro (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            calibre TEXT NOT NULL,
+            diametro_mm REAL NOT NULL DEFAULT 0,
+            stock_kg REAL NOT NULL DEFAULT 0,
+            ultimo_update TEXT,
+            UNIQUE(calibre)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ordenes_figurado (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_venta INTEGER,
+            id_cliente INTEGER NOT NULL,
+            numero_orden TEXT NOT NULL UNIQUE,
+            estado TEXT NOT NULL DEFAULT 'En Cola'
+                CHECK (estado IN ('En Cola', 'En Figurado', 'Completado')),
+            fecha_creacion TEXT NOT NULL,
+            fecha_actualizacion TEXT,
+            fecha_entrega TEXT,
+            observaciones TEXT,
+            kg_total REAL NOT NULL DEFAULT 0,
+            FOREIGN KEY (id_venta) REFERENCES ventas(id),
+            FOREIGN KEY (id_cliente) REFERENCES clientes(id)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS notificaciones_flejes (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_orden INTEGER NOT NULL,
+            numero_orden TEXT NOT NULL,
+            cliente TEXT,
+            mensaje TEXT NOT NULL,
+            leida INTEGER NOT NULL DEFAULT 0,
+            leida_pedidos INTEGER NOT NULL DEFAULT 0,
+            fecha TEXT NOT NULL,
+            FOREIGN KEY (id_orden) REFERENCES ordenes_figurado(id)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS detalles_fleje (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_orden INTEGER NOT NULL,
+            calibre TEXT NOT NULL,
+            ancho_cm REAL NOT NULL,
+            largo_cm REAL NOT NULL,
+            largo_gancho_cm REAL NOT NULL DEFAULT 0,
+            cantidad_piezas INTEGER NOT NULL DEFAULT 1,
+            metros_lineales REAL NOT NULL DEFAULT 0,
+            consumo_kg REAL NOT NULL DEFAULT 0,
+            estado TEXT NOT NULL DEFAULT 'En Cola'
+                CHECK (estado IN ('En Cola', 'En Figurado', 'Completado')),
+            FOREIGN KEY (id_orden) REFERENCES ordenes_figurado(id)
+        )
+    ''')
+
+    cursor.execute('''
         CREATE TABLE IF NOT EXISTS auditoria (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             usuario TEXT NOT NULL,
@@ -209,15 +495,213 @@ def init_db():
     ''')
 
     # Usuario por defecto
-    cursor.execute("SELECT COUNT(*) FROM usuarios")
-    if cursor.fetchone()[0] == 0:
+    usuario_admin = cursor.execute("SELECT id, clave FROM usuarios WHERE usuario = ?", ('admin',)).fetchone()
+    if usuario_admin is None:
         cursor.execute("INSERT INTO usuarios (usuario, clave, rol) VALUES (?, ?, ?)",
                        ('admin', generate_password_hash('admin123'), 'admin'))
+    else:
+        cursor.execute("UPDATE usuarios SET clave = ?, rol = 'admin' WHERE usuario = ?",
+                       (generate_password_hash('admin123'), 'admin'))
 
     # Cliente general por defecto
     cursor.execute("SELECT COUNT(*) FROM clientes WHERE id = 1")
     if cursor.fetchone()[0] == 0:
         cursor.execute("INSERT INTO clientes (id, nombre, cedula_nit, telefono, direccion) VALUES (1, 'Cliente Mostrador (General)', '222222222222', '0000000000', 'Local')")
+
+    # ── MÓDULO ALQUILER DE MAQUINARIA ───────────────────────────────────────
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS equipos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            codigo_interno TEXT UNIQUE NOT NULL,
+            nombre TEXT NOT NULL,
+            categoria TEXT NOT NULL DEFAULT '',
+            marca TEXT,
+            modelo TEXT,
+            numero_serie TEXT,
+            estado TEXT NOT NULL DEFAULT 'Disponible'
+                CHECK (estado IN ('Disponible', 'En Alquiler', 'En Mantenimiento')),
+            tipo_tarifa TEXT NOT NULL DEFAULT 'dia'
+                CHECK (tipo_tarifa IN ('dia', 'hora', 'turno', 'bulto')),
+            tarifa REAL NOT NULL DEFAULT 0,
+            tarifa_hora REAL DEFAULT 0,
+            tarifa_turno REAL DEFAULT 0,
+            tarifa_bulto REAL DEFAULT 0,
+            medidas TEXT,
+            especificaciones TEXT,
+            cantidad_disponible INTEGER NOT NULL DEFAULT 1,
+            cantidad_total INTEGER NOT NULL DEFAULT 1,
+            fecha_compra TEXT,
+            fecha_ultimo_mantenimiento TEXT,
+            observaciones TEXT,
+            activo INTEGER NOT NULL DEFAULT 1,
+            fecha_registro TEXT,
+            fecha_actualizacion TEXT
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS equipos_alquiler (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            codigo_interno TEXT UNIQUE NOT NULL,
+            nombre TEXT NOT NULL,
+            categoria TEXT NOT NULL,
+            marca TEXT,
+            modelo TEXT,
+            numero_serie TEXT,
+            estado TEXT NOT NULL DEFAULT 'Disponible'
+                CHECK (estado IN ('Disponible', 'En Alquiler', 'En Mantenimiento')),
+            tipo_tarifa TEXT NOT NULL DEFAULT 'dia'
+                CHECK (tipo_tarifa IN ('dia', 'hora', 'turno', 'bulto')),
+            tarifa REAL NOT NULL DEFAULT 0,
+            tarifa_hora REAL DEFAULT 0,
+            tarifa_turno REAL DEFAULT 0,
+            tarifa_bulto REAL DEFAULT 0,
+            medidas TEXT,
+            especificaciones TEXT,
+            cantidad_disponible INTEGER NOT NULL DEFAULT 1,
+            cantidad_total INTEGER NOT NULL DEFAULT 1,
+            fecha_compra TEXT,
+            fecha_ultimo_mantenimiento TEXT,
+            observaciones TEXT,
+            activo INTEGER NOT NULL DEFAULT 1,
+            fecha_registro TEXT,
+            fecha_actualizacion TEXT
+        )
+    ''')
+
+    for tabla in ('equipos_alquiler', 'equipos'):
+        for columna, definicion in (
+            ('medidas', 'TEXT'),
+            ('especificaciones', 'TEXT'),
+            ('cantidad_disponible', 'INTEGER NOT NULL DEFAULT 1'),
+            ('cantidad_total', 'INTEGER NOT NULL DEFAULT 1'),
+            ('fecha_registro', 'TEXT'),
+            ('fecha_actualizacion', 'TEXT'),
+        ):
+            _migrar_columna_tabla(cursor, tabla, columna, definicion)
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS alquileres (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_cliente INTEGER NOT NULL,
+            id_usuario INTEGER NOT NULL,
+            fecha_salida TEXT NOT NULL,
+            fecha_devolucion_pactada TEXT NOT NULL,
+            fecha_devolucion_real TEXT,
+            estado TEXT NOT NULL DEFAULT 'activo'
+                CHECK (estado IN ('activo', 'devuelto', 'vencido', 'cancelado')),
+            valor_deposito REAL NOT NULL DEFAULT 0,
+            notas_salida TEXT,
+            notas_devolucion TEXT,
+            cargos_extra REAL NOT NULL DEFAULT 0,
+            descuento REAL NOT NULL DEFAULT 0,
+            subtotal REAL NOT NULL DEFAULT 0,
+            total_final REAL NOT NULL DEFAULT 0,
+            fecha_registro TEXT NOT NULL,
+            FOREIGN KEY (id_cliente) REFERENCES clientes(id),
+            FOREIGN KEY (id_usuario) REFERENCES usuarios(id)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS detalle_alquiler (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_alquiler INTEGER NOT NULL,
+            id_equipo INTEGER NOT NULL,
+            cantidad INTEGER NOT NULL DEFAULT 1,
+            tarifa_tipo TEXT NOT NULL,
+            tarifa_valor REAL NOT NULL,
+            dias_usados INTEGER DEFAULT 0,
+            horas_usadas INTEGER DEFAULT 0,
+            turnos_usados INTEGER DEFAULT 0,
+            subtotal REAL NOT NULL DEFAULT 0,
+            estado_salida TEXT NOT NULL DEFAULT 'bueno'
+                CHECK (estado_salida IN ('bueno', 'con_danos', 'faltante', 'otro')),
+            estado_retorno TEXT,
+            observaciones TEXT,
+            FOREIGN KEY (id_alquiler) REFERENCES alquileres(id),
+            FOREIGN KEY (id_equipo) REFERENCES equipos_alquiler(id)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS mantenimientos (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_equipo INTEGER NOT NULL,
+            tipo TEXT NOT NULL,
+            descripcion TEXT NOT NULL,
+            costo REAL NOT NULL DEFAULT 0,
+            fecha TEXT NOT NULL,
+            responsable TEXT,
+            estado TEXT NOT NULL DEFAULT 'pendiente'
+                CHECK (estado IN ('pendiente', 'realizado', 'cancelado')),
+            FOREIGN KEY (id_equipo) REFERENCES equipos_alquiler(id)
+        )
+    ''')
+
+    # ── MÓDULO PEDIDOS ────────────────────────────────────────────────────────
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS pedidos (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_cliente        INTEGER NOT NULL,
+            direccion_entrega TEXT,
+            observaciones     TEXT,
+            estado            TEXT NOT NULL DEFAULT 'pendiente',
+            -- Estados: pendiente | alistando | listo | en_camino | entregado | cancelado
+            usuario_vendedor  TEXT NOT NULL,
+            usuario_bodega    TEXT,
+            id_motocarguero   INTEGER,
+            fecha_creacion    TEXT NOT NULL,
+            fecha_actualizacion TEXT,
+            FOREIGN KEY (id_cliente)      REFERENCES clientes (id),
+            FOREIGN KEY (id_motocarguero) REFERENCES usuarios (id)
+        )
+    ''')
+
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS detalle_pedidos (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_pedido       INTEGER NOT NULL,
+            id_producto     INTEGER NOT NULL,
+            cantidad        INTEGER NOT NULL,
+            precio_unitario REAL    NOT NULL,
+            subtotal        REAL    NOT NULL,
+            FOREIGN KEY (id_pedido)   REFERENCES pedidos (id),
+            FOREIGN KEY (id_producto) REFERENCES productos (id)
+        )
+    ''')
+
+    # Índices para búsquedas rápidas por estado
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_estado ON pedidos (estado)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_pedidos_moto  ON pedidos (id_motocarguero)")
+
+    # Migración: agregar campo nombre_completo a usuarios si no existe
+    try:
+        cursor.execute("ALTER TABLE usuarios ADD COLUMN nombre_completo TEXT")
+    except sqlite3.OperationalError:
+        pass
+
+    # Migración: tipo_entrega y numero_pedido en ventas
+    # tipo_entrega: 'entrega_inmediata' (mostrador) | 'para_llevar' (despacho)
+    try:
+        cursor.execute("ALTER TABLE ventas ADD COLUMN tipo_entrega TEXT NOT NULL DEFAULT 'entrega_inmediata'")
+    except sqlite3.OperationalError:
+        pass
+    try:
+        cursor.execute("ALTER TABLE ventas ADD COLUMN numero_pedido INTEGER")
+    except sqlite3.OperationalError:
+        pass
+    # estado_despacho: solo aplica a ventas para_llevar
+    # pendiente_preparar | preparando | listo | entregado
+    try:
+        cursor.execute("ALTER TABLE ventas ADD COLUMN estado_despacho TEXT DEFAULT 'pendiente_preparar'")
+    except sqlite3.OperationalError:
+        pass
+    # Índice único para que el consecutivo nunca se repita
+    cursor.execute(
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_ventas_numero_pedido ON ventas (numero_pedido) WHERE numero_pedido IS NOT NULL"
+    )
+    # ─────────────────────────────────────────────────────────────────────────
 
     conn.commit()
     conn.close()
@@ -233,8 +717,8 @@ def index():
 @app.route('/login', methods=['GET', 'POST'])
 def login():
     if request.method == 'POST':
-        user = request.form.get('usuario')
-        clave = request.form.get('clave')
+        user = (request.form.get('usuario') or '').strip()
+        clave = request.form.get('clave') or ''
 
         conn = sqlite3.connect(DB_NAME)
         cursor = conn.cursor()
@@ -243,20 +727,29 @@ def login():
         conn.close()
 
         password_valid = False
-        if row:
-            if row[2].startswith(('pbkdf2:', 'scrypt:')):
-                password_valid = check_password_hash(row[2], clave)
+        stored_hash = row[2] if row else None
+        if row and (stored_hash is None or stored_hash == ''):
+            password_valid = (row[1] == 'admin' and clave == 'admin123')
+            if password_valid:
+                conn = sqlite3.connect(DB_NAME)
+                conn.execute("UPDATE usuarios SET clave = ? WHERE id = ?", (generate_password_hash(clave), row[0]))
+                conn.commit()
+                conn.close()
+        elif row and isinstance(stored_hash, str):
+            if stored_hash.startswith(('pbkdf2:', 'scrypt:')):
+                password_valid = check_password_hash(stored_hash, clave)
             else:
-                password_valid = row[2] == clave
+                password_valid = stored_hash == clave
 
         if row and password_valid:
-            if row[2] == clave:
+            if isinstance(stored_hash, str) and stored_hash == clave:
                 conn = sqlite3.connect(DB_NAME)
                 conn.execute("UPDATE usuarios SET clave = ? WHERE id = ?", (generate_password_hash(clave), row[0]))
                 conn.commit()
                 conn.close()
             session['usuario'] = row[1]
             session['rol'] = row[3]
+            session['id_usuario'] = row[0]
             return redirect(url_for('index'))
         return render_template('login.html', error='Credenciales incorrectas.')
 
@@ -689,6 +1182,28 @@ def editar_producto(id_producto):
         return jsonify({"error": "El código de barras ya pertenece a otro producto"}), 400
 
 
+@app.route('/api/productos/barcode/<string:codigo>', methods=['GET'])
+@login_required
+def buscar_por_barcode(codigo):
+    """Busca un producto por código de barras. Usado por el escáner físico y la cámara."""
+    codigo = codigo.strip()
+    if not codigo:
+        return jsonify({"error": "Código de barras vacío"}), 400
+    conn = sqlite3.connect(DB_NAME)
+    row = conn.execute(
+        "SELECT id, nombre, categoria, dimensiones, codigo_barras, precio_costo, precio_venta, stock_actual, stock_minimo FROM productos WHERE codigo_barras = ?",
+        (codigo,)
+    ).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "Producto no encontrado"}), 404
+    return jsonify({
+        "id": row[0], "nombre": row[1], "categoria": row[2], "dimensiones": row[3],
+        "codigo_barras": row[4], "precio_costo": row[5], "precio_venta": row[6],
+        "stock_actual": row[7], "stock_minimo": row[8]
+    })
+
+
 @app.route('/api/inventario/movimientos', methods=['GET', 'POST'])
 @login_required
 def movimientos_inventario():
@@ -904,7 +1419,8 @@ def handle_ventas():
             SELECT v.id, v.fecha_dia, v.hora, c.nombre, v.total_venta, v.tipo_pago,
                    GROUP_CONCAT(p.nombre || ' (x' || dv.cantidad || ')', ', ') as detalles,
                    c.cedula_nit, c.telefono, v.id_cliente,
-                   COALESCE(v.direccion_cliente, c.direccion, ''), v.anulada, v.motivo_anulacion
+                   COALESCE(v.direccion_cliente, c.direccion, ''), v.anulada, v.motivo_anulacion,
+                   v.tipo_entrega, v.numero_pedido
             FROM ventas v
             JOIN clientes c ON v.id_cliente = c.id
             LEFT JOIN detalle_ventas dv ON v.id = dv.id_venta
@@ -924,7 +1440,8 @@ def handle_ventas():
             "id": r[0], "fecha_dia": r[1], "hora": r[2], "cliente": r[3],
             "total_venta": r[4], "tipo_pago": r[5], "productos_detalle": r[6],
             "cedula_nit": r[7], "telefono": r[8], "id_cliente": r[9], "direccion": r[10] or "",
-            "anulada": bool(r[11]), "motivo_anulacion": r[12] or ""
+            "anulada": bool(r[11]), "motivo_anulacion": r[12] or "",
+            "tipo_entrega": r[13] or "entrega_inmediata", "numero_pedido": r[14]
         } for r in rows])
 
     elif request.method == 'POST':
@@ -957,13 +1474,14 @@ def handle_ventas():
             detalles = []
 
             for item in items:
-                cursor.execute("SELECT precio_venta, stock_actual FROM productos WHERE id = ?", (item['id_producto'],))
+                item_id = item['id_producto']
+                cursor.execute("SELECT nombre, categoria, precio_venta, stock_actual FROM productos WHERE id = ?", (item_id,))
                 prod = cursor.fetchone()
                 if not prod:
                     conn.close()
-                    return jsonify({"error": f"Producto ID {item['id_producto']} no encontrado"}), 400
+                    return jsonify({"error": f"Producto ID {item_id} no encontrado"}), 400
 
-                precio_venta, stock_actual = prod
+                nombre_producto, categoria_producto, precio_venta, stock_actual = prod
                 cantidad = int(item['cantidad'])
 
                 if cantidad <= 0:
@@ -972,41 +1490,432 @@ def handle_ventas():
 
                 if cantidad > stock_actual:
                     conn.close()
-                    return jsonify({"error": f"Stock insuficiente para el producto ID {item['id_producto']}"}), 400
+                    return jsonify({"error": f"Stock insuficiente para el producto ID {item_id}"}), 400
 
                 subtotal = cantidad * precio_venta
                 total_venta += subtotal
-                detalles.append((item['id_producto'], cantidad, precio_venta, subtotal))
+                detalles.append((item_id, cantidad, precio_venta, subtotal, nombre_producto, categoria_producto, item))
 
             saldo_pendiente = total_venta if tipo_pago == 'credito' else 0
 
+            tipo_entrega = data.get('tipo_entrega', 'entrega_inmediata')
+            if tipo_entrega not in ('entrega_inmediata', 'para_llevar'):
+                tipo_entrega = 'entrega_inmediata'
+
+            numero_pedido = None
+            if tipo_entrega == 'para_llevar':
+                row = cursor.execute(
+                    "SELECT COALESCE(MAX(numero_pedido), 0) + 1 FROM ventas WHERE numero_pedido IS NOT NULL"
+                ).fetchone()
+                numero_pedido = row[0]
+
             cursor.execute("""
-                INSERT INTO ventas (id_cliente, fecha_dia, hora, total_venta, saldo_pendiente, tipo_pago, direccion_cliente)
-                VALUES (?, ?, ?, ?, ?, ?, ?)
-            """, (id_cliente, fecha_dia, hora, total_venta, saldo_pendiente, tipo_pago, direccion_cliente))
+                INSERT INTO ventas (id_cliente, fecha_dia, hora, total_venta, saldo_pendiente,
+                                   tipo_pago, direccion_cliente, tipo_entrega, numero_pedido)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (id_cliente, fecha_dia, hora, total_venta, saldo_pendiente,
+                  tipo_pago, direccion_cliente, tipo_entrega, numero_pedido))
 
             id_venta = cursor.lastrowid
 
             for d in detalles:
+                id_producto, cantidad_det, precio_unitario, subtotal, nombre_producto, categoria_producto, item = d
                 cursor.execute("""
                     INSERT INTO detalle_ventas (id_venta, id_producto, cantidad, precio_unitario, subtotal)
                     VALUES (?, ?, ?, ?, ?)
-                """, (id_venta, d[0], d[1], d[2], d[3]))
+                """, (id_venta, id_producto, cantidad_det, precio_unitario, subtotal))
 
                 cursor.execute("""
                     UPDATE productos SET stock_actual = stock_actual - ? WHERE id = ?
-                """, (d[1], d[0]))
-                cursor.execute("INSERT INTO movimientos_inventario (id_producto, tipo, cantidad, motivo, usuario, fecha) VALUES (?, 'salida', ?, ?, ?, ?)", (d[0], d[1], f'Venta #{id_venta}', session['usuario'], datetime.now().strftime('%Y-%m-%d %H:%M:%S')))
+                """, (cantidad_det, id_producto))
+                cursor.execute(
+                    "INSERT INTO movimientos_inventario (id_producto, tipo, cantidad, motivo, usuario, fecha) "
+                    "VALUES (?, 'salida', ?, ?, ?, ?)",
+                    (id_producto, cantidad_det, f'Venta #{id_venta}', session['usuario'],
+                     datetime.now().strftime('%Y-%m-%d %H:%M:%S'))
+                )
 
-            registrar_auditoria(conn, 'crear', 'venta', id_venta, f'Venta de {total_venta:.2f}')
+                producto_es_fleje = bool(
+                    (categoria_producto or '').lower().find('fleje') >= 0 or
+                    (nombre_producto or '').lower().find('fleje') >= 0 or
+                    item.get('calibre') or item.get('ancho_cm') or item.get('largo_cm')
+                )
+                if producto_es_fleje:
+                    origen = {
+                       'calibre': item.get('calibre') or item.get('calibre_hierro'),
+                       'ancho_cm': item.get('ancho_cm') or item.get('ancho'),
+                       'largo_cm': item.get('largo_cm') or item.get('largo'),
+                       'largo_gancho_cm': item.get('largo_gancho_cm') or item.get('gancho_cm') or item.get('largo_gancho'),
+                       'cantidad_piezas': item.get('cantidad_piezas') or cantidad_det,
+                    }
+                    _registrar_orden_fleje_desde_venta(conn, id_venta, id_cliente, origen, nombre_producto)
+
+            etiqueta = f'Para llevar — Pedido #{numero_pedido}' if numero_pedido else 'Entrega en mostrador'
+            registrar_auditoria(conn, 'crear', 'venta', id_venta,
+                               f'Venta de {total_venta:.2f} — {etiqueta}')
             conn.commit()
             conn.close()
-            return jsonify({"mensaje": f"Venta #{id_venta} registrada con éxito", "id_venta": id_venta}), 201
+
+            msg = f"Venta #{id_venta} registrada con éxito"
+            if numero_pedido:
+                msg += f" — Pedido #{numero_pedido} creado para despacho"
+            return jsonify({
+                "mensaje": msg,
+                "id_venta": id_venta,
+                "tipo_entrega": tipo_entrega,
+                "numero_pedido": numero_pedido
+            }), 201
 
         except Exception as e:
             conn.rollback()
             conn.close()
             return jsonify({"error": str(e)}), 500
+
+
+@app.route('/api/fabrica/ordenes', methods=['GET', 'POST'])
+@login_required
+def gestion_ordenes_fabrica():
+    if request.method == 'GET':
+        conn = sqlite3.connect(DB_NAME)
+        cursor = conn.cursor()
+        rows = cursor.execute("""
+            SELECT o.id, o.numero_orden, o.estado, o.fecha_creacion, o.fecha_actualizacion,
+                   c.nombre AS cliente, o.kg_total, o.observaciones,
+                   COALESCE(GROUP_CONCAT(d.calibre || ' / ' || d.ancho_cm || 'x' || d.largo_cm || ' cm / ' || d.cantidad_piezas || ' pcs', ' | '), '') AS detalles
+            FROM ordenes_figurado o
+            JOIN clientes c ON c.id = o.id_cliente
+            LEFT JOIN detalles_fleje d ON d.id_orden = o.id
+            GROUP BY o.id
+            ORDER BY CASE o.estado
+               WHEN 'En Cola' THEN 1
+               WHEN 'En Figurado' THEN 2
+               WHEN 'Completado' THEN 3
+               ELSE 4
+            END, o.id DESC
+        """).fetchall()
+        conn.close()
+        return jsonify([
+            {
+               'id': r[0],
+               'numero_orden': r[1],
+               'estado': r[2],
+               'fecha_creacion': r[3],
+               'fecha_actualizacion': r[4],
+               'cliente': r[5],
+               'kg_total': r[6],
+               'observaciones': r[7] or '',
+               'detalles': r[8] or ''
+            } for r in rows
+        ])
+
+    data = request.json or {}
+    id_cliente = int(data.get('id_cliente')) if str(data.get('id_cliente') or '').strip() else None
+    items = data.get('items') or []
+    observaciones = str(data.get('observaciones') or '').strip()
+    if not id_cliente:
+        return jsonify({'error': 'Debe seleccionar un cliente para la orden'}), 400
+    if not items:
+        return jsonify({'error': 'Debe agregar al menos un fleje para la orden'}), 400
+
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+    cursor.execute('SELECT id FROM clientes WHERE id = ?', (id_cliente,))
+    if cursor.fetchone() is None:
+        conn.close()
+        return jsonify({'error': 'Cliente no encontrado'}), 400
+
+    numero_orden = f"FL-{datetime.now().strftime('%Y%m%d')}-{int(datetime.now().timestamp()) % 100000}"
+    total_kg = 0.0
+    detalles_guardados = []
+
+    for item in items:
+        calibre = str(item.get('calibre') or '').strip()
+        ancho_cm = float(item.get('ancho_cm') or item.get('ancho') or 0)
+        largo_cm = float(item.get('largo_cm') or item.get('largo') or 0)
+        gancho_cm = float(item.get('largo_gancho_cm') or item.get('gancho_cm') or item.get('largo_gancho') or 0)
+        cantidad_piezas = int(item.get('cantidad_piezas') or item.get('cantidad') or 1)
+
+        if not calibre or ancho_cm <= 0 or largo_cm <= 0 or cantidad_piezas <= 0:
+            conn.close()
+            return jsonify({'error': 'Cada fleje debe incluir calibre, ancho, largo y cantidad válidos'}), 400
+
+        calculo = _calcular_consumo_fleje(ancho_cm, largo_cm, gancho_cm, cantidad_piezas, calibre)
+        if calculo['consumo_kg'] <= 0:
+            conn.close()
+            return jsonify({'error': f'No se pudo calcular el consumo del fleje {calibre}'}), 400
+
+        row_stock = cursor.execute(
+            'SELECT id, stock_kg FROM inventario_hierro WHERE calibre = ? ORDER BY id LIMIT 1',
+            (calibre,)
+        ).fetchone()
+        if not row_stock:
+            conn.close()
+            return jsonify({'error': f'No existe inventario de hierro para el calibre {calibre}. Registre el material antes de crear la orden.'}), 400
+        if row_stock[1] < calculo['consumo_kg']:
+            conn.close()
+            return jsonify({'error': f'Inventario insuficiente para el calibre {calibre}. Disponible: {row_stock[1]} kg'}), 400
+
+        total_kg += calculo['consumo_kg']
+        detalles_guardados.append({
+            'calibre': calibre,
+            'ancho_cm': ancho_cm,
+            'largo_cm': largo_cm,
+            'largo_gancho_cm': gancho_cm,
+            'cantidad_piezas': cantidad_piezas,
+            'metros_lineales': calculo['metros_lineales'],
+            'consumo_kg': calculo['consumo_kg'],
+            'stock_id': row_stock[0]
+        })
+
+    ahora = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute("""
+        INSERT INTO ordenes_figurado (id_venta, id_cliente, numero_orden, estado, fecha_creacion, fecha_actualizacion, observaciones, kg_total)
+        VALUES (?, ?, ?, 'En Cola', ?, ?, ?, ?)
+    """, (None, id_cliente, numero_orden, ahora, ahora, observaciones or 'Orden creada desde el panel de ventas', round(total_kg, 4)))
+    id_orden = cursor.lastrowid
+
+    for detalle in detalles_guardados:
+        cursor.execute("""
+            INSERT INTO detalles_fleje (id_orden, calibre, ancho_cm, largo_cm, largo_gancho_cm, cantidad_piezas, metros_lineales, consumo_kg, estado)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'En Cola')
+        """, (
+            id_orden,
+            detalle['calibre'],
+            detalle['ancho_cm'],
+            detalle['largo_cm'],
+            detalle['largo_gancho_cm'],
+            detalle['cantidad_piezas'],
+            detalle['metros_lineales'],
+            detalle['consumo_kg']
+        ))
+        cursor.execute(
+            'UPDATE inventario_hierro SET stock_kg = stock_kg - ?, ultimo_update = ? WHERE id = ?',
+            (detalle['consumo_kg'], ahora, detalle['stock_id'])
+        )
+
+    registrar_auditoria(conn, 'crear', 'orden_figurado', id_orden, f'Orden #{numero_orden} creada manualmente desde ventas. Consumo total: {round(total_kg, 4)} kg')
+    conn.commit()
+    conn.close()
+    return jsonify({
+        'mensaje': f'Orden #{numero_orden} creada en fábrica',
+        'id_orden': id_orden,
+        'numero_orden': numero_orden,
+        'kg_total': round(total_kg, 4),
+        'estado': 'En Cola'
+    }), 201
+
+
+@app.route('/api/fabrica/inventario-hierro', methods=['GET', 'POST'])
+@login_required
+def gestion_inventario_hierro():
+    conn = sqlite3.connect(DB_NAME)
+    cursor = conn.cursor()
+
+    if request.method == 'GET':
+        rows = cursor.execute(
+            "SELECT calibre, diametro_mm, stock_kg, ultimo_update FROM inventario_hierro ORDER BY calibre"
+        ).fetchall()
+        conn.close()
+        return jsonify([
+            {
+                'calibre': r[0],
+                'diametro_mm': r[1],
+                'stock_kg': r[2],
+                'ultimo_update': r[3]
+            }
+            for r in rows
+        ])
+
+    data = request.json or {}
+    calibre = str(data.get('calibre') or '').strip()
+    try:
+        stock_kg = float(data.get('stock_kg') or 0)
+    except (ValueError, TypeError):
+        stock_kg = 0.0
+    observacion = str(data.get('observacion') or '').strip()
+
+    if not calibre:
+        conn.close()
+        return jsonify({'error': 'Debe indicar el calibre del hierro'}), 400
+    if stock_kg < 0:
+        conn.close()
+        return jsonify({'error': 'El stock no puede ser negativo'}), 400
+
+    diametro_mm = _parse_calibre_mm(calibre)
+    ahora = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    existing = cursor.execute('SELECT id FROM inventario_hierro WHERE calibre = ? ORDER BY id LIMIT 1', (calibre,)).fetchone()
+
+    if existing:
+        cursor.execute(
+            "UPDATE inventario_hierro SET diametro_mm = ?, stock_kg = ?, ultimo_update = ? WHERE id = ?",
+            (diametro_mm, stock_kg, ahora, existing[0])
+        )
+        mensaje = f'Inventario de {calibre} actualizado correctamente'
+    else:
+        cursor.execute(
+            "INSERT INTO inventario_hierro (calibre, diametro_mm, stock_kg, ultimo_update) VALUES (?, ?, ?, ?)",
+            (calibre, diametro_mm, stock_kg, ahora)
+        )
+        mensaje = f'Inventario de {calibre} registrado correctamente'
+
+    registrar_auditoria(conn, 'guardar', 'inventario_hierro', calibre, f'{mensaje}. Observación: {observacion or "Sin observación"}')
+    conn.commit()
+    conn.close()
+    return jsonify({'mensaje': mensaje}), 200 if existing else 201
+
+
+@app.route('/api/fabrica/ordenes/<int:id_orden>/estado', methods=['PUT'])
+@login_required
+def actualizar_estado_fabrica(id_orden):
+    data = request.json or {}
+    nuevo_estado = str(data.get('estado') or '').strip()
+    estados_validos = ('En Cola', 'En Figurado', 'Completado')
+    if nuevo_estado not in estados_validos:
+        return jsonify({"error": "Estado inválido. Debe ser En Cola, En Figurado o Completado"}), 400
+
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    cursor = conn.cursor()
+    orden = cursor.execute("""
+        SELECT o.id, o.numero_orden, o.estado, COALESCE(c.nombre, 'Cliente no registrado') AS cliente
+        FROM ordenes_figurado o
+        LEFT JOIN clientes c ON c.id = o.id_cliente
+        WHERE o.id = ?
+    """, (id_orden,)).fetchone()
+    if not orden:
+        conn.close()
+        return jsonify({"error": "Orden no encontrada"}), 404
+
+    ahora = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor.execute(
+        "UPDATE ordenes_figurado SET estado = ?, fecha_actualizacion = ?, fecha_entrega = ? WHERE id = ?",
+        (nuevo_estado, ahora, ahora if nuevo_estado == 'Completado' else None, id_orden)
+    )
+    cursor.execute(
+        "UPDATE detalles_fleje SET estado = ? WHERE id_orden = ?",
+        (nuevo_estado, id_orden)
+    )
+
+    if nuevo_estado == 'Completado' and orden['estado'] != 'Completado':
+        mensaje = f"✅ Los flejes de la orden {orden['numero_orden']} ({orden['cliente']}) ya están listos"
+        cursor.execute("""
+            INSERT INTO notificaciones_flejes (id_orden, numero_orden, cliente, mensaje, fecha)
+            VALUES (?, ?, ?, ?, ?)
+        """, (id_orden, orden['numero_orden'], orden['cliente'], mensaje, ahora))
+
+    registrar_auditoria(conn, 'estado_orden', 'orden_figurado', id_orden, f'Estado -> {nuevo_estado}')
+    conn.commit()
+    conn.close()
+    return jsonify({"mensaje": f"Orden actualizada a '{nuevo_estado}'", "estado": nuevo_estado})
+
+
+@app.route('/api/fabrica/notificaciones', methods=['GET'])
+@login_required
+def api_fabrica_notificaciones():
+    """Notificaciones de flejes listos. destino=general marca leida global; destino=pedidos marca leida_pedidos."""
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("""
+        SELECT id, id_orden, numero_orden, cliente, mensaje, leida, leida_pedidos, fecha
+        FROM notificaciones_flejes
+        ORDER BY id DESC LIMIT 50
+    """).fetchall()
+    total_general = conn.execute("SELECT COUNT(*) FROM notificaciones_flejes WHERE leida = 0").fetchone()[0]
+    total_pedidos = conn.execute("SELECT COUNT(*) FROM notificaciones_flejes WHERE leida_pedidos = 0").fetchone()[0]
+    conn.close()
+    return jsonify({
+        "total_general": total_general,
+        "total_pedidos": total_pedidos,
+        "notificaciones": [dict(r) for r in rows]
+    })
+
+
+@app.route('/api/fabrica/notificaciones/marcar_leidas', methods=['POST'])
+@login_required
+def api_fabrica_notificaciones_marcar():
+    data = request.get_json(force=True) or {}
+    destino = str(data.get('destino') or 'general').strip()
+    columna = 'leida_pedidos' if destino == 'pedidos' else 'leida'
+    conn = sqlite3.connect(DB_NAME)
+    conn.execute(f"UPDATE notificaciones_flejes SET {columna} = 1 WHERE {columna} = 0")
+    conn.commit()
+    conn.close()
+    return jsonify({"mensaje": "Notificaciones marcadas como leídas"})
+
+
+@app.route('/api/ventas/despachos', methods=['GET'])
+@login_required
+def get_despachos():
+    """Devuelve las ventas marcadas 'para_llevar' ordenadas por numero_pedido."""
+    conn = sqlite3.connect(DB_NAME)
+    estado_filtro = request.args.get('estado', '')
+
+    query = """
+        SELECT v.id, v.numero_pedido, v.fecha_dia, v.hora,
+               c.nombre, c.telefono, c.cedula_nit,
+               COALESCE(v.direccion_cliente, c.direccion, '') AS direccion,
+               v.total_venta, v.tipo_pago, v.anulada,
+               GROUP_CONCAT(p.nombre || ' (x' || dv.cantidad || ')', ', ') AS productos,
+               COALESCE(v.estado_despacho, 'pendiente_preparar')
+        FROM ventas v
+        JOIN clientes c ON c.id = v.id_cliente
+        LEFT JOIN detalle_ventas dv ON dv.id_venta = v.id
+        LEFT JOIN productos p ON p.id = dv.id_producto
+        WHERE v.tipo_entrega = 'para_llevar' AND v.anulada = 0
+    """
+    params = []
+    if estado_filtro:
+        query += " AND COALESCE(v.estado_despacho, 'pendiente_preparar') = ?"
+        params.append(estado_filtro)
+    query += " GROUP BY v.id ORDER BY v.numero_pedido ASC"
+
+    rows = conn.execute(query, params).fetchall()
+    conn.close()
+    return jsonify([{
+        "id_venta":        r[0],
+        "numero_pedido":   r[1],
+        "fecha_dia":       r[2],
+        "hora":            r[3],
+        "cliente":         r[4],
+        "telefono":        r[5],
+        "cedula_nit":      r[6],
+        "direccion":       r[7] or "",
+        "total_venta":     r[8],
+        "tipo_pago":       r[9],
+        "anulada":         bool(r[10]),
+        "productos":       r[11] or "",
+        "estado_despacho": r[12]
+    } for r in rows])
+
+
+@app.route('/api/ventas/<int:id_venta>/estado_despacho', methods=['PUT'])
+@login_required
+def cambiar_estado_despacho(id_venta):
+    """Cambia el estado_despacho de una venta para_llevar."""
+    ESTADOS_DESPACHO = ('pendiente_preparar', 'preparando', 'listo', 'entregado')
+    data = request.json or {}
+    nuevo = (data.get('estado_despacho') or '').strip()
+    if nuevo not in ESTADOS_DESPACHO:
+        return jsonify({"error": f"Estado inválido. Válidos: {', '.join(ESTADOS_DESPACHO)}"}), 400
+
+    conn = sqlite3.connect(DB_NAME)
+    venta = conn.execute(
+        "SELECT id, tipo_entrega FROM ventas WHERE id = ?", (id_venta,)
+    ).fetchone()
+    if not venta:
+        conn.close()
+        return jsonify({"error": "Venta no encontrada"}), 404
+    if venta[1] != 'para_llevar':
+        conn.close()
+        return jsonify({"error": "Esta venta no es de tipo para_llevar"}), 400
+
+    conn.execute("UPDATE ventas SET estado_despacho = ? WHERE id = ?", (nuevo, id_venta))
+    registrar_auditoria(conn, 'estado_despacho', 'venta', id_venta,
+                        f'Estado despacho → {nuevo} por {session["usuario"]}')
+    conn.commit()
+    conn.close()
+    return jsonify({"mensaje": f"Estado actualizado a '{nuevo}'"})
+
 
 @app.route('/api/ventas/<int:id_venta>', methods=['GET'])
 @login_required
@@ -1126,6 +2035,714 @@ def editar_cliente_factura(id_venta):
     conn.close()
 
     return jsonify({"mensaje": "Datos del cliente y dirección actualizados correctamente"}), 200
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  MÓDULO DE PEDIDOS
+# ══════════════════════════════════════════════════════════════════════════════
+
+ESTADOS_VALIDOS = ('pendiente', 'alistando', 'listo', 'en_camino', 'entregado', 'cancelado')
+
+TRANSICIONES = {
+    'pendiente':  {'admin': ['alistando', 'cancelado'], 'empleado': ['cancelado'], 'bodega': ['alistando', 'cancelado']},
+    'alistando':  {'admin': ['listo', 'pendiente', 'cancelado'], 'bodega': ['listo', 'pendiente', 'cancelado']},
+    'listo':      {'admin': ['en_camino', 'cancelado'], 'bodega': ['en_camino'], 'motocarguero': ['en_camino']},
+    'en_camino':  {'admin': ['entregado', 'listo'], 'motocarguero': ['entregado']},
+    'entregado':  {'admin': ['en_camino']},
+    'cancelado':  {'admin': ['pendiente']},
+}
+
+def _pedido_row_to_dict(r):
+    return {
+        "id": r[0], "id_cliente": r[1], "nombre_cliente": r[2],
+        "telefono_cliente": r[3], "direccion_entrega": r[4] or "",
+        "observaciones": r[5] or "", "estado": r[6],
+        "usuario_vendedor": r[7], "usuario_bodega": r[8] or "",
+        "id_motocarguero": r[9], "nombre_motocarguero": r[10] or "",
+        "fecha_creacion": r[11], "fecha_actualizacion": r[12] or "",
+        "total_pedido": r[13] or 0
+    }
+
+_Q_PEDIDOS = """
+    SELECT p.id, p.id_cliente, c.nombre, c.telefono,
+           p.direccion_entrega, p.observaciones, p.estado,
+           p.usuario_vendedor, p.usuario_bodega,
+           p.id_motocarguero, um.usuario,
+           p.fecha_creacion, p.fecha_actualizacion,
+           COALESCE(SUM(dp.subtotal), 0)
+    FROM pedidos p
+    JOIN clientes c ON c.id = p.id_cliente
+    LEFT JOIN usuarios um ON um.id = p.id_motocarguero
+    LEFT JOIN detalle_pedidos dp ON dp.id_pedido = p.id
+"""
+
+
+@app.route('/api/pedidos', methods=['GET', 'POST'])
+@login_required
+def handle_pedidos():
+    conn = sqlite3.connect(DB_NAME)
+    rol = session.get('rol')
+    usuario = session.get('usuario')
+
+    if request.method == 'GET':
+        estado_filtro = request.args.get('estado', '')
+        desde = request.args.get('desde', '')
+        where_clauses = []
+        params = []
+
+        if rol == 'motocarguero':
+            row_id = conn.execute("SELECT id FROM usuarios WHERE usuario = ?", (usuario,)).fetchone()
+            if row_id:
+                where_clauses.append("p.id_motocarguero = ?")
+                params.append(row_id[0])
+            else:
+                conn.close()
+                return jsonify([])
+
+        if estado_filtro:
+            where_clauses.append("p.estado = ?")
+            params.append(estado_filtro)
+        if desde:
+            where_clauses.append("p.fecha_creacion >= ?")
+            params.append(desde)
+
+        sql = _Q_PEDIDOS
+        if where_clauses:
+            sql += " WHERE " + " AND ".join(where_clauses)
+        sql += " GROUP BY p.id ORDER BY p.fecha_creacion DESC LIMIT 200"
+
+        rows = conn.execute(sql, params).fetchall()
+        conn.close()
+        return jsonify([_pedido_row_to_dict(r) for r in rows])
+
+    # POST: crear pedido
+    if rol not in ('admin', 'empleado', 'bodega'):
+        conn.close()
+        return jsonify({"error": "Solo vendedores o administradores pueden crear pedidos"}), 403
+
+    data = request.json or {}
+    id_cliente = data.get('id_cliente')
+    items = data.get('items', [])
+
+    if not id_cliente or not items:
+        conn.close()
+        return jsonify({"error": "Se requiere id_cliente y al menos un producto"}), 400
+
+    if not conn.execute("SELECT id FROM clientes WHERE id = ?", (id_cliente,)).fetchone():
+        conn.close()
+        return jsonify({"error": "Cliente no encontrado"}), 404
+
+    ahora = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    cursor = conn.cursor()
+    cursor.execute("""
+        INSERT INTO pedidos (id_cliente, direccion_entrega, observaciones, estado,
+                             usuario_vendedor, fecha_creacion, fecha_actualizacion)
+        VALUES (?, ?, ?, 'pendiente', ?, ?, ?)
+    """, (id_cliente, data.get('direccion_entrega', '').strip(),
+          data.get('observaciones', '').strip(), usuario, ahora, ahora))
+    id_pedido = cursor.lastrowid
+
+    total = 0
+    for item in items:
+        prod = conn.execute("SELECT precio_venta FROM productos WHERE id = ?", (item['id_producto'],)).fetchone()
+        if not prod:
+            conn.rollback(); conn.close()
+            return jsonify({"error": f"Producto ID {item['id_producto']} no encontrado"}), 404
+        cantidad = int(item['cantidad'])
+        precio = float(prod[0])
+        subtotal = round(cantidad * precio, 2)
+        total += subtotal
+        cursor.execute("""
+            INSERT INTO detalle_pedidos (id_pedido, id_producto, cantidad, precio_unitario, subtotal)
+            VALUES (?, ?, ?, ?, ?)
+        """, (id_pedido, item['id_producto'], cantidad, precio, subtotal))
+
+    registrar_auditoria(conn, 'crear', 'pedido', id_pedido,
+                        f'Pedido creado por {usuario} — {len(items)} productos — Total ${total:,.0f}')
+    conn.commit()
+    conn.close()
+    return jsonify({"mensaje": "Pedido creado con exito", "id_pedido": id_pedido, "total": total}), 201
+
+
+@app.route('/api/pedidos/<int:id_pedido>', methods=['GET'])
+@login_required
+def get_pedido(id_pedido):
+    conn = sqlite3.connect(DB_NAME)
+    row = conn.execute(_Q_PEDIDOS + " WHERE p.id = ? GROUP BY p.id", (id_pedido,)).fetchone()
+    if not row:
+        conn.close()
+        return jsonify({"error": "Pedido no encontrado"}), 404
+    pedido = _pedido_row_to_dict(row)
+    items = conn.execute("""
+        SELECT dp.id, pr.nombre, pr.dimensiones, pr.categoria,
+               dp.cantidad, dp.precio_unitario, dp.subtotal,
+               pr.stock_actual, pr.codigo_barras
+        FROM detalle_pedidos dp
+        JOIN productos pr ON pr.id = dp.id_producto
+        WHERE dp.id_pedido = ?
+    """, (id_pedido,)).fetchall()
+    conn.close()
+    pedido['items'] = [{
+        "id": i[0], "nombre": i[1], "dimensiones": i[2] or "",
+        "categoria": i[3] or "", "cantidad": i[4],
+        "precio_unitario": i[5], "subtotal": i[6],
+        "stock_actual": i[7], "codigo_barras": i[8] or ""
+    } for i in items]
+    return jsonify(pedido)
+
+
+@app.route('/api/pedidos/<int:id_pedido>/estado', methods=['PUT'])
+@login_required
+def cambiar_estado_pedido(id_pedido):
+    rol = session.get('rol')
+    usuario = session.get('usuario')
+    data = request.json or {}
+    nuevo_estado = (data.get('estado') or '').strip().lower()
+
+    if nuevo_estado not in ESTADOS_VALIDOS:
+        return jsonify({"error": f"Estado invalido. Validos: {', '.join(ESTADOS_VALIDOS)}"}), 400
+
+    conn = sqlite3.connect(DB_NAME)
+    pedido = conn.execute("SELECT estado FROM pedidos WHERE id = ?", (id_pedido,)).fetchone()
+    if not pedido:
+        conn.close()
+        return jsonify({"error": "Pedido no encontrado"}), 404
+
+    estado_actual = pedido[0]
+    permitidos = TRANSICIONES.get(estado_actual, {})
+    if rol not in permitidos or nuevo_estado not in permitidos[rol]:
+        conn.close()
+        return jsonify({"error": f"El rol '{rol}' no puede cambiar de '{estado_actual}' a '{nuevo_estado}'"}), 403
+
+    ahora = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    updates = ["estado = ?", "fecha_actualizacion = ?"]
+    params = [nuevo_estado, ahora]
+
+    if rol == 'bodega' and estado_actual == 'pendiente':
+        updates.append("usuario_bodega = ?")
+        params.append(usuario)
+
+    if data.get('id_motocarguero'):
+        id_moto = int(data['id_motocarguero'])
+        moto = conn.execute("SELECT id FROM usuarios WHERE id = ? AND rol = 'motocarguero'", (id_moto,)).fetchone()
+        if not moto:
+            conn.close()
+            return jsonify({"error": "Motocarguero no encontrado"}), 404
+        updates.append("id_motocarguero = ?")
+        params.append(id_moto)
+
+    params.append(id_pedido)
+    conn.execute(f"UPDATE pedidos SET {', '.join(updates)} WHERE id = ?", params)
+    registrar_auditoria(conn, 'estado_pedido', 'pedido', id_pedido,
+                        f'{estado_actual} -> {nuevo_estado} por {usuario}')
+    conn.commit()
+    conn.close()
+    return jsonify({"mensaje": f"Pedido actualizado a '{nuevo_estado}'", "estado": nuevo_estado})
+
+
+@app.route('/api/pedidos/notificaciones', methods=['GET'])
+@login_required
+def notificaciones_pedidos():
+    rol = session.get('rol')
+    usuario = session.get('usuario')
+    conn = sqlite3.connect(DB_NAME)
+
+    if rol in ('admin', 'bodega'):
+        total = conn.execute("SELECT COUNT(*) FROM pedidos WHERE estado = 'pendiente'").fetchone()[0]
+        resumen = f"{total} pedido(s) pendiente(s) por alistar"
+    elif rol == 'motocarguero':
+        row_id = conn.execute("SELECT id FROM usuarios WHERE usuario = ?", (usuario,)).fetchone()
+        total = 0
+        if row_id:
+            total = conn.execute(
+                "SELECT COUNT(*) FROM pedidos WHERE estado = 'listo' AND id_motocarguero = ?",
+                (row_id[0],)
+            ).fetchone()[0]
+        resumen = f"{total} pedido(s) listo(s) para recoger"
+    else:
+        total = conn.execute(
+            "SELECT COUNT(*) FROM pedidos WHERE estado NOT IN ('entregado','cancelado') AND usuario_vendedor = ?",
+            (usuario,)
+        ).fetchone()[0]
+        resumen = f"{total} pedido(s) activo(s)"
+
+    conn.close()
+    return jsonify({"total": total, "resumen": resumen})
+
+
+@app.route('/api/usuarios/motocargueros', methods=['GET'])
+@login_required
+def get_motocargueros():
+    conn = sqlite3.connect(DB_NAME)
+    rows = conn.execute(
+        "SELECT id, usuario, nombre_completo FROM usuarios WHERE rol = 'motocarguero' ORDER BY usuario"
+    ).fetchall()
+    conn.close()
+    return jsonify([{"id": r[0], "usuario": r[1], "nombre": r[2] or r[1]} for r in rows])
+
+
+# ── MÓDULO ALQUILER DE MAQUINARIA ───────────────────────────────────────────
+def _listar_equipos_alquiler(conn):
+    try:
+        conn.execute("SELECT 1 FROM equipos LIMIT 1")
+        tabla = 'equipos'
+    except sqlite3.Error:
+        tabla = 'equipos_alquiler'
+    rows = conn.execute(f"""
+        SELECT *
+        FROM {tabla}
+        WHERE activo = 1
+        ORDER BY nombre ASC
+    """).fetchall()
+    return [dict(r) if isinstance(r, sqlite3.Row) else {
+        'id': r[0], 'codigo_interno': r[1], 'nombre': r[2], 'categoria': r[3], 'marca': r[4],
+        'modelo': r[5], 'numero_serie': r[6], 'estado': r[7], 'tipo_tarifa': r[8], 'tarifa': r[9],
+        'tarifa_hora': r[10], 'tarifa_turno': r[11], 'tarifa_bulto': r[12], 'medidas': r[13],
+        'especificaciones': r[14], 'cantidad_disponible': r[15], 'cantidad_total': r[16],
+        'fecha_compra': r[17], 'fecha_ultimo_mantenimiento': r[18], 'observaciones': r[19],
+        'activo': r[20], 'fecha_registro': r[21], 'fecha_actualizacion': r[22]
+    } for r in rows]
+
+
+@app.route('/api/equipos', methods=['GET', 'POST'])
+@login_required
+def api_equipos():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+
+    if request.method == 'GET':
+        rows = _listar_equipos_alquiler(conn)
+        conn.close()
+        return jsonify(rows)
+
+    data = request.get_json(force=True) or {}
+    equipo = _normalizar_datos_equipo(data)
+    if not equipo['nombre'] or not equipo['codigo_interno']:
+        conn.close()
+        return jsonify({"error": "Nombre y código interno del equipo son obligatorios"}), 400
+
+    try:
+        ahora = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        cursor = conn.cursor()
+
+        row_equipo_alquiler = cursor.execute(
+            "SELECT id FROM equipos_alquiler WHERE codigo_interno = ?",
+            (equipo['codigo_interno'],)
+        ).fetchone()
+        if row_equipo_alquiler:
+            id_equipo = row_equipo_alquiler[0]
+            cursor.execute("""
+                UPDATE equipos_alquiler
+                SET nombre = ?, categoria = ?, marca = ?, modelo = ?, numero_serie = ?,
+                    estado = ?, tipo_tarifa = ?, tarifa = ?, tarifa_hora = ?, tarifa_turno = ?, tarifa_bulto = ?,
+                    medidas = ?, especificaciones = ?, cantidad_disponible = ?, cantidad_total = ?,
+                    fecha_compra = ?, fecha_ultimo_mantenimiento = ?, observaciones = ?, activo = ?,
+                    fecha_actualizacion = ?
+                WHERE id = ?
+            """, (
+                equipo['nombre'], equipo['categoria'], equipo['marca'], equipo['modelo'], equipo['numero_serie'],
+                equipo['estado'], equipo['tipo_tarifa'], equipo['tarifa'], equipo['tarifa_hora'],
+                equipo['tarifa_turno'], equipo['tarifa_bulto'], equipo['medidas'], equipo['especificaciones'],
+                equipo['cantidad_disponible'], equipo['cantidad_total'], equipo['fecha_compra'],
+                equipo['fecha_ultimo_mantenimiento'], equipo['observaciones'], equipo['activo'],
+                ahora, id_equipo
+            ))
+        else:
+            cursor.execute("""
+                INSERT INTO equipos_alquiler (
+                    codigo_interno, nombre, categoria, marca, modelo, numero_serie,
+                    estado, tipo_tarifa, tarifa, tarifa_hora, tarifa_turno, tarifa_bulto,
+                    medidas, especificaciones, cantidad_disponible, cantidad_total,
+                    fecha_compra, fecha_ultimo_mantenimiento, observaciones, activo,
+                    fecha_registro, fecha_actualizacion
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                equipo['codigo_interno'], equipo['nombre'], equipo['categoria'], equipo['marca'], equipo['modelo'],
+                equipo['numero_serie'], equipo['estado'], equipo['tipo_tarifa'], equipo['tarifa'],
+                equipo['tarifa_hora'], equipo['tarifa_turno'], equipo['tarifa_bulto'], equipo['medidas'],
+                equipo['especificaciones'], equipo['cantidad_disponible'], equipo['cantidad_total'],
+                equipo['fecha_compra'], equipo['fecha_ultimo_mantenimiento'], equipo['observaciones'],
+                equipo['activo'], ahora, ahora
+            ))
+            id_equipo = cursor.lastrowid
+
+        row_equipo = cursor.execute(
+            "SELECT id FROM equipos WHERE codigo_interno = ?",
+            (equipo['codigo_interno'],)
+        ).fetchone()
+        if row_equipo:
+            cursor.execute("""
+                UPDATE equipos
+                SET nombre = ?, categoria = ?, marca = ?, modelo = ?, numero_serie = ?,
+                    estado = ?, tipo_tarifa = ?, tarifa = ?, tarifa_hora = ?, tarifa_turno = ?, tarifa_bulto = ?,
+                    medidas = ?, especificaciones = ?, cantidad_disponible = ?, cantidad_total = ?,
+                    fecha_compra = ?, fecha_ultimo_mantenimiento = ?, observaciones = ?, activo = ?,
+                    fecha_registro = ?, fecha_actualizacion = ?
+                WHERE id = ?
+            """, (
+                equipo['nombre'], equipo['categoria'], equipo['marca'], equipo['modelo'], equipo['numero_serie'],
+                equipo['estado'], equipo['tipo_tarifa'], equipo['tarifa'], equipo['tarifa_hora'],
+                equipo['tarifa_turno'], equipo['tarifa_bulto'], equipo['medidas'], equipo['especificaciones'],
+                equipo['cantidad_disponible'], equipo['cantidad_total'], equipo['fecha_compra'],
+                equipo['fecha_ultimo_mantenimiento'], equipo['observaciones'], equipo['activo'],
+                ahora, ahora, row_equipo[0]
+            ))
+        else:
+            cursor.execute("""
+                INSERT INTO equipos (
+                    id, codigo_interno, nombre, categoria, marca, modelo, numero_serie,
+                    estado, tipo_tarifa, tarifa, tarifa_hora, tarifa_turno, tarifa_bulto,
+                    medidas, especificaciones, cantidad_disponible, cantidad_total,
+                    fecha_compra, fecha_ultimo_mantenimiento, observaciones, activo,
+                    fecha_registro, fecha_actualizacion
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                id_equipo, equipo['codigo_interno'], equipo['nombre'], equipo['categoria'], equipo['marca'],
+                equipo['modelo'], equipo['numero_serie'], equipo['estado'], equipo['tipo_tarifa'],
+                equipo['tarifa'], equipo['tarifa_hora'], equipo['tarifa_turno'], equipo['tarifa_bulto'],
+                equipo['medidas'], equipo['especificaciones'], equipo['cantidad_disponible'],
+                equipo['cantidad_total'], equipo['fecha_compra'], equipo['fecha_ultimo_mantenimiento'],
+                equipo['observaciones'], equipo['activo'], ahora, ahora
+            ))
+
+        conn.commit()
+        conn.close()
+        return jsonify({"mensaje": "Equipo registrado correctamente", "equipo": equipo}), 201
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        conn.close()
+        return jsonify({"error": "Ya existe un equipo con ese código interno"}), 400
+
+
+@app.route('/api/equipos/<int:id_equipo>', methods=['PUT', 'DELETE'])
+@login_required
+def api_equipo_por_id(id_equipo):
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+
+    if request.method == 'PUT':
+        data = request.get_json(force=True) or {}
+        equipo = _normalizar_datos_equipo(data)
+        if not equipo['nombre'] or not equipo['codigo_interno']:
+            conn.close()
+            return jsonify({"error": "Nombre y código interno del equipo son obligatorios"}), 400
+
+        try:
+            conn.execute("""
+                UPDATE equipos
+                SET codigo_interno = ?, nombre = ?, categoria = ?, marca = ?, modelo = ?, numero_serie = ?,
+                    estado = ?, tipo_tarifa = ?, tarifa = ?, tarifa_hora = ?, tarifa_turno = ?, tarifa_bulto = ?,
+                    medidas = ?, especificaciones = ?, cantidad_disponible = ?, cantidad_total = ?,
+                    fecha_compra = ?, fecha_ultimo_mantenimiento = ?, observaciones = ?, fecha_actualizacion = ?
+                WHERE id = ?
+            """, (
+                equipo['codigo_interno'], equipo['nombre'], equipo['categoria'], equipo['marca'], equipo['modelo'],
+                equipo['numero_serie'], equipo['estado'], equipo['tipo_tarifa'], equipo['tarifa'],
+                equipo['tarifa_hora'], equipo['tarifa_turno'], equipo['tarifa_bulto'], equipo['medidas'],
+                equipo['especificaciones'], equipo['cantidad_disponible'], equipo['cantidad_total'],
+                equipo['fecha_compra'], equipo['fecha_ultimo_mantenimiento'], equipo['observaciones'],
+                datetime.now().strftime('%Y-%m-%d %H:%M:%S'), id_equipo
+            ))
+            try:
+                conn.execute("""
+                    UPDATE equipos_alquiler
+                    SET codigo_interno = ?, nombre = ?, categoria = ?, marca = ?, modelo = ?, numero_serie = ?,
+                        estado = ?, tipo_tarifa = ?, tarifa = ?, tarifa_hora = ?, tarifa_turno = ?, tarifa_bulto = ?,
+                        medidas = ?, especificaciones = ?, cantidad_disponible = ?, cantidad_total = ?,
+                        fecha_compra = ?, fecha_ultimo_mantenimiento = ?, observaciones = ?, fecha_actualizacion = ?
+                    WHERE id = ?
+                """, (
+                    equipo['codigo_interno'], equipo['nombre'], equipo['categoria'], equipo['marca'], equipo['modelo'],
+                    equipo['numero_serie'], equipo['estado'], equipo['tipo_tarifa'], equipo['tarifa'],
+                    equipo['tarifa_hora'], equipo['tarifa_turno'], equipo['tarifa_bulto'], equipo['medidas'],
+                    equipo['especificaciones'], equipo['cantidad_disponible'], equipo['cantidad_total'],
+                    equipo['fecha_compra'], equipo['fecha_ultimo_mantenimiento'], equipo['observaciones'],
+                    datetime.now().strftime('%Y-%m-%d %H:%M:%S'), id_equipo
+                ))
+            except sqlite3.Error:
+                conn.execute("""
+                    UPDATE equipos_alquiler
+                    SET nombre = ?, categoria = ?, marca = ?, modelo = ?, numero_serie = ?,
+                        estado = ?, tipo_tarifa = ?, tarifa = ?, tarifa_hora = ?, tarifa_turno = ?, tarifa_bulto = ?,
+                        medidas = ?, especificaciones = ?, cantidad_disponible = ?, cantidad_total = ?,
+                        fecha_compra = ?, fecha_ultimo_mantenimiento = ?, observaciones = ?, fecha_actualizacion = ?
+                    WHERE codigo_interno = ?
+                """, (
+                    equipo['nombre'], equipo['categoria'], equipo['marca'], equipo['modelo'], equipo['numero_serie'],
+                    equipo['estado'], equipo['tipo_tarifa'], equipo['tarifa'], equipo['tarifa_hora'],
+                    equipo['tarifa_turno'], equipo['tarifa_bulto'], equipo['medidas'], equipo['especificaciones'],
+                    equipo['cantidad_disponible'], equipo['cantidad_total'], equipo['fecha_compra'],
+                    equipo['fecha_ultimo_mantenimiento'], equipo['observaciones'],
+                    datetime.now().strftime('%Y-%m-%d %H:%M:%S'), equipo['codigo_interno']
+                ))
+            conn.commit()
+            conn.close()
+            return jsonify({"mensaje": "Equipo actualizado correctamente"})
+        except sqlite3.IntegrityError:
+            conn.rollback()
+            conn.close()
+            return jsonify({"error": "Ya existe un equipo con ese código interno"}), 400
+
+    conn.execute("UPDATE equipos SET activo = 0 WHERE id = ?", (id_equipo,))
+    conn.execute("UPDATE equipos_alquiler SET activo = 0 WHERE id = ?", (id_equipo,))
+    conn.commit()
+    conn.close()
+    return jsonify({"mensaje": "Equipo eliminado correctamente"})
+
+
+@app.route('/api/alquiler/equipos', methods=['GET', 'POST'])
+@login_required
+def api_alquiler_equipos():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+
+    if request.method == 'GET':
+        rows = _listar_equipos_alquiler(conn)
+        conn.close()
+        return jsonify(rows)
+
+    data = request.get_json(force=True) or {}
+    equipo = _normalizar_datos_equipo(data)
+    if not equipo['codigo_interno'] or not equipo['nombre']:
+        conn.close()
+        return jsonify({"error": "Código interno y nombre son obligatorios"}), 400
+
+    try:
+        ahora = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        conn.execute("""
+            INSERT INTO equipos_alquiler (
+                codigo_interno, nombre, categoria, marca, modelo, numero_serie,
+                estado, tipo_tarifa, tarifa, tarifa_hora, tarifa_turno, tarifa_bulto,
+                medidas, especificaciones, cantidad_disponible, cantidad_total,
+                fecha_compra, fecha_ultimo_mantenimiento, observaciones, activo,
+                fecha_registro, fecha_actualizacion
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """, (
+            equipo['codigo_interno'], equipo['nombre'], equipo['categoria'], equipo['marca'], equipo['modelo'],
+            equipo['numero_serie'], equipo['estado'], equipo['tipo_tarifa'], equipo['tarifa'],
+            equipo['tarifa_hora'], equipo['tarifa_turno'], equipo['tarifa_bulto'], equipo['medidas'],
+            equipo['especificaciones'], equipo['cantidad_disponible'], equipo['cantidad_total'],
+            equipo['fecha_compra'], equipo['fecha_ultimo_mantenimiento'], equipo['observaciones'],
+            equipo['activo'], ahora, ahora
+        ))
+        conn.commit()
+        conn.close()
+        return jsonify({"mensaje": "Equipo registrado correctamente"}), 201
+    except sqlite3.IntegrityError:
+        conn.rollback()
+        conn.close()
+        return jsonify({"error": "Ya existe un equipo con ese código interno"}), 400
+
+
+@app.route('/api/alquileres', methods=['GET', 'POST'])
+@login_required
+def api_alquileres():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+
+    if request.method == 'GET':
+        rows = conn.execute("""
+            SELECT a.*, c.nombre AS cliente_nombre
+            FROM alquileres a
+            JOIN clientes c ON c.id = a.id_cliente
+            ORDER BY a.id DESC
+        """).fetchall()
+        conn.close()
+        return jsonify([dict(r) for r in rows])
+
+    data = request.get_json(force=True) or {}
+    id_cliente = data.get('id_cliente')
+    equipos = data.get('equipos') or []
+    if not id_cliente:
+        conn.close()
+        return jsonify({"error": "Debe seleccionar un cliente"}), 400
+    cliente = conn.execute("SELECT id FROM clientes WHERE id = ?", (int(id_cliente),)).fetchone()
+    if not cliente:
+        conn.close()
+        return jsonify({"error": "El cliente seleccionado no existe en el sistema"}), 400
+    if not equipos:
+        conn.close()
+        return jsonify({"error": "Debe seleccionar al menos un equipo"}), 400
+
+    fecha_salida = str(data.get('fecha_salida') or '').strip()
+    fecha_pactada = str(data.get('fecha_devolucion_pactada') or '').strip()
+    if not fecha_salida or not fecha_pactada:
+        conn.close()
+        return jsonify({"error": "Debe indicar la fecha de salida y la fecha pactada de devolución"}), 400
+
+    try:
+        cursor = conn.cursor()
+        cursor.execute("""
+            INSERT INTO alquileres (
+                id_cliente, id_usuario, fecha_salida, fecha_devolucion_pactada,
+                estado, valor_deposito, notas_salida, fecha_registro
+            ) VALUES (?, ?, ?, ?, 'activo', ?, ?, ?)
+        """, (
+            int(id_cliente),
+            int(session.get('id_usuario') or 1),
+            fecha_salida,
+            fecha_pactada,
+            float(data.get('valor_deposito') or 0),
+            str(data.get('notas_salida') or '').strip(),
+            datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+        ))
+        id_alquiler = cursor.lastrowid
+
+        subtotal_total = 0
+        for item in equipos:
+            id_equipo = int(item.get('id_equipo'))
+            cantidad = max(1, int(item.get('cantidad') or 1))
+            equipo = conn.execute("SELECT * FROM equipos_alquiler WHERE id = ?", (id_equipo,)).fetchone()
+            if not equipo:
+                conn.close()
+                return jsonify({"error": f"Equipo con id {id_equipo} no existe"}), 400
+
+            tarifa_tipo = str(item.get('tarifa_tipo') or equipo['tipo_tarifa'] or 'dia').strip()
+            tarifa_valor = float(item.get('tarifa_valor') or equipo['tarifa'] or 0)
+            if tarifa_tipo == 'hora':
+                tarifa_valor = float(item.get('tarifa_valor') or equipo['tarifa_hora'] or 0)
+            if tarifa_tipo == 'turno':
+                tarifa_valor = float(item.get('tarifa_valor') or equipo['tarifa_turno'] or 0)
+            if tarifa_tipo == 'bulto':
+                tarifa_valor = float(item.get('tarifa_valor') or equipo['tarifa_bulto'] or 0)
+
+            subtotal = calcular_total_alquiler(fecha_salida, fecha_pactada, tarifa_tipo, tarifa_valor, cantidad)
+            subtotal_total += subtotal
+
+            cursor.execute("""
+                INSERT INTO detalle_alquiler (
+                    id_alquiler, id_equipo, cantidad, tarifa_tipo, tarifa_valor,
+                    subtotal, estado_salida, observaciones
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            """, (
+                id_alquiler,
+                id_equipo,
+                cantidad,
+                tarifa_tipo,
+                tarifa_valor,
+                subtotal,
+                str(item.get('estado_salida') or 'bueno').strip() or 'bueno',
+                str(item.get('observaciones') or '').strip()
+            ))
+
+            cursor.execute("UPDATE equipos_alquiler SET estado = 'En Alquiler' WHERE id = ?", (id_equipo,))
+
+        cursor.execute("UPDATE alquileres SET subtotal = ?, total_final = ? WHERE id = ?", (subtotal_total, subtotal_total, id_alquiler))
+        conn.commit()
+        conn.close()
+        return jsonify({"mensaje": "Alquiler registrado correctamente", "id_alquiler": id_alquiler}), 201
+    except ValueError:
+        conn.close()
+        return jsonify({"error": "Los valores enviados no son válidos"}), 400
+
+
+@app.route('/api/alquileres/activos', methods=['GET'])
+@login_required
+def api_alquileres_activos():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("""
+        SELECT a.id, a.estado, a.fecha_salida, a.fecha_devolucion_pactada,
+               COALESCE(c.nombre, 'Cliente no registrado') AS cliente,
+               COALESCE(c.telefono, '') AS telefono,
+               COALESCE(e.nombre, 'Equipo no registrado') AS equipo,
+               COALESCE(e.codigo_interno, '') AS codigo_interno,
+               a.valor_deposito
+        FROM alquileres a
+        LEFT JOIN clientes c ON c.id = a.id_cliente
+        LEFT JOIN detalle_alquiler d ON d.id_alquiler = a.id
+        LEFT JOIN equipos_alquiler e ON e.id = d.id_equipo
+        WHERE a.estado = 'activo'
+        GROUP BY a.id
+        ORDER BY a.fecha_devolucion_pactada ASC
+    """).fetchall()
+    conn.close()
+    return jsonify([dict(r) for r in rows])
+
+
+@app.route('/api/alquiler/alertas', methods=['GET'])
+@login_required
+def api_alquiler_alertas():
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    rows = conn.execute("""
+        SELECT a.id, a.fecha_salida, a.fecha_devolucion_pactada,
+               COALESCE(c.nombre, 'Cliente no registrado') AS cliente,
+               COALESCE(e.nombre, 'Equipo no registrado') AS equipo,
+               COALESCE(e.codigo_interno, '') AS codigo_interno
+        FROM alquileres a
+        LEFT JOIN clientes c ON c.id = a.id_cliente
+        LEFT JOIN detalle_alquiler d ON d.id_alquiler = a.id
+        LEFT JOIN equipos_alquiler e ON e.id = d.id_equipo
+        WHERE a.estado = 'activo'
+        ORDER BY a.fecha_devolucion_pactada ASC
+    """).fetchall()
+    conn.close()
+
+    hoy = datetime.now()
+    resultado = []
+    for row in rows:
+        fecha_limite = datetime.fromisoformat(str(row['fecha_devolucion_pactada']).replace('Z', '+00:00'))
+        resultado.append({
+            'id': row['id'],
+            'cliente': row['cliente'],
+            'equipo': row['equipo'],
+            'codigo_interno': row['codigo_interno'],
+            'fecha_salida': row['fecha_salida'],
+            'fecha_devolucion_pactada': row['fecha_devolucion_pactada'],
+            'vencido': fecha_limite < hoy
+        })
+    return jsonify(resultado)
+
+
+@app.route('/api/alquileres/<int:id_alquiler>/devolver', methods=['POST'])
+@login_required
+def api_devolver_alquiler(id_alquiler):
+    conn = sqlite3.connect(DB_NAME)
+    conn.row_factory = sqlite3.Row
+    data = request.get_json(force=True) or {}
+
+    alquiler = conn.execute("SELECT * FROM alquileres WHERE id = ?", (id_alquiler,)).fetchone()
+    if not alquiler:
+        conn.close()
+        return jsonify({"error": "Alquiler no encontrado"}), 404
+
+    fecha_real = str(data.get('fecha_devolucion_real') or datetime.now().strftime('%Y-%m-%d %H:%M:%S')).strip()
+    cargos_extra = float(data.get('cargos_extra') or 0)
+    descuento = float(data.get('descuento') or 0)
+    notas = str(data.get('notas_devolucion') or '').strip()
+
+    detalle = conn.execute("SELECT * FROM detalle_alquiler WHERE id_alquiler = ?", (id_alquiler,)).fetchall()
+    subtotal_total = 0
+    cursor = conn.cursor()
+
+    for item in detalle:
+        tarifa_tipo = str(item['tarifa_tipo'] or 'dia').strip()
+        tarifa_valor = float(item['tarifa_valor'] or 0)
+        cantidad = max(1, int(item['cantidad'] or 1))
+        subtotal = calcular_total_alquiler(alquiler['fecha_salida'], fecha_real, tarifa_tipo, tarifa_valor, cantidad)
+        subtotal_total += subtotal
+
+        cursor.execute(
+            "UPDATE detalle_alquiler SET subtotal = ?, estado_retorno = ?, observaciones = ? WHERE id = ?",
+            (subtotal, str(data.get('estado_retorno') or 'bueno').strip() or 'bueno', notas, item['id'])
+        )
+        cursor.execute("UPDATE equipos_alquiler SET estado = 'Disponible' WHERE id = ?", (item['id_equipo'],))
+
+    total_final = subtotal_total + cargos_extra - descuento
+    cursor.execute("""
+        UPDATE alquileres
+        SET fecha_devolucion_real = ?, notas_devolucion = ?, cargos_extra = ?,
+            descuento = ?, subtotal = ?, total_final = ?, estado = 'devuelto'
+        WHERE id = ?
+    """, (fecha_real, notas, cargos_extra, descuento, subtotal_total, total_final, id_alquiler))
+
+    conn.commit()
+    conn.close()
+    return jsonify({"mensaje": "Devolución registrada correctamente", "total_final": round(total_final, 2)})
+
+
+init_db()
+
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
