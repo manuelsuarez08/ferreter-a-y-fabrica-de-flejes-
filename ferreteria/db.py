@@ -8,7 +8,6 @@ de Flask más allá de lo necesario.
 import os
 import shutil
 import sqlite3
-from datetime import datetime
 from werkzeug.security import generate_password_hash
 from .config import (
     DB_NAME,

@@ -5,7 +5,7 @@ poder probarla y reutilizarla desde las rutas de alquileres.
 """
 from datetime import datetime
 
-from ..config import TIPOS_TARIFA
+from ..config import TIPOS_TARIFA  # noqa: F401  (re-exportado en __all__)
 
 
 def calcular_total_alquiler(fecha_inicio, fecha_fin, tarifa_tipo, tarifa_valor, cantidad=1):
