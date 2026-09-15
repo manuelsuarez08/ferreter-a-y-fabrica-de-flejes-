@@ -112,7 +112,7 @@ def main():
 
     if not args.dry_run and not args.sin_respaldo:
         ruta = respaldar(args.db)
-        print('✅ Respaldo creado:', ruta)
+        print('[OK] Respaldo creado:', ruta)
 
     vaciadas = limpiar(args.db, dry_run=args.dry_run)
     print('\n--- Registros que se eliminan ---')
