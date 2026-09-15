@@ -106,6 +106,40 @@ def handle_productos():
 
     return _crear_o_reabastecer_producto(cursor, conn)
 
+# Límite por defecto de resultados del buscador del POS (rendimiento).
+POS_LIMITE_DEFECTO = 30
+POS_LIMITE_MAXIMO = 100
+@bp.route('/api/productos/pos', methods=['GET'])
+@login_required
+def buscar_productos_pos():
+    # Buscador liviano del POS: devuelve solo los campos que el punto de venta
+    # necesita y limita los resultados para mantener la respuesta pequena y el
+    # render rapido. Se apoya en los indices de nombre, codigo_barras y categoria.""
+    busqueda = (request.args.get('q') or '').strip()
+    try:
+        limite = int(request.args.get('limite') or POS_LIMITE_DEFECTO)
+    except (ValueError, TypeError):
+        limite = POS_LIMITE_DEFECTO
+    limite = max(1, min(limite, POS_LIMITE_MAXIMO))
+
+    sql = ("SELECT id, nombre, codigo_barras, precio_venta, stock_actual, dimensiones "
+           "FROM productos WHERE COALESCE(activo, 1) = 1")
+    params = []
+    if busqueda:
+        sql += " AND (nombre LIKE ? OR codigo_barras LIKE ? OR categoria LIKE ?)"
+        patron = f"%{busqueda}%"
+        params.extend([patron, patron, patron])
+    sql += " ORDER BY nombre COLLATE NOCASE ASC LIMIT ?"
+    params.append(limite)
+
+    conn = get_db()
+    rows = conn.execute(sql, params).fetchall()
+    conn.close()
+    return jsonify([{
+        "id": r[0], "nombre": r[1], "codigo_barras": r[2] or "",
+        "precio_venta": r[3], "stock_actual": r[4], "dimensiones": r[5] or "",
+    } for r in rows])
+
 
 def _listar_productos(cursor, conn):
     busqueda = (request.args.get('q') or '').strip()

@@ -65,4 +65,8 @@ INDICES = (
     "CREATE INDEX IF NOT EXISTS idx_movinv_producto ON movimientos_inventario(id_producto)",
     "CREATE INDEX IF NOT EXISTS idx_pedidos_estado ON pedidos (estado)",
     "CREATE INDEX IF NOT EXISTS idx_pedidos_moto  ON pedidos (id_motocarguero)",
+    # Índice compuesto para el patrón real del POS: filtrar activos y ordenar por nombre.
+    "CREATE INDEX IF NOT EXISTS idx_prod_activo_nombre ON productos(activo, nombre COLLATE NOCASE)",
+    # Índice para acelerar el cálculo de cartera (ventas con saldo pendiente).
+    "CREATE INDEX IF NOT EXISTS idx_ventas_cliente_saldo ON ventas(id_cliente, saldo_pendiente)",
 )

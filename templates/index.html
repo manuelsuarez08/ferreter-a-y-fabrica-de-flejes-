@@ -523,6 +523,18 @@
           </div>
         </div>
 
+        <div class="row align-items-center mb-2 g-2">
+          <div class="col-md-5">
+            <input type="text" id="filtro-tabla-productos" class="form-control"
+                   placeholder="🔍 Buscar producto en el inventario (nombre, código o categoría)..."
+                   spellcheck="false"
+                   oninput="filtrarTablaProductos(this.value)">
+          </div>
+          <div class="col-md-7 text-muted small">
+            La tabla muestra solo los primeros 30 resultados para mantener la página rápida; usa el buscador para acotar.
+          </div>
+        </div>
+
         <div class="table-responsive">
           <table class="table table-striped table-hover align-middle border">
             <thead class="table-light">
@@ -1532,6 +1544,16 @@
     let equiposAlquilerLista = [];
     let tsCliente, tsProducto, tsProdNombre;
     let facturaActualId = null;
+
+    // ── Utilidad de rendimiento: retrasa la ejecución hasta que el usuario
+    // deje de escribir (evita una petición por cada tecla). ──────────────
+    function debounce(fn, espera = 300) {
+      let temporizador;
+      return function (...args) {
+        clearTimeout(temporizador);
+        temporizador = setTimeout(() => fn.apply(this, args), espera);
+      };
+    }
     let alquilerItems = [];
 
       function monedaCOP(valor) {
@@ -2101,13 +2123,47 @@
       }
 
       if (tsProducto) tsProducto.destroy();
+      // RENDIMIENTO: búsqueda server-side con debounce. No se cargan los 661
+      // productos en el DOM; se piden solo los primeros 30 coincidentes.
       tsProducto = new TomSelect('#select-producto', {
-        options: productosLista.map(p => ({
-          value: p.id,
-          text: `${p.nombre} ${p.dimensiones ? '['+p.dimensiones+']' : ''} - ${monedaCOP(p.precio_venta)} (Disp: ${p.stock_actual})${p.codigo_barras ? ` - ${p.codigo_barras}` : ''}`
-        })),
+        valueField: 'id',
+        labelField: 'nombre',
+        searchField: ['nombre', 'codigo_barras'],
+        maxOptions: 30,
         create: false,
+        loadThrottle: 300,
+        preload: false,
+        load: debounce(async function(query, callback) {
+          if (!query.length) { callback(); return; }
+          try {
+            const res = await fetch('/api/productos/pos?limite=30&q=' + encodeURIComponent(query));
+            const data = await res.json();
+            callback(data.map(p => ({
+              id: p.id,
+              nombre: `${p.nombre} ${p.dimensiones ? '['+p.dimensiones+']' : ''} - ${monedaCOP(p.precio_venta)} (Disp: ${p.stock_actual})`,
+              codigo_barras: p.codigo_barras || '',
+              precio_venta: p.precio_venta,
+              stock_actual: p.stock_actual
+            })));
+          } catch (e) {
+            callback();
+          }
+        }, 300),
+        render: {
+          option: function(item, escape) {
+            return `<div>${escape(item.nombre)}</div>`;
+          },
+          item: function(item, escape) {
+            return `<div>${escape(item.nombre)}</div>`;
+          }
+        },
         onChange: function(val) {
+          const sel = val && this.options[val];
+          if (sel) {
+            // Si viene del endpoint liviano, guardarlo para que mostrarDetallesProducto lo encuentre.
+            const existente = productosLista.find(p => String(p.id) === String(sel.id));
+            if (!existente) productosLista.push({ id: sel.id, nombre: sel.nombre, dimensiones: '', precio_venta: sel.precio_venta, stock_actual: sel.stock_actual, codigo_barras: sel.codigo_barras });
+          }
           mostrarDetallesProducto(val);
         }
       });
@@ -2414,48 +2470,66 @@
       }
     }
 
+    // RENDIMIENTO: solo se pintan las primeras N filas del inventario para no
+    // congelar el navegador con cientos de filas; el resto se filtra buscando.
+    const LIMITE_TABLA_INVENTARIO = 30;
+
+    function renderFilaProducto(p) {
+      const estado = p.stock_actual <= p.stock_minimo
+        ? '<span class="badge bg-danger">Bajo Stock</span>'
+        : '<span class="badge bg-success">OK</span>';
+      const badgeAuditado = p.auditado
+        ? `<span class="badge bg-success" title="${escapeHtml(p.fecha_auditoria || '')}">Auditado</span>`
+        : '<span class="badge bg-secondary">Sin auditar</span>';
+      return `
+        <tr>
+          <td>${p.id}</td>
+          <td>${escapeHtml(p.codigo_barras || '')}</td>
+          <td><strong>${escapeHtml(p.nombre)}</strong></td>
+          <td>${escapeHtml(p.categoria || '')}</td>
+          <td>${escapeHtml(p.dimensiones || '')}</td>
+          <td>${monedaCOP(p.precio_venta)}</td>
+          <td class="fw-bold">${p.stock_actual}</td>
+          <td>${badgeAuditado}</td>
+          <td>${estado}</td>
+          <td>
+            <button type="button" class="btn btn-sm btn-warning" onclick="editarProducto(${p.id})">Editar</button>
+            <button type="button" class="btn btn-sm btn-info text-white" onclick="recontarProducto(${p.id})">Recontar</button>
+            <button type="button" class="btn btn-sm btn-danger" onclick="eliminarProducto(${p.id})">Eliminar</button>
+          </td>
+        </tr>`;
+    }
+
+    function pintarTablaProductos(lista) {
+      const tbody = document.getElementById('tabla-productos-body');
+      if (!tbody) return;
+      if (!lista.length) {
+        tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted">Sin productos que coincidan.</td></tr>';
+        return;
+      }
+      const visibles = lista.slice(0, LIMITE_TABLA_INVENTARIO);
+      let html = visibles.map(renderFilaProducto).join('');
+      if (lista.length > visibles.length) {
+        html += `<tr><td colspan="11" class="text-center text-muted small">Mostrando ${visibles.length} de ${lista.length}. Usa el buscador para acotar.</td></tr>`;
+      }
+      tbody.innerHTML = html;
+    }
+
     async function cargarProductosTabla() {
       const res = await fetch('/api/productos');
       productosLista = await res.json();
       const movimientoProducto = document.getElementById('mov-producto');
       if (movimientoProducto) {
-        movimientoProducto.innerHTML = '<option value="">Producto</option>' + productosLista.map(p => `<option value="${p.id}">${escapeHtml(p.nombre || '')} (stock: ${p.stock_actual})</option>`).join('');
+        movimientoProducto.innerHTML = '<option value="">Producto</option>' + productosLista.slice(0, LIMITE_TABLA_INVENTARIO).map(p => `<option value="${p.id}">${escapeHtml(p.nombre || '')} (stock: ${p.stock_actual})</option>`).join('');
       }
 
-      const tbody = document.getElementById('tabla-productos-body');
-      tbody.innerHTML = '';
-
-      productosLista.forEach(p => {
-        const estado = p.stock_actual <= p.stock_minimo
-          ? '<span class="badge bg-danger">Bajo Stock</span>'
-          : '<span class="badge bg-success">OK</span>';
-        const badgeAuditado = p.auditado
-          ? `<span class="badge bg-success" title="${escapeHtml(p.fecha_auditoria || '')}">Auditado</span>`
-          : '<span class="badge bg-secondary">Sin auditar</span>';
-        tbody.innerHTML += `
-          <tr>
-            <td>${p.id}</td>
-            <td>${escapeHtml(p.codigo_barras || '')}</td>
-            <td><strong>${escapeHtml(p.nombre)}</strong></td>
-            <td>${escapeHtml(p.categoria || '')}</td>
-            <td>${escapeHtml(p.dimensiones || '')}</td>
-            <td>${monedaCOP(p.precio_venta)}</td>
-            <td class="fw-bold">${p.stock_actual}</td>
-            <td>${badgeAuditado}</td>
-            <td>${estado}</td>
-            <td>
-              <button type="button" class="btn btn-sm btn-warning" onclick="editarProducto(${p.id})">Editar</button>
-              <button type="button" class="btn btn-sm btn-info text-white" onclick="recontarProducto(${p.id})">Recontar</button>
-              <button type="button" class="btn btn-sm btn-danger" onclick="eliminarProducto(${p.id})">Eliminar</button>
-            </td>
-          </tr>
-        `;
-      });
+      pintarTablaProductos(productosLista);
 
       if (tsProdNombre) tsProdNombre.destroy();
       tsProdNombre = new TomSelect('#prod-nombre', {
         options: productosLista.map(p => ({ value: p.id, text: `${p.nombre}${p.dimensiones ? ` [${p.dimensiones}]` : ''}` })),
         create: true,
+        maxOptions: 50,
         onChange: function(val) {
           mostrarDatosProductoInventario(val);
         }
@@ -2463,6 +2537,24 @@
 
       await cargarInventarioFlejes();
     }
+
+    // Búsqueda en la tabla de inventario con debounce + endpoint liviano.
+    const filtrarTablaProductos = debounce(async function(texto) {
+      const q = (texto || '').trim();
+      if (!q) { pintarTablaProductos(productosLista); return; }
+      try {
+        const res = await fetch('/api/productos/pos?limite=30&q=' + encodeURIComponent(q));
+        const data = await res.json();
+        // El endpoint liviano no trae stock_minimo/auditado: se completan desde la lista.
+        const completa = data.map(d => {
+          const base = productosLista.find(p => String(p.id) === String(d.id)) || {};
+          return Object.assign({}, base, d);
+        });
+        pintarTablaProductos(completa);
+      } catch (e) {
+        pintarTablaProductos([]);
+      }
+    }, 300);
 
     function mostrarDatosProductoInventario(idProducto) {
       const producto = productosLista.find(p => String(p.id) === String(idProducto));
