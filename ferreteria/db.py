@@ -532,3 +532,17 @@ def _crear_tablas_cotizaciones(cursor):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_cot_fecha ON cotizaciones (fecha)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_cot_consecutivo ON cotizaciones (consecutivo_cotizacion)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_detcot_cotizacion ON detalle_cotizaciones (id_cotizacion)")
+    # Notificaciones cuando un cliente aprueba una cotizacion desde el enlace.
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS notificaciones_cotizaciones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_cotizacion INTEGER NOT NULL,
+            consecutivo TEXT NOT NULL,
+            cliente TEXT,
+            mensaje TEXT NOT NULL,
+            leida INTEGER NOT NULL DEFAULT 0,
+            fecha TEXT NOT NULL,
+            FOREIGN KEY (id_cotizacion) REFERENCES cotizaciones(id)
+        )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_notcot_leida ON notificaciones_cotizaciones (leida)")

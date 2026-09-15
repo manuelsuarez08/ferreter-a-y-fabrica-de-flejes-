@@ -173,6 +173,12 @@
           🧵 Flejes Listos
           <span id="badge-notificaciones-flejes" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display:none;">0</span>
         </button>
+        {% if rol != 'fabrica' and rol != 'pedidos' %}
+        <button type="button" class="btn btn-dark position-relative fw-bold" onclick="abrirModalNotificacionesCotizaciones()">
+          🧾 Cotizaciones
+          <span id="badge-notificaciones-cot" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display:none;">0</span>
+        </button>
+        {% endif %}
 
         <span class="navbar-text text-white">
           Usuario: <strong>{{ usuario }}</strong> ({{ rol }}) | <a href="/logout" class="text-white text-decoration-underline">Cerrar Sesión</a>
@@ -1622,6 +1628,7 @@
           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
           <button type="button" class="btn btn-primary fw-bold" onclick="imprimirRecibo('area-comprobante-abono', 'abono')">🖨️ Imprimir recibo</button>
           <button type="button" class="btn btn-success fw-bold" onclick="descargarComprobanteAbono()">Descargar PDF</button>
+          <button type="button" class="btn fw-bold text-white" style="background:#25D366;" onclick="whatsappAbono()">📱 WhatsApp</button>
         </div>
       </div>
     </div>
@@ -1799,7 +1806,28 @@
      </div>
   </div>
 
-     <!-- MODAL ENVIAR COTIZACIÓN POR WHATSAPP -->
+     <!-- MODAL NOTIFICACIONES DE COTIZACIONES APROBADAS -->
+ <div class="modal fade" id="modalNotificacionesCotizaciones" tabindex="-1">
+    <div class="modal-dialog modal-dialog-scrollable">
+      <div class="modal-content">
+        <div class="modal-header bg-dark text-white">
+          <h5 class="modal-title">🧾 Cotizaciones aprobadas por el cliente</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <ul id="lista-notificaciones-cot" class="list-group">
+            <li class="list-group-item text-center text-muted">No hay notificaciones.</li>
+          </ul>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+          <button type="button" class="btn btn-primary fw-bold" onclick="marcarNotificacionesCotLeidas()">Marcar como leídas</button>
+        </div>
+      </div>
+    </div>
+ </div>
+
+   <!-- MODAL ENVIAR COTIZACIÓN POR WHATSAPP -->
    <div class="modal fade" id="modalWhatsappCotizacion" tabindex="-1">
       <div class="modal-dialog">
         <div class="modal-content">
@@ -1882,6 +1910,7 @@
     let tsCliente, tsProducto, tsProdNombre;
     let facturaActualId = null;
     let facturaActual = null;
+    let comprobanteAbonoActual = null;
 
     // ── Utilidad de rendimiento: retrasa la ejecución hasta que el usuario
     // deje de escribir (evita una petición por cada tecla). ──────────────
@@ -3226,6 +3255,7 @@
     }
 
     function mostrarComprobanteAbono(abono, autoPrint) {
+      comprobanteAbonoActual = abono;
       const negocio = (window.datosNegocio || {});
       setTexto('abono-negocio-nombre', (negocio.nombre || 'Ferretería y Fábrica de Flejes').toUpperCase());
       setTexto('abono-negocio-nit', (negocio.nit ? `NIT: ${negocio.nit}` : '') + (negocio.telefono ? ` | Tel: ${negocio.telefono}` : ''));
@@ -3248,6 +3278,37 @@
 
     function descargarComprobanteAbono() {
       html2pdf().from(document.getElementById('area-comprobante-abono')).save(`comprobante-abono-${document.getElementById('abono-id').innerText}.pdf`);
+    }
+
+    // Construye el mensaje del recibo de abono para WhatsApp.
+    function construirMensajeAbono(a) {
+      const negocio = (window.datosNegocio || {});
+      const moneda = (v) => '$' + Number(v || 0).toLocaleString('es-CO') + ' COP';
+      const lineas = [];
+      lineas.push('*' + (negocio.nombre || 'FERRETERÍA Y FÁBRICA DE FLEJES').toUpperCase() + '*');
+      if (negocio.telefono) lineas.push('Tel: ' + negocio.telefono);
+      lineas.push('');
+      lineas.push('*RECIBO DE ABONO N° ' + a.id + '*');
+      lineas.push('Fecha: ' + a.fecha);
+      lineas.push('Cliente: ' + a.cliente);
+      lineas.push('');
+      lineas.push('Deuda anterior: ' + moneda(a.deuda_anterior));
+      lineas.push('*Abono recibido: ' + moneda(a.monto) + '*');
+      lineas.push('*Saldo pendiente: ' + moneda(a.saldo_pendiente) + '*');
+      lineas.push('');
+      lineas.push('¡Gracias por su pago!');
+      lineas.push('Conserve este comprobante como constancia de su abono.');
+      return lineas.join('\n');
+    }
+
+    function whatsappAbono() {
+      if (!comprobanteAbonoActual) { alert('Registre primero un abono.'); return; }
+      const tel = normalizarTelefonoWA(comprobanteAbonoActual.telefono);
+      const mensaje = construirMensajeAbono(comprobanteAbonoActual);
+      const url = tel
+        ? 'https://wa.me/' + tel + '?text=' + encodeURIComponent(mensaje)
+        : 'https://wa.me/?text=' + encodeURIComponent(mensaje);
+      window.open(url, '_blank');
     }
 
     // ── Impresión de tirilla térmica (58mm/80mm) ───────────────────────────
@@ -3826,7 +3887,54 @@
     document.addEventListener('DOMContentLoaded', () => {
       pollNotificacionesPedidos();
       setInterval(pollNotificacionesPedidos, 20000);
+      pollNotificacionesCotizaciones();
+      setInterval(pollNotificacionesCotizaciones, 20000);
     });
+
+    // ══ Notificaciones de cotizaciones aprobadas por el cliente ══
+    async function pollNotificacionesCotizaciones() {
+      try {
+        const res = await fetch('/api/cotizaciones/notificaciones');
+        if (!res.ok) return;
+        const data = await res.json();
+        const badge = document.getElementById('badge-notificaciones-cot');
+        const total = Number(data.total) || 0;
+        if (badge) {
+          if (total > 0) { badge.textContent = total; badge.style.display = 'inline-block'; }
+          else { badge.style.display = 'none'; }
+        }
+      } catch (e) { /* silencioso */ }
+    }
+
+    async function abrirModalNotificacionesCotizaciones() {
+      const ul = document.getElementById('lista-notificaciones-cot');
+      ul.innerHTML = '<li class="list-group-item text-center text-muted">Cargando...</li>';
+      try {
+        const res = await fetch('/api/cotizaciones/notificaciones');
+        const data = await res.json();
+        if (!data.notificaciones.length) {
+          ul.innerHTML = '<li class="list-group-item text-center text-muted">No hay cotizaciones aprobadas todavía.</li>';
+        } else {
+          ul.innerHTML = data.notificaciones.map(n => `
+            <li class="list-group-item d-flex justify-content-between align-items-center ${n.leida ? '' : 'list-group-item-success'}">
+              <div>
+                <strong>${escapeHtml(n.mensaje)}</strong><br>
+                <small class="text-muted">${escapeHtml(n.fecha)}</small>
+              </div>
+              <button class="btn btn-sm btn-outline-primary" onclick="verCotizacion(${n.id_cotizacion})">Ver</button>
+            </li>`).join('');
+        }
+      } catch (e) {
+        ul.innerHTML = '<li class="list-group-item text-center text-danger">No se pudieron cargar las notificaciones.</li>';
+      }
+      new bootstrap.Modal(document.getElementById('modalNotificacionesCotizaciones')).show();
+    }
+
+    async function marcarNotificacionesCotLeidas() {
+      await fetch('/api/cotizaciones/notificaciones/marcar_leidas', { method: 'POST' });
+      pollNotificacionesCotizaciones();
+      bootstrap.Modal.getInstance(document.getElementById('modalNotificacionesCotizaciones')).hide();
+    }
 
     function irAPedidos() {
       const tab = document.getElementById('pedidos-tab');

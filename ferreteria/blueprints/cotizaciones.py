@@ -329,6 +329,36 @@ def registrar(app):
     """Conecta este blueprint a la aplicación."""
     app.register_blueprint(bp)
 
+@bp.route('/api/cotizaciones/notificaciones', methods=['GET'])
+@login_required
+def notificaciones_cotizaciones():
+    # Notificaciones de cotizaciones aprobadas por el cliente.
+    conn = get_db()
+    rows = conn.execute(
+        "SELECT id, id_cotizacion, consecutivo, cliente, mensaje, leida, fecha "
+        "FROM notificaciones_cotizaciones ORDER BY id DESC LIMIT 50"
+    ).fetchall()
+    total = conn.execute(
+        "SELECT COUNT(*) FROM notificaciones_cotizaciones WHERE leida = 0"
+    ).fetchone()[0]
+    conn.close()
+    return jsonify({
+        "total": total,
+        "notificaciones": [{
+            "id": r[0], "id_cotizacion": r[1], "consecutivo": r[2],
+            "cliente": r[3] or "", "mensaje": r[4], "leida": bool(r[5]), "fecha": r[6],
+        } for r in rows],
+    })
+
+@bp.route('/api/cotizaciones/notificaciones/marcar_leidas', methods=['POST'])
+@login_required
+def marcar_leidas_cotizaciones():
+    conn = get_db()
+    conn.execute("UPDATE notificaciones_cotizaciones SET leida = 1 WHERE leida = 0")
+    conn.commit()
+    conn.close()
+    return jsonify({"mensaje": "Notificaciones marcadas como leidas"})
+
 
 def _cotizacion_completa(conn, id_cotizacion):
     # Devuelve el dict completo de una cotizacion (cabecera + items + negocio).
@@ -409,6 +439,19 @@ def aprobar_cotizacion(id_cotizacion):
         conn.close()
         return jsonify({"error": "Esta cotizacion fue anulada"}), 400
     conn.execute("UPDATE cotizaciones SET estado = 'Aprobada' WHERE id = ?", (id_cotizacion,))
+
+    # Notificacion interna para que el negocio vea la aprobacion en el panel.
+    cliente = conn.execute("SELECT nombre_cliente, total FROM cotizaciones WHERE id = ?",
+                           (id_cotizacion,)).fetchone()
+    nombre_cli = (cliente[0] if cliente else 'Cliente')
+    total_cot = float(cliente[1] or 0) if cliente else 0.0
+    mensaje = f'{nombre_cli} aprobó la cotización {cot[0]} por ${total_cot:,.0f}'
+    conn.execute(
+        "INSERT INTO notificaciones_cotizaciones (id_cotizacion, consecutivo, cliente, mensaje, fecha) "
+        "VALUES (:cot, :consec, :cli, :msg, :fecha)",
+        {'cot': id_cotizacion, 'consec': cot[0], 'cli': nombre_cli, 'msg': mensaje, 'fecha': _ahora()},
+    )
+
     registrar_auditoria(conn, 'aprobar', 'cotizacion', id_cotizacion,
                         f'Cotizacion {cot[0]} aprobada por el cliente desde el enlace publico')
     conn.commit()
