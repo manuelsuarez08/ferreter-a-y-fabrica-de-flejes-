@@ -45,6 +45,9 @@ ESTADOS_DESPACHO = ('pendiente_preparar', 'preparando', 'listo', 'entregado')
 # Estados del flujo de pedidos.
 ESTADOS_PEDIDO = ('pendiente', 'alistando', 'listo', 'en_camino', 'entregado', 'cancelado')
 
+# Estados válidos de una cotización.
+ESTADOS_COTIZACION = ('Pendiente', 'Aprobada', 'Vencida', 'Anulada')
+
 # Máquina de estados de pedidos validada por rol (patrón State).
 TRANSICIONES_PEDIDO = {
     'pendiente': {'admin': ['alistando', 'cancelado'], 'empleado': ['cancelado'], 'bodega': ['alistando', 'cancelado']},

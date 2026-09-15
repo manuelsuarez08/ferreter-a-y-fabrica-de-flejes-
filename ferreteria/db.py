@@ -445,6 +445,7 @@ def init_db():
     _crear_tablas_operacion(cursor)
     _crear_tablas_alquiler(cursor)
     _crear_tablas_pedidos(cursor)
+    _crear_tablas_cotizaciones(cursor)
     _aplicar_migraciones(cursor)
     _sembrar_datos_por_defecto(cursor)
 
@@ -492,3 +493,42 @@ def asegurar_base_de_datos():
         return True
 
     return False
+def _crear_tablas_cotizaciones(cursor):
+    # Tablas del módulo de cotizaciones. Guardar una cotización NO toca stock,
+    # cartera ni ventas: es solo una propuesta de precio al cliente.
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS cotizaciones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            consecutivo_cotizacion TEXT NOT NULL UNIQUE,
+            id_cliente INTEGER,
+            nombre_cliente TEXT NOT NULL,
+            cedula_nit TEXT,
+            telefono TEXT,
+            direccion TEXT,
+            fecha TEXT NOT NULL,
+            vigencia TEXT,
+            observaciones TEXT,
+            total REAL NOT NULL DEFAULT 0,
+            estado TEXT NOT NULL DEFAULT 'Pendiente'
+                CHECK (estado IN ('Pendiente', 'Aprobada', 'Vencida', 'Anulada')),
+            usuario TEXT,
+            FOREIGN KEY (id_cliente) REFERENCES clientes(id)
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS detalle_cotizaciones (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_cotizacion INTEGER NOT NULL,
+            id_producto INTEGER,
+            descripcion TEXT NOT NULL,
+            cantidad REAL NOT NULL DEFAULT 1,
+            precio_unitario REAL NOT NULL DEFAULT 0,
+            subtotal REAL NOT NULL DEFAULT 0,
+            FOREIGN KEY (id_cotizacion) REFERENCES cotizaciones(id),
+            FOREIGN KEY (id_producto) REFERENCES productos(id)
+        )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_cot_cliente ON cotizaciones (id_cliente)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_cot_fecha ON cotizaciones (fecha)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_cot_consecutivo ON cotizaciones (consecutivo_cotizacion)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_detcot_cotizacion ON detalle_cotizaciones (id_cotizacion)")

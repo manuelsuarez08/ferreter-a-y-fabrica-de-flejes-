@@ -228,6 +228,9 @@
       <li class="nav-item">
         <button class="nav-link" id="facturas-tab" data-bs-toggle="tab" data-bs-target="#facturas" type="button" onclick="cargarFacturasTabla()">📄 Facturas de Ventas</button>
       </li>
+      <li class="nav-item">
+        <button class="nav-link" id="cotizaciones-tab" data-bs-toggle="tab" data-bs-target="#cotizaciones" type="button" onclick="cargarCotizaciones()">🧾 Cotizaciones</button>
+      </li>
       {% endif %}
       {% if rol != 'fabrica' %}
       <li class="nav-item">
@@ -1241,31 +1244,84 @@
           </div>
         </div>
 
-        <div class="card p-3 border">
-          <h5 class="mb-3">📌 Alquileres activos y alertas</h5>
-          <div class="table-responsive">
-            <table class="table table-hover align-middle border">
-              <thead class="table-dark">
-                <tr>
-                  <th>ID</th>
-                  <th>Cliente</th>
-                  <th>Equipo</th>
-                  <th>Salida</th>
-                  <th>Devolución pactada</th>
-                  <th>Estado</th>
-                  <th>Acción</th>
-                </tr>
-              </thead>
-              <tbody id="tabla-alquiler-activos">
-                <tr><td colspan="7" class="text-center text-muted">Cargando alquileres activos...</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
-      </div>
+               <div class="card p-3 border">
+                 <h5 class="mb-3">📌 Alquileres activos y alertas</h5>
+                 <div class="table-responsive">
+                   <table class="table table-hover align-middle border">
+                     <thead class="table-dark">
+                       <tr>
+                         <th>ID</th>
+                         <th>Cliente</th>
+                         <th>Equipo</th>
+                         <th>Salida</th>
+                         <th>Devolución pactada</th>
+                         <th>Estado</th>
+                         <th>Acción</th>
+                       </tr>
+                     </thead>
+                     <tbody id="tabla-alquiler-activos">
+                       <tr><td colspan="7" class="text-center text-muted">Cargando alquileres activos...</td></tr>
+                     </tbody>
+                   </table>
+                 </div>
+               </div>
+             </div>
 
-    </div>
-  </div>
+             <!-- Pestaña Cotizaciones -->
+             <div class="tab-pane fade" id="cotizaciones">
+               <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
+                 <h4 class="mb-0">🧾 Cotizaciones por Cliente</h4>
+                 <button class="btn btn-success fw-bold" onclick="abrirModalNuevaCotizacion()">➕ Nueva cotización</button>
+               </div>
+
+               <div class="row align-items-center mb-3 g-2">
+                 <div class="col-md-4">
+                   <input type="text" id="cot-filtro" class="form-control"
+                          placeholder="🔍 Buscar por cliente, cédula/NIT o consecutivo..."
+                          spellcheck="false" oninput="filtrarCotizaciones(this.value)">
+                 </div>
+                 <div class="col-md-2">
+                   <input type="date" id="cot-desde" class="form-control" onchange="cargarCotizaciones()">
+                 </div>
+                 <div class="col-md-2">
+                   <input type="date" id="cot-hasta" class="form-control" onchange="cargarCotizaciones()">
+                 </div>
+                 <div class="col-md-2">
+                   <select id="cot-estado" class="form-select" onchange="cargarCotizaciones()">
+                     <option value="">Todos los estados</option>
+                     <option value="Pendiente">Pendiente</option>
+                     <option value="Aprobada">Aprobada</option>
+                     <option value="Vencida">Vencida</option>
+                     <option value="Anulada">Anulada</option>
+                   </select>
+                 </div>
+                 <div class="col-md-2">
+                   <button class="btn btn-outline-secondary w-100" onclick="limpiarFiltrosCotizaciones()">Limpiar</button>
+                 </div>
+               </div>
+
+               <div class="table-responsive">
+                 <table class="table table-striped table-hover align-middle border">
+                   <thead class="table-light">
+                     <tr>
+                       <th>Consecutivo</th>
+                       <th>Fecha</th>
+                       <th>Cliente</th>
+                       <th>Ítems</th>
+                       <th>Total</th>
+                       <th>Estado</th>
+                       <th>Acciones</th>
+                     </tr>
+                   </thead>
+                   <tbody id="tabla-cotizaciones-body">
+                     <tr><td colspan="7" class="text-center text-muted">Cargando cotizaciones...</td></tr>
+                   </tbody>
+                 </table>
+               </div>
+             </div>
+
+           </div>
+        </div>
 
   <!-- MODAL NUEVO PEDIDO -->
   <div class="modal fade" id="modalNuevoPedido" tabindex="-1">
@@ -1570,7 +1626,177 @@
     </div>
   </div>
 
-  <!-- MODAL LECTOR DE CÁMARA - CÓDIGO DE BARRAS -->
+   <!-- MODAL NUEVA COTIZACIÓN -->
+  <div class="modal fade" id="modalNuevaCotizacion" tabindex="-1">
+     <div class="modal-dialog modal-xl">
+       <div class="modal-content">
+         <div class="modal-header bg-dark text-white">
+           <h5 class="modal-title fw-bold">🧾 Nueva Cotización</h5>
+           <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+         </div>
+         <div class="modal-body">
+           <div class="row g-3 mb-3">
+             <div class="col-md-4">
+               <label class="form-label fw-bold">Cliente registrado</label>
+               <select id="cot-cliente" placeholder="Buscar cliente..."></select>
+             </div>
+             <div class="col-md-4">
+               <label class="form-label fw-bold">O cliente ocasional (nombre)</label>
+               <input type="text" id="cot-cliente-libre" class="form-control" placeholder="Ej: Juan Pérez (ocasional)" spellcheck="true">
+             </div>
+             <div class="col-md-2">
+               <label class="form-label fw-bold">Cédula / NIT</label>
+               <input type="text" id="cot-cedula" class="form-control" placeholder="Opcional">
+             </div>
+             <div class="col-md-2">
+               <label class="form-label fw-bold">Teléfono</label>
+               <input type="text" id="cot-telefono" class="form-control" placeholder="Opcional">
+             </div>
+           </div>
+
+           <div class="card p-3 mb-3 border">
+             <h6 class="fw-bold mb-2">Agregar ítems a la cotización</h6>
+             <div class="row g-2 align-items-end">
+               <div class="col-md-5">
+                 <label class="form-label fw-bold">Producto</label>
+                 <select id="cot-select-producto" placeholder="Buscar producto..."></select>
+               </div>
+               <div class="col-md-2">
+                 <label class="form-label fw-bold">Cantidad</label>
+                 <input type="number" min="0.01" step="0.01" id="cot-cantidad" class="form-control" value="1">
+               </div>
+               <div class="col-md-2">
+                 <label class="form-label fw-bold">Precio Unit.</label>
+                 <input type="number" min="0" step="0.01" id="cot-precio" class="form-control" placeholder="Automático">
+               </div>
+               <div class="col-md-3">
+                 <button type="button" class="btn btn-warning w-100 fw-bold" onclick="agregarItemCotizacion()">➕ Agregar</button>
+               </div>
+             </div>
+             <div class="row g-2 align-items-end mt-2">
+               <div class="col-md-9">
+                 <label class="form-label fw-bold">O ítem libre (material especial / fleje a medida)</label>
+                 <input type="text" id="cot-item-libre-desc" class="form-control" placeholder="Ej: Fleje 3/8 x 10x20 cm, 50 pzs" spellcheck="true">
+               </div>
+               <div class="col-md-3">
+                 <button type="button" class="btn btn-outline-warning w-100 fw-bold" onclick="agregarItemLibreCotizacion()">Agregar ítem libre</button>
+               </div>
+             </div>
+           </div>
+
+           <div class="table-responsive mb-3">
+             <table class="table table-sm table-bordered align-middle">
+               <thead class="table-light">
+                 <tr>
+                   <th>Descripción</th>
+                   <th class="text-center" style="width:110px">Cantidad</th>
+                   <th class="text-end" style="width:150px">Precio Unit.</th>
+                   <th class="text-end" style="width:150px">Subtotal</th>
+                   <th style="width:60px"></th>
+                 </tr>
+               </thead>
+               <tbody id="tabla-cot-items-body">
+                 <tr><td colspan="5" class="text-center text-muted">Sin ítems. Agregue productos arriba.</td></tr>
+               </tbody>
+               <tfoot>
+                 <tr class="table-light fw-bold">
+                   <td colspan="3" class="text-end">TOTAL COTIZADO:</td>
+                   <td class="text-end text-primary" id="cot-total-texto">$ 0 COP</td>
+                   <td></td>
+                 </tr>
+               </tfoot>
+             </table>
+           </div>
+
+           <div class="row g-3">
+             <div class="col-md-4">
+               <label class="form-label fw-bold">Vigencia</label>
+               <input type="text" id="cot-vigencia" class="form-control" value="Válido por 15 días" spellcheck="true">
+             </div>
+             <div class="col-md-8">
+               <label class="form-label fw-bold">Observaciones / Notas aclaratorias</label>
+               <input type="text" id="cot-observaciones" class="form-control" placeholder="Ej: precios sujetos a cambio, entrega en 3 días" spellcheck="true">
+             </div>
+           </div>
+         </div>
+         <div class="modal-footer">
+           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+           <button type="button" class="btn btn-success fw-bold" onclick="guardarCotizacion()">💾 Guardar cotización</button>
+         </div>
+       </div>
+     </div>
+  </div>
+
+   <!-- MODAL VER / IMPRIMIR COTIZACIÓN -->
+  <div class="modal fade" id="modalVerCotizacion" tabindex="-1">
+     <div class="modal-dialog modal-lg">
+       <div class="modal-content">
+         <div class="modal-header bg-dark text-white">
+           <h5 class="modal-title fw-bold">Cotización</h5>
+           <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+         </div>
+         <div class="modal-body">
+           <div id="area-cotizacion-pdf" class="factura-box">
+             <div class="text-center mb-2">
+               <h3 class="fw-bold mb-0" id="cot-negocio-nombre">FERRETERÍA Y FÁBRICA DE FLEJES</h3>
+               <p class="text-muted mb-0" id="cot-negocio-nit"></p>
+               <p class="text-muted mb-0" id="cot-negocio-dir"></p>
+               <p class="fw-bold mb-0">COTIZACIÓN N° <span id="cot-ver-consecutivo"></span></p>
+             </div>
+             <div class="recibo-sep"></div>
+             <div class="row mb-2">
+               <div class="col-6">
+                 <p class="mb-1"><strong>Fecha:</strong> <span id="cot-ver-fecha"></span></p>
+                 <p class="mb-1"><strong>Vigencia:</strong> <span id="cot-ver-vigencia"></span></p>
+                 <p class="mb-1"><strong>Estado:</strong> <span id="cot-ver-estado"></span></p>
+               </div>
+               <div class="col-6">
+                 <p class="mb-1"><strong>Cliente:</strong> <span id="cot-ver-cliente"></span></p>
+                 <p class="mb-1"><strong>Cédula/NIT:</strong> <span id="cot-ver-cedula"></span></p>
+                 <p class="mb-1"><strong>Teléfono:</strong> <span id="cot-ver-telefono"></span></p>
+                 <p class="mb-1"><strong>Dirección:</strong> <span id="cot-ver-direccion"></span></p>
+               </div>
+             </div>
+             <div class="recibo-sep"></div>
+             <table class="table table-sm mb-0">
+               <thead class="table-light">
+                 <tr>
+                   <th class="text-center">Cant.</th>
+                   <th>Descripción</th>
+                   <th class="text-end">Precio Unit.</th>
+                   <th class="text-end">Subtotal</th>
+                 </tr>
+               </thead>
+               <tbody id="cot-ver-items-body"></tbody>
+             </table>
+             <div class="recibo-sep"></div>
+             <table class="table table-sm mb-0">
+               <tbody>
+                 <tr class="recibo-total"><th>TOTAL COTIZADO</th><td class="text-end" id="cot-ver-total"></td></tr>
+               </tbody>
+             </table>
+             <p class="mt-2 mb-0" id="cot-ver-observaciones"></p>
+             <div class="recibo-pie">
+               Esta cotización es una propuesta de precio y NO representa una venta.<br>
+               Los precios pueden variar sin previo aviso.<br>
+               <br>
+               _____________________________<br>
+               Firma / Aprobación del cliente
+             </div>
+           </div>
+         </div>
+         <div class="modal-footer">
+           <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+           <button type="button" class="btn btn-warning fw-bold" id="cot-btn-estado">Marcar Aprobada</button>
+           <button type="button" class="btn btn-info text-white fw-bold" onclick="imprimirRecibo('area-cotizacion-pdf', 'cotizacion')">🖨️ Imprimir</button>
+           <button type="button" class="btn btn-success fw-bold" onclick="descargarCotizacionPDF()">📥 PDF</button>
+           <button type="button" class="btn btn-primary fw-bold" onclick="convertirCotizacionAVenta()">🛒 Convertir a Venta</button>
+         </div>
+       </div>
+     </div>
+  </div>
+
+   <!-- MODAL LECTOR DE CÁMARA - CÓDIGO DE BARRAS -->
   <div class="modal fade" id="modalCamaraBarcode" tabindex="-1" data-bs-backdrop="static">
     <div class="modal-dialog modal-dialog-centered">
       <div class="modal-content">
@@ -3797,11 +4023,313 @@
         bootstrap.Modal.getInstance(document.getElementById('modalDetallePedido')).hide();
         cargarPedidos();
         pollNotificacionesPedidos();
-      } else {
-        alert('Error: ' + data.error);
-      }
-    }
+            } else {
+              alert('Error: ' + data.error);
+            }
+          }
 
-  </script>
-</body>
-</html>
+          // ══════
+          //  MÓDULO DE COTIZACIONES
+          //  Guardar una cotización NO toca stock, caja ni cartera. Solo al convertir
+          //  a venta se usa el flujo normal del POS.
+          // ══════
+          let itemsCotizacion = [];
+          let cotizacionesLista = [];
+          let cotizacionActual = null;
+          let tsCotCliente = null;
+          let tsCotProducto = null;
+
+          function abrirModalNuevaCotizacion() {
+            itemsCotizacion = [];
+            document.getElementById('cot-cliente-libre').value = '';
+            document.getElementById('cot-cedula').value = '';
+            document.getElementById('cot-telefono').value = '';
+            document.getElementById('cot-vigencia').value = 'Válido por 15 días';
+            document.getElementById('cot-observaciones').value = '';
+            document.getElementById('cot-item-libre-desc').value = '';
+            renderTablaCotizacion();
+            inicializarSelectsCotizacion();
+            new bootstrap.Modal(document.getElementById('modalNuevaCotizacion')).show();
+          }
+
+          function inicializarSelectsCotizacion() {
+            const clientesOpts = (clientesLista || []).map(c => ({
+              value: String(c.id), text: `${c.nombre} (${c.cedula_nit || 'Sin doc'})`
+            }));
+            if (tsCotCliente) tsCotCliente.destroy();
+            tsCotCliente = new TomSelect('#cot-cliente', {
+              options: clientesOpts, create: false, maxOptions: 50,
+              placeholder: 'Buscar cliente registrado...',
+              onChange: function(val) {
+                const cli = (clientesLista || []).find(c => String(c.id) === String(val));
+                if (cli) {
+                  setTexto('cot-cedula', cli.cedula_nit || '');
+                  setTexto('cot-telefono', cli.telefono || '');
+                  document.getElementById('cot-cliente-libre').value = '';
+                }
+              }
+            });
+
+            if (tsCotProducto) tsCotProducto.destroy();
+            tsCotProducto = new TomSelect('#cot-select-producto', {
+              valueField: 'id', labelField: 'nombre', searchField: ['nombre', 'codigo_barras'],
+              maxOptions: 30, create: false, loadThrottle: 300, preload: false,
+              load: debounce(async function(query, callback) {
+                if (!query.length) { callback(); return; }
+                try {
+                  const res = await fetch('/api/productos/pos?limite=30&q=' + encodeURIComponent(query));
+                  const data = await res.json();
+                  callback(data.map(p => ({
+                    id: p.id,
+                    nombre: `${p.nombre} ${p.dimensiones ? '['+p.dimensiones+']' : ''}`,
+                    precio_venta: p.precio_venta, codigo_barras: p.codigo_barras || ''
+                  })));
+                } catch (e) { callback(); }
+              }, 300),
+              render: {
+                option: (i, escape) => `<div>${escape(i.nombre)} - ${monedaCOP(i.precio_venta)}</div>`,
+                item: (i, escape) => `<div>${escape(i.nombre)}</div>`
+              },
+              onChange: function(val) {
+                const sel = val && this.options[val];
+                if (sel) {
+                  document.getElementById('cot-precio').value = sel.precio_venta;
+                  document.getElementById('cot-cantidad').value = 1;
+                }
+              }
+            });
+          }
+
+          function agregarItemCotizacion() {
+            const prodId = document.getElementById('cot-select-producto').value;
+            const cant = Number(document.getElementById('cot-cantidad').value || 0);
+            const precio = Number(document.getElementById('cot-precio').value || 0);
+            if (!prodId || cant <= 0) {
+              alert('Seleccione un producto y una cantidad válida.');
+              return;
+            }
+            const sel = tsCotProducto && tsCotProducto.options[prodId];
+            const descripcion = sel ? sel.nombre : `Producto #${prodId}`;
+
+            const existe = itemsCotizacion.find(i => String(i.id_producto) === String(prodId));
+            if (existe) {
+              existe.cantidad += cant;
+              existe.precio_unitario = precio;
+              existe.subtotal = existe.cantidad * precio;
+            } else {
+              itemsCotizacion.push({ id_producto: Number(prodId), descripcion, cantidad: cant,
+                                     precio_unitario: precio, subtotal: cant * precio });
+            }
+            renderTablaCotizacion();
+            if (tsCotProducto) tsCotProducto.clear(true);
+            document.getElementById('cot-cantidad').value = 1;
+            document.getElementById('cot-precio').value = '';
+          }
+
+          function agregarItemLibreCotizacion() {
+            const desc = document.getElementById('cot-item-libre-desc').value.trim();
+            const cant = Number(document.getElementById('cot-cantidad').value || 1);
+            const precio = Number(document.getElementById('cot-precio').value || 0);
+            if (!desc) { alert('Escriba la descripción del ítem libre.'); return; }
+            itemsCotizacion.push({ id_producto: null, descripcion: desc, cantidad: cant,
+                                   precio_unitario: precio, subtotal: cant * precio });
+            document.getElementById('cot-item-libre-desc').value = '';
+            document.getElementById('cot-cantidad').value = 1;
+            document.getElementById('cot-precio').value = '';
+            renderTablaCotizacion();
+          }
+
+          function quitarItemCotizacion(idx) {
+            itemsCotizacion.splice(idx, 1);
+            renderTablaCotizacion();
+          }
+
+          function renderTablaCotizacion() {
+            const tbody = document.getElementById('tabla-cot-items-body');
+            if (!tbody) return;
+            if (!itemsCotizacion.length) {
+              tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Sin ítems. Agregue productos arriba.</td></tr>';
+            } else {
+              tbody.innerHTML = itemsCotizacion.map((i, idx) => `
+                <tr>
+                  <td>${escapeHtml(i.descripcion)}</td>
+                  <td class="text-center">${i.cantidad}</td>
+                  <td class="text-end">${monedaCOP(i.precio_unitario)}</td>
+                  <td class="text-end fw-bold">${monedaCOP(i.subtotal)}</td>
+                  <td class="text-center"><button class="btn btn-sm btn-outline-danger" onclick="quitarItemCotizacion(${idx})">✖</button></td>
+                </tr>`).join('');
+            }
+            const total = itemsCotizacion.reduce((a, i) => a + Number(i.subtotal || 0), 0);
+            setTexto('cot-total-texto', monedaCOP(total));
+          }
+
+          async function guardarCotizacion() {
+            const idCliente = document.getElementById('cot-cliente').value;
+            const nombreLibre = document.getElementById('cot-cliente-libre').value.trim();
+            if (!idCliente && !nombreLibre) {
+              alert('Seleccione un cliente registrado o escriba el nombre de un cliente ocasional.');
+              return;
+            }
+            if (!itemsCotizacion.length) {
+              alert('Agregue al menos un ítem a la cotización.');
+              return;
+            }
+            const payload = {
+              id_cliente: idCliente ? Number(idCliente) : null,
+              nombre_cliente: nombreLibre,
+              cedula_nit: document.getElementById('cot-cedula').value.trim(),
+              telefono: document.getElementById('cot-telefono').value.trim(),
+              vigencia: document.getElementById('cot-vigencia').value.trim(),
+              observaciones: document.getElementById('cot-observaciones').value.trim(),
+              items: itemsCotizacion.map(i => ({
+                id_producto: i.id_producto, descripcion: i.descripcion,
+                cantidad: i.cantidad, precio_unitario: i.precio_unitario
+              }))
+            };
+            const res = await fetch('/api/cotizaciones', {
+              method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload)
+            });
+            const data = await res.json();
+            if (!res.ok) { alert('Error: ' + data.error); return; }
+            bootstrap.Modal.getInstance(document.getElementById('modalNuevaCotizacion')).hide();
+            alert(data.mensaje);
+            cargarCotizaciones();
+          }
+
+          function limpiarFiltrosCotizaciones() {
+            document.getElementById('cot-filtro').value = '';
+            document.getElementById('cot-desde').value = '';
+            document.getElementById('cot-hasta').value = '';
+            document.getElementById('cot-estado').value = '';
+            cargarCotizaciones();
+          }
+
+          async function cargarCotizaciones() {
+            const params = new URLSearchParams();
+            const q = document.getElementById('cot-filtro').value.trim();
+            if (q) params.set('q', q);
+            const desde = document.getElementById('cot-desde').value;
+            if (desde) params.set('desde', desde);
+            const hasta = document.getElementById('cot-hasta').value;
+            if (hasta) params.set('hasta', hasta);
+            const estado = document.getElementById('cot-estado').value;
+            if (estado) params.set('estado', estado);
+
+            const res = await fetch('/api/cotizaciones?' + params.toString());
+            cotizacionesLista = await res.json();
+            pintarCotizaciones(cotizacionesLista);
+          }
+
+          const filtrarCotizaciones = debounce(function() { cargarCotizaciones(); }, 300);
+
+          function pintarCotizaciones(lista) {
+            const tbody = document.getElementById('tabla-cotizaciones-body');
+            if (!lista.length) {
+              tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">No hay cotizaciones que coincidan.</td></tr>';
+              return;
+            }
+            const colores = { Pendiente: 'warning text-dark', Aprobada: 'success', Vencida: 'secondary', Anulada: 'danger' };
+            tbody.innerHTML = lista.map(c => `
+              <tr>
+                <td class="fw-bold">${escapeHtml(c.consecutivo)}</td>
+                <td>${escapeHtml(c.fecha)}</td>
+                <td>${escapeHtml(c.cliente)}</td>
+                <td class="text-center">${c.items}</td>
+                <td class="-bold text-primary">${monedaCOP(c.total)}</td>
+                <td><span class="badge bg-${colores[c.estado] || 'secondary'}">${escapeHtml(c.estado)}</span></td>
+                <td>
+                  <button class="btn btn-sm btn-primary" onclick="verCotizacion(${c.id})">Ver</button>
+                  <button class="btn btn-sm btn-success" onclick="convertirDesdeLista(${c.id})">🛒 Facturar</button>
+                </td>
+              </tr>`).join('');
+          }
+
+          async function verCotizacion(id) {
+            const res = await fetch(`/api/cotizaciones/${id}`);
+            const cot = await res.json();
+            if (!res.ok) { alert('Error: ' + cot.error); return; }
+            cotizacionActual = cot;
+            const negocio = cot.negocio || {};
+            setTexto('cot-negocio-nombre', (negocio.nombre || 'Ferretería y Fábrica de Flejes').toUpperCase());
+            setTexto('cot-negocio-nit', (negocio.nit ? `NIT: ${negocio.nit}` : '') + (negocio.telefono ? ` | Tel: ${negocio.telefono}` : ''));
+            setTexto('cot-negocio-dir', negocio.direccion || '');
+            setTexto('cot-ver-consecutivo', cot.consecutivo);
+            setTexto('cot-ver-fecha', cot.fecha);
+            setTexto('cot-ver-vigencia', cot.vigencia);
+            setTexto('cot-ver-estado', cot.estado);
+            setTexto('cot-ver-cliente', cot.cliente);
+            setTexto('cot-ver-cedula', cot.cedula_nit || '');
+            setTexto('cot-ver-telefono', cot.telefono || '');
+            setTexto('cot-ver-direccion', cot.direccion || '');
+            setTexto('cot-ver-total', monedaCOP(cot.total));
+            setTexto('cot-ver-observaciones', cot.observaciones || '');
+            document.getElementById('cot-ver-items-body').innerHTML = cot.items.map(i => `
+              <tr>
+                <td class="text-center">${i.cantidad}</td>
+                <td>${escapeHtml(i.descripcion)}</td>
+                <td class="text-end">${monedaCOP(i.precio_unitario)}</td>
+                <td class="text-end">${monedaCOP(i.subtotal)}</td>
+              </tr>`).join('');
+
+            const esAprobada = cot.estado === 'Aprobada';
+            const btn = document.getElementById('cot-btn-estado');
+            btn.innerText = esAprobada ? 'Marcar Pendiente' : 'Marcar Aprobada';
+            btn.onclick = () => cambiarEstadoCotizacion(id, esAprobada ? 'Pendiente' : 'Aprobada');
+
+            new bootstrap.Modal(document.getElementById('modalVerCotizacion')).show();
+          }
+
+          async function cambiarEstadoCotizacion(id, estado) {
+            const res = await fetch(`/api/cotizaciones/${id}/estado`, {
+              method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ estado })
+            });
+            const data = await res.json();
+            if (!res.ok) { alert('Error: ' + data.error); return; }
+            verCotizacion(id);
+            cargarCotizaciones();
+          }
+
+          function descargarCotizacionPDF() {
+            const consec = document.getElementById('cot-ver-consecutivo').innerText || 'cotizacion';
+            html2pdf().from(document.getElementById('area-cotizacion-pdf')).save(`${consec}.pdf`);
+          }
+
+          // Convierte la cotización abierta: carga sus ítems en el POS para facturar.
+          async function convertirCotizacionAVenta() {
+            if (!cotizacionActual) return;
+            await convertirDesdeLista(cotizacionActual.id);
+          }
+
+          async function convertirDesdeLista(idCotizacion) {
+            const res = await fetch(`/api/cotizaciones/${idCotizacion}/convertir`, { method: 'POST' });
+            const data = await res.json();
+            if (!res.ok) { alert('Error: ' + data.error); return; }
+            if (!data.items.length) {
+              alert('Esta cotización no tiene ítems de productos del inventario para facturar.');
+              return;
+            }
+            // Cerrar modales abiertos y llevar al POS.
+            const modalVer = bootstrap.Modal.getInstance(document.getElementById('modalVerCotizacion'));
+            if (modalVer) modalVer.hide();
+
+            const tab = document.getElementById('ventas-tab');
+            if (tab) bootstrap.Tab.getOrCreateInstance(tab).show();
+
+            // Precargar cliente (si la cotización tenía uno registrado).
+            if (data.id_cliente && tsCliente) tsCliente.setValue(String(data.id_cliente), true);
+
+            // Cargar los ítems en el carrito del POS sin tocar la base de datos.
+            carrito = data.items.map(i => ({
+              id_producto: i.id_producto,
+              nombre: i.descripcion,
+              precio: i.precio_unitario,
+              cantidad: i.cantidad,
+              subtotal: i.cantidad * i.precio_unitario
+            }));
+            actualizarTablaCarrito();
+            alert(`✅ Cotización ${data.consecutivo} cargada en el POS.\nRevise y presione "Registrar Venta" para facturar.`);
+          }
+
+       </script>
+      </body>
+      </html>
