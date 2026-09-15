@@ -321,10 +321,9 @@
               <div class="col-md-4"><strong>Nombre:</strong> <span id="detalle-prod-nombre"></span></div>
               <div class="col-md-4"><strong>Categoría:</strong> <span id="detalle-prod-categoria"></span></div>
               <div class="col-md-4"><strong>Dimensiones:</strong> <span id="detalle-prod-dimensiones"></span></div>
-              <div class="col-md-3"><strong>Precio costo:</strong> <span id="detalle-prod-costo"></span></div>
-              <div class="col-md-3"><strong>Precio venta:</strong> <span id="detalle-prod-venta"></span></div>
-              <div class="col-md-3"><strong>Stock actual:</strong> <span id="detalle-prod-stock"></span></div>
-              <div class="col-md-3"><strong>Stock mínimo:</strong> <span id="detalle-prod-minimo"></span></div>
+              <div class="col-md-4"><strong>Precio venta:</strong> <span id="detalle-prod-venta"></span></div>
+              <div class="col-md-4"><strong>Stock actual:</strong> <span id="detalle-prod-stock"></span></div>
+              <div class="col-md-4"><strong>Stock mínimo:</strong> <span id="detalle-prod-minimo"></span></div>
             </div>
           </div>
 
@@ -392,7 +391,7 @@
             </div>
           </div>
         </div>
- 
+
         <div class="table-responsive mb-3">
           <table class="table table-bordered align-middle">
             <thead class="table-light">
@@ -419,7 +418,7 @@
       <!-- Pestaña Productos -->
       <div class="tab-pane fade" id="productos">
         <h4 class="mb-3">Inventario de Productos</h4>
-        
+
         <div class="card p-3 mb-4 bg-light border">
           <h5 class="fw-bold mb-3">Registrar / Reabastecer Producto</h5>
           <form id="form-producto" onsubmit="guardarProducto(event)" class="row g-3">
@@ -447,11 +446,8 @@
               <label class="form-label fw-bold">Dimensiones / Medida</label>
               <input type="text" id="prod-dimensiones" class="form-control" placeholder="Ej: 10x10 cm, 1/2 pulgada" spellcheck="false">
             </div>
-            <div class="col-md-2">
-              <label class="form-label fw-bold">Precio Costo ($)</label>
-              <input type="number" step="0.01" id="prod-costo" class="form-control" required>
-            </div>
-            <div class="col-md-2">
+            <!-- Precio de costo oculto: se conserva en la DB pero ya no se pide en la interfaz -->
+            <div class="col-md-3">
               <label class="form-label fw-bold">Precio Venta ($)</label>
               <input type="number" step="0.01" id="prod-venta" class="form-control" required>
             </div>
@@ -536,15 +532,15 @@
                 <th>Nombre</th>
                 <th>Categoría</th>
                 <th>Dimensiones</th>
-                <th>Precio Costo</th>
                 <th>Precio Venta</th>
                 <th>Stock Actual</th>
+                <th>Auditado</th>
                 <th>Estado</th>
                 <th>Acciones</th>
               </tr>
             </thead>
             <tbody id="tabla-productos-body">
-              <tr><td colspan="10" class="text-center text-muted">Cargando productos...</td></tr>
+              <tr><td colspan="11" class="text-center text-muted">Cargando productos...</td></tr>
             </tbody>
           </table>
         </div>
@@ -2264,7 +2260,6 @@
       document.getElementById('detalle-prod-nombre').innerText = producto.nombre || 'Sin nombre';
       document.getElementById('detalle-prod-categoria').innerText = producto.categoria || 'Sin categoría';
       document.getElementById('detalle-prod-dimensiones').innerText = producto.dimensiones || 'Sin dimensiones';
-      document.getElementById('detalle-prod-costo').innerText = monedaCOP(producto.precio_costo);
       document.getElementById('detalle-prod-venta').innerText = monedaCOP(producto.precio_venta);
       document.getElementById('detalle-prod-stock').innerText = producto.stock_actual;
       document.getElementById('detalle-prod-minimo').innerText = producto.stock_minimo;
@@ -2283,17 +2278,10 @@
       const prod = productosLista.find(p => p.id == prodId);
       if (!prod) return;
 
-      if (cant > prod.stock_actual) {
-        alert(`Stock insuficiente. Solo hay ${prod.stock_actual} unidades disponibles.`);
-        return;
-      }
-
+      // VENTAS PERMISIVAS: no se bloquea por falta de stock. Se puede vender
+      // aunque el stock sea 0 o quede en negativo (0 - 2 = -2).
       const existe = carrito.find(item => item.id_producto == prodId);
       if (existe) {
-        if (existe.cantidad + cant > prod.stock_actual) {
-          alert(`Supera el stock. Ya agregó ${existe.cantidad} al carrito.`);
-          return;
-        }
         existe.cantidad += cant;
         existe.subtotal = existe.cantidad * prod.precio_venta;
       } else {
@@ -2438,21 +2426,28 @@
       tbody.innerHTML = '';
 
       productosLista.forEach(p => {
-        const estado = p.stock_actual <= p.stock_minimo 
-          ? '<span class="badge bg-danger">Bajo Stock</span>' 
+        const estado = p.stock_actual <= p.stock_minimo
+          ? '<span class="badge bg-danger">Bajo Stock</span>'
           : '<span class="badge bg-success">OK</span>';
+        const badgeAuditado = p.auditado
+          ? `<span class="badge bg-success" title="${escapeHtml(p.fecha_auditoria || '')}">Auditado</span>`
+          : '<span class="badge bg-secondary">Sin auditar</span>';
         tbody.innerHTML += `
           <tr>
             <td>${p.id}</td>
-            <td>${p.codigo_barras || ''}</td>
-            <td><strong>${p.nombre}</strong></td>
-            <td>${p.categoria || ''}</td>
-            <td>${p.dimensiones || ''}</td>
-            <td>${monedaCOP(p.precio_costo)}</td>
+            <td>${escapeHtml(p.codigo_barras || '')}</td>
+            <td><strong>${escapeHtml(p.nombre)}</strong></td>
+            <td>${escapeHtml(p.categoria || '')}</td>
+            <td>${escapeHtml(p.dimensiones || '')}</td>
             <td>${monedaCOP(p.precio_venta)}</td>
             <td class="fw-bold">${p.stock_actual}</td>
+            <td>${badgeAuditado}</td>
             <td>${estado}</td>
-            <td><button type="button" class="btn btn-sm btn-warning" onclick="editarProducto(${p.id})">Editar</button> <button type="button" class="btn btn-sm btn-outline-danger" onclick="desactivarProducto(${p.id})">Desactivar</button></td>
+            <td>
+              <button type="button" class="btn btn-sm btn-warning" onclick="editarProducto(${p.id})">Editar</button>
+              <button type="button" class="btn btn-sm btn-info text-white" onclick="recontarProducto(${p.id})">Recontar</button>
+              <button type="button" class="btn btn-sm btn-danger" onclick="eliminarProducto(${p.id})">Eliminar</button>
+            </td>
           </tr>
         `;
       });
@@ -2478,7 +2473,6 @@
         document.getElementById('prod-categoria').value = '';
         document.getElementById('prod-dimensiones').value = '';
         document.getElementById('prod-codigo-barras').value = '';
-        document.getElementById('prod-costo').value = '';
         document.getElementById('prod-venta').value = '';
         document.getElementById('prod-minimo').value = 5;
         etiquetaStock.innerText = 'Cantidad a Ingresar';
@@ -2489,7 +2483,6 @@
       document.getElementById('prod-categoria').value = producto.categoria || '';
       document.getElementById('prod-dimensiones').value = producto.dimensiones || '';
       document.getElementById('prod-codigo-barras').value = producto.codigo_barras || '';
-      document.getElementById('prod-costo').value = producto.precio_costo;
       document.getElementById('prod-venta').value = producto.precio_venta;
       document.getElementById('prod-minimo').value = producto.stock_minimo;
       etiquetaStock.innerText = `Cantidad a Ingresar (stock actual: ${producto.stock_actual})`;
@@ -2505,7 +2498,7 @@
         categoria: document.getElementById('prod-categoria').value,
         dimensiones: document.getElementById('prod-dimensiones').value,
         codigo_barras: document.getElementById('prod-codigo-barras').value.trim(),
-        precio_costo: document.getElementById('prod-costo').value,
+        // Precio de costo ya NO se envía desde la interfaz (opcional en la DB).
         precio_venta: document.getElementById('prod-venta').value,
         stock_actual: document.getElementById('prod-stock').value,
         stock_minimo: document.getElementById('prod-minimo').value
@@ -2544,12 +2537,56 @@
       if (res.ok) cargarProductosTabla();
     }
 
-    async function desactivarProducto(id) {
-      if (!confirm('¿Desactivar este producto? Se conservará el historial.')) return;
+    // ── Reconteo y auditoría en vivo (AJAX, sin recargar la página) ──────────
+    async function recontarProducto(id) {
+      const producto = productosLista.find(p => p.id === id);
+      if (!producto) return;
+      const contado = prompt(
+        `Reconteo de "${producto.nombre}"\nStock en sistema: ${producto.stock_actual}\n\nIngrese la cantidad REAL contada:`,
+        producto.stock_actual
+      );
+      if (contado === null) return;
+      if (contado === '' || isNaN(Number(contado))) {
+        alert('Debe ingresar un número válido.');
+        return;
+      }
+      // Se envía en segundo plano: no recarga la página ni bloquea la pantalla.
+      const res = await fetch(`/api/productos/${id}/reconteo`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ stock_real: Number(contado) })
+      });
+      const data = await res.json();
+      if (res.ok) {
+        // Actualización local inmediata sin recargar toda la tabla.
+        const p = productosLista.find(x => x.id === id);
+        if (p) {
+          p.stock_actual = data.stock_actual;
+          p.auditado = true;
+          p.fecha_auditoria = data.fecha_auditoria;
+        }
+        // Se refresca la tabla en segundo plano (AJAX), sin recargar la página.
+        cargarProductosTabla();
+        cargarNotificaciones();
+      } else {
+        alert('Error: ' + data.error);
+      }
+    }
+
+    // ── ELIMINACIÓN DIRECTA (reemplaza "Desactivar") ─────────────────────────
+    async function eliminarProducto(id) {
+      const producto = productosLista.find(p => p.id === id);
+      const nombre = producto ? producto.nombre : `#${id}`;
+      if (!confirm(`¿ELIMINAR el producto "${nombre}"?\n\nEsta acción no se puede deshacer.`)) return;
       const res = await fetch(`/api/productos/${id}`, { method: 'DELETE' });
       const data = await res.json();
-      alert(res.ok ? data.mensaje : `Error: ${data.error}`);
-      if (res.ok) { cargarProductosTabla(); cargarFormularioVentas(); }
+      if (!res.ok) {
+        alert('Error: ' + data.error);
+        return;
+      }
+      alert(data.mensaje);
+      cargarProductosTabla();
+      cargarFormularioVentas();
     }
 
     async function cargarClientesTabla() {
