@@ -14,3 +14,6 @@ venv/
 
 # Variables de entorno
 .env
+# Residuos y archivos de trabajo temporales
+*.obsoleto-*
+_qa_*.mjs
