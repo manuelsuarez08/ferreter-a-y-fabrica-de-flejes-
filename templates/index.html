@@ -614,6 +614,18 @@
       <div class="tab-pane fade" id="creditos">
         <h4 class="mb-3">Cartera de Créditos y Pendientes</h4>
 
+        <div class="row align-items-center mb-3 g-2">
+          <div class="col-md-5">
+            <input type="text" id="filtro-cartera" class="form-control"
+                   placeholder="🔍 Buscar deudor por nombre, cédula/NIT o teléfono..."
+                   spellcheck="false"
+                   oninput="filtrarCartera(this.value)">
+          </div>
+          <div class="col-md-7 text-muted small">
+            <span id="cartera-total-info"></span>
+          </div>
+        </div>
+
         <div class="card p-3 mb-4 bg-light border">
           <h5 class="fw-bold mb-3">Registrar Abono</h5>
           <form id="form-abono" onsubmit="registrarAbono(event)" class="row g-3">
@@ -658,13 +670,14 @@
               <tr>
                 <th>ID Cliente</th>
                 <th>Nombre</th>
+                <th>Cédula / NIT</th>
                 <th>Teléfono</th>
                 <th>Dirección</th>
                 <th>Deuda Total Pendiente</th>
               </tr>
             </thead>
             <tbody id="tabla-creditos-body">
-              <tr><td colspan="5" class="text-center text-muted">Cargando cartera...</td></tr>
+              <tr><td colspan="6" class="text-center text-muted">Cargando cartera...</td></tr>
             </tbody>
           </table>
         </div>
@@ -786,7 +799,7 @@
                     <th>Última actualización</th>
                   </tr>
                 </thead>
-                <tbody id="tabla-inventario-hierro">
+                <tbody id="tabla-inventario-hierro-fabrica">
                   <tr><td colspan="4" class="text-center text-muted">Cargando inventario...</td></tr>
                 </tbody>
               </table>
@@ -1276,7 +1289,7 @@
                 </tr>
               </thead>
               <tbody id="tabla-items-pedido">
-                <tr id="pedido-items-vacio"><td colspan="5" class="text-center text-muted">Sin productos. Agregue items arriba.</td></tr>
+                <tr><td colspan="5" class="text-center text-muted">Sin productos. Agregue items arriba.</td></tr>
               </tbody>
               <tfoot>
                 <tr class="table-light fw-bold">
@@ -1656,8 +1669,8 @@
           tbody.innerHTML = '<tr><td colspan="6" class="text-center text-success">✅ Todo el inventario tiene stock adecuado.</td></tr>';
         } else {
           data.alertas.forEach(p => {
-            const badgeUrgencia = p.urgencia === 'critico' 
-              ? '<span class="badge bg-danger">AGOTADO (0)</span>' 
+            const badgeUrgencia = p.urgencia === 'critico'
+              ? '<span class="badge bg-danger">AGOTADO (0)</span>'
               : '<span class="badge bg-warning text-dark">STOCK BAJO</span>';
             tbody.innerHTML += `
               <tr>
@@ -1726,7 +1739,6 @@
         const cola = document.getElementById('flejes-ordenes-cola');
         const figurando = document.getElementById('flejes-ordenes-figurando');
         const completadas = document.getElementById('flejes-ordenes-completadas');
-        const inventario = document.getElementById('tabla-inventario-hierro');
 
         tbody.innerHTML = '';
         if (!ordenes.length) {
@@ -1765,27 +1777,9 @@
         badge.textContent = pendientes;
         badge.style.display = pendientes > 0 ? 'inline-block' : 'none';
 
-        if (inventario) {
-          fetch('/api/fabrica/inventario-hierro')
-            .then(r => r.ok ? r.json() : [])
-            .then((stock) => {
-              if (!stock.length) {
-                inventario.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Sin registros de hierro.</td></tr>';
-                return;
-              }
-              inventario.innerHTML = stock.map(item => `
-                <tr>
-                  <td>${escapeHtml(item.calibre || '—')}</td>
-                  <td>${Number(item.diametro_mm || 0).toFixed(2)} mm</td>
-                  <td>${Number(item.stock_kg || 0).toFixed(2)} kg</td>
-                  <td>${escapeHtml(item.ultimo_update || 'Sin fecha')}</td>
-                </tr>
-              `).join('');
-            })
-            .catch(() => {
-              inventario.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Inventario no disponible.</td></tr>';
-            });
-        }
+        // Reutiliza la carga centralizada del inventario de hierro (actualiza
+        // tanto la pestaña de Inventario como la de Fábrica de Flejes).
+        cargarInventarioFlejes();
       } catch (err) {
         console.error('Error cargando órdenes de flejes:', err);
         document.getElementById('tabla-ordenes-flejes').innerHTML = '<tr><td colspan="7" class="text-center text-danger">No se pudo cargar el panel de producción.</td></tr>';
@@ -2762,18 +2756,61 @@
       document.getElementById('btn-cancelar-cliente').classList.add('d-none');
     }
 
+		let carteraLista = [];
+
+		function pintarCartera(creditos) {
+		  const tbody = document.getElementById('tabla-creditos-body');
+		  if (!creditos.length) {
+		    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-success">No hay deudores que coincidan.</td></tr>';
+		    return;
+		  }
+		  tbody.innerHTML = creditos.map(c => `<tr>
+		    <td>${c.id_cliente}</td>
+		    <td>${escapeHtml(c.nombre)}</td>
+		    <td>${escapeHtml(c.cedula_nit || '')}</td>
+		    <td>${escapeHtml(c.telefono || '')}</td>
+		    <td>${escapeHtml(c.direccion || '')}</td>
+		    <td class="fw-bold text-danger">${monedaCOP(c.deuda_total)}</td>
+		  </tr>`).join('');
+		}
+
+		function actualizarInfoCartera(filtrados, total) {
+		  const info = document.getElementById('cartera-total-info');
+		  if (!info) return;
+		  const suma = filtrados.reduce((acc, c) => acc + (Number(c.deuda_total) || 0), 0);
+		  info.innerText = `Mostrando ${filtrados.length} de ${total} deudores | Cartera filtrada: ${monedaCOP(suma)}`;
+		}
+
+		// Filtro en tiempo real (nombre, cédula/NIT o teléfono) con debounce.
+		const filtrarCartera = debounce(function(texto) {
+		  const q = (texto || '').trim().toLowerCase();
+		  const base = carteraLista.filter(c => c.deuda_total > 0);
+		  if (!q) {
+		    pintarCartera(base);
+		    actualizarInfoCartera(base, base.length);
+		    return;
+		  }
+		  const filtrados = base.filter(c =>
+		    (c.nombre || '').toLowerCase().includes(q) ||
+		    (c.cedula_nit || '').toLowerCase().includes(q) ||
+		    (c.telefono || '').toLowerCase().includes(q)
+		  );
+		  pintarCartera(filtrados);
+		  actualizarInfoCartera(filtrados, base.length);
+		}, 300);
+
 		async function cargarCreditosTabla() {
-			const res = await fetch('/api/creditos');
-			const creditos = await res.json();
-			const tbody = document.getElementById('tabla-creditos-body');
-			const select = document.getElementById('select-credito-cliente');
-			tbody.innerHTML = '';
-			select.innerHTML = '<option value="">Seleccione un cliente</option>';
-			creditos.forEach(c => {
-			  tbody.innerHTML += `<tr><td>${c.id_cliente}</td><td>${escapeHtml(c.nombre)}</td><td>${escapeHtml(c.telefono || '')}</td><td>${escapeHtml(c.direccion || '')}</td><td class="fw-bold text-danger">${monedaCOP(c.deuda_total)}</td></tr>`;
-			  select.innerHTML += `<option value="${c.id_cliente}">${escapeHtml(c.nombre)} - ${monedaCOP(c.deuda_total)}</option>`;
-			});
-			if (creditos.length === 0) tbody.innerHTML = '<tr><td colspan="5" class="text-center text-success">No hay créditos pendientes.</td></tr>';
+		  const res = await fetch('/api/creditos');
+		  const creditos = await res.json();
+		  carteraLista = creditos;
+		  const select = document.getElementById('select-credito-cliente');
+		  select.innerHTML = '<option value="">Seleccione un cliente</option>';
+		  creditos.filter(c => c.deuda_total > 0).forEach(c => {
+		    select.innerHTML += `<option value="${c.id_cliente}">${escapeHtml(c.nombre)} - ${monedaCOP(c.deuda_total)}</option>`;
+		  });
+		  // Respeta el filtro activo si el usuario ya había escrito algo.
+		  const input = document.getElementById('filtro-cartera');
+		  filtrarCartera(input ? input.value : '');
 		}
 
     async function verHistorialCliente(id) {
@@ -3093,31 +3130,46 @@
       if (res.ok) { document.getElementById('form-movimiento').reset(); cargarAdministracion(); cargarProductosTabla(); }
     }
 
-    async function cargarInventarioFlejes() {
-      const tbody = document.getElementById('tabla-inventario-hierro');
+    // Rellena una tabla de inventario de hierro a partir de la data del API.
+    function pintarTablaHierro(tbody, data) {
       if (!tbody) return;
-      tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Cargando inventario...</td></tr>';
+      if (!data.length) {
+        tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Sin registros de hierro. Registra stock en el formulario de arriba.</td></tr>';
+        return;
+      }
+      tbody.innerHTML = data.map(item => `
+        <tr>
+          <td>${escapeHtml(item.calibre || '—')}</td>
+          <td>${Number(item.diametro_mm || 0).toFixed(2)} mm</td>
+          <td>${Number(item.stock_kg || 0).toFixed(2)} kg</td>
+          <td>${escapeHtml(item.ultimo_update || 'Sin fecha')}</td>
+        </tr>
+      `).join('');
+    }
+
+    async function cargarInventarioFlejes() {
+      // El inventario de hierro aparece en DOS pestañas: Inventario y Fábrica de
+      // Flejes. Se actualizan ambas (antes había un id duplicado y solo se
+      // refrescaba la primera, por eso la fábrica no mostraba existencias).
+      const tbodies = [
+        document.getElementById('tabla-inventario-hierro'),
+        document.getElementById('tabla-inventario-hierro-fabrica')
+      ].filter(Boolean);
+
+      if (!tbodies.length) return;
+      tbodies.forEach(tb => {
+        tb.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Cargando inventario...</td></tr>';
+      });
+
       try {
         const res = await fetch('/api/fabrica/inventario-hierro');
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'No se pudo cargar el inventario');
-        tbody.innerHTML = '';
-        if (!data.length) {
-          tbody.innerHTML = '<tr><td colspan="4" class="text-center text-muted">Sin registros de hierro.</td></tr>';
-          return;
-        }
-        data.forEach(item => {
-          tbody.innerHTML += `
-            <tr>
-              <td>${escapeHtml(item.calibre || '—')}</td>
-              <td>${Number(item.diametro_mm || 0).toFixed(2)} mm</td>
-              <td>${Number(item.stock_kg || 0).toFixed(2)} kg</td>
-              <td>${escapeHtml(item.ultimo_update || 'Sin fecha')}</td>
-            </tr>
-          `;
-        });
+        tbodies.forEach(tb => pintarTablaHierro(tb, data));
       } catch (err) {
-        tbody.innerHTML = `<tr><td colspan="4" class="text-center text-danger">${escapeHtml(err.message || 'Inventario no disponible.')}</td></tr>`;
+        tbodies.forEach(tb => {
+          tb.innerHTML = `<tr><td colspan="4" class="text-center text-danger">${escapeHtml(err.message || 'Inventario no disponible.')}</td></tr>`;
+        });
       }
     }
 
@@ -3490,7 +3542,7 @@
     function renderItemsPedido() {
       const tbody = document.getElementById('tabla-items-pedido');
       if (!itemsPedidoActual.length) {
-        tbody.innerHTML = '<tr id="pedido-items-vacio"><td colspan="5" class="text-center text-muted">Sin productos. Agregue items arriba.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Sin productos. Agregue items arriba.</td></tr>';
         document.getElementById('pedido-total-texto').textContent = '$ 0 COP';
         return;
       }

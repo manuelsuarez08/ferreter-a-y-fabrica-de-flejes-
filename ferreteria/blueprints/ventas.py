@@ -361,7 +361,8 @@ def get_creditos():
     conn = get_db()
     rows = conn.execute(
         """
-        SELECT c.id, c.nombre, c.telefono, SUM(v.saldo_pendiente) as deuda_total, c.direccion
+        SELECT c.id, c.nombre, c.telefono, SUM(v.saldo_pendiente) as deuda_total, c.direccion,
+               c.cedula_nit
         FROM clientes c
         LEFT JOIN ventas v ON c.id = v.id_cliente AND v.saldo_pendiente > 0
         GROUP BY c.id
@@ -369,7 +370,8 @@ def get_creditos():
     ).fetchall()
     conn.close()
     return jsonify([{"id_cliente": r[0], "nombre": r[1], "telefono": r[2],
-                     "deuda_total": r[3], "direccion": r[4] or ""} for r in rows])
+                     "deuda_total": r[3], "direccion": r[4] or "",
+                     "cedula_nit": r[5] or ""} for r in rows])
 
 
 @bp.route('/api/abonos', methods=['POST'])
