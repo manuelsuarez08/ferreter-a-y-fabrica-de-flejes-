@@ -258,7 +258,9 @@ def get_factura_detalle(id_venta):
         """
         SELECT v.id, v.fecha_dia, v.hora, c.nombre, c.cedula_nit, c.telefono,
                v.total_venta, v.tipo_pago, v.id_cliente,
-               COALESCE(v.direccion_cliente, c.direccion, '')
+               COALESCE(v.direccion_cliente, c.direccion, ''),
+               v.saldo_pendiente, v.anulada, v.motivo_anulacion, v.tipo_entrega,
+               v.numero_pedido
         FROM ventas v JOIN clientes c ON v.id_cliente = c.id WHERE v.id = ?
         """, (id_venta,)
     ).fetchone()
@@ -275,10 +277,28 @@ def get_factura_detalle(id_venta):
     ).fetchall()
     conn.close()
 
+    # Datos del negocio para el encabezado de la tirilla.
+    conn2 = get_db()
+    negocio = conn2.execute(
+        "SELECT nombre, nit, telefono, direccion FROM configuracion WHERE id = 1"
+    ).fetchone()
+    conn2.close()
+
     return jsonify({
         "id": venta[0], "fecha_dia": venta[1], "hora": venta[2], "cliente": venta[3],
         "cedula_nit": venta[4], "telefono": venta[5], "total_venta": venta[6],
         "tipo_pago": venta[7], "id_cliente": venta[8], "direccion": venta[9] or "",
+        "saldo_pendiente": venta[10] or 0,
+        "anulada": bool(venta[11]),
+        "motivo_anulacion": venta[12] or "",
+        "tipo_entrega": venta[13] or "entrega_inmediata",
+        "numero_pedido": venta[14],
+        "negocio": {
+            "nombre": (negocio[0] if negocio else "Ferretería y Fábrica de Flejes"),
+            "nit": (negocio[1] if negocio else "") or "",
+            "telefono": (negocio[2] if negocio else "") or "",
+            "direccion": (negocio[3] if negocio else "") or "",
+        },
         "items": [{
             "nombre": d[0] + (f" ({d[1]})" if d[1] else ""), "cantidad": d[2],
             "precio_unitario": d[3], "subtotal": d[4],
