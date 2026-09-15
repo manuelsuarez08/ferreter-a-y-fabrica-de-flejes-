@@ -8,20 +8,32 @@ movimientos de inventario, NO afecta cartera de créditos ni la caja. Solo
 cuando el usuario convierte la cotización a venta se usa el flujo normal del
 POS (`/api/ventas`).
 """
+import hmac
+import hashlib
 from datetime import datetime
-
-from flask import Blueprint, jsonify, request, session
-
-from ..config import ESTADOS_COTIZACION
+from flask import Blueprint, jsonify, render_template, request, session
+from ..config import ESTADOS_COTIZACION, SECRET_KEY
 from ..db import get_db
 from ..security import login_required
 from ..services.auditoria import registrar_auditoria
-
 bp = Blueprint('cotizaciones', __name__)
 
 
 def _ahora():
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+
+def _token_cotizacion(id_cotizacion, consecutivo):
+    # Token HMAC que autoriza ver/aprobar una cotizacion sin iniciar sesion.
+    # El enlace se comparte por WhatsApp; el token evita que cualquiera pueda
+    # leer o cambiar cotizaciones con solo adivinar el id.
+    mensaje = f'{id_cotizacion}:{consecutivo}'.encode('utf-8')
+    return hmac.new(SECRET_KEY.encode('utf-8'), mensaje, hashlib.sha256).hexdigest()[:32]
+
+
+def _token_valido(id_cotizacion, consecutivo, token):
+    esperado = _token_cotizacion(id_cotizacion, consecutivo)
+    return hmac.compare_digest(esperado, str(token or ''))
 
 
 def _numero(valor, defecto=0.0):
@@ -316,3 +328,89 @@ def convertir_a_venta(id_cotizacion):
 def registrar(app):
     """Conecta este blueprint a la aplicación."""
     app.register_blueprint(bp)
+
+
+def _cotizacion_completa(conn, id_cotizacion):
+    # Devuelve el dict completo de una cotizacion (cabecera + items + negocio).
+    cot = conn.execute(
+        'SELECT id, consecutivo_cotizacion, nombre_cliente, cedula_nit, telefono, direccion, '
+        'fecha, vigencia, observaciones, total, estado, id_cliente, usuario '
+        'FROM cotizaciones WHERE id = ?', (id_cotizacion,)
+    ).fetchone()
+    if not cot:
+        return None
+    items = conn.execute(
+        "SELECT id, id_producto, descripcion, cantidad, precio_unitario, subtotal "
+        "FROM detalle_cotizaciones WHERE id_cotizacion = ? ORDER BY id", (id_cotizacion,)
+    ).fetchall()
+    negocio = conn.execute(
+        "SELECT nombre, nit, telefono, direccion FROM configuracion WHERE id = 1"
+    ).fetchone()
+    return {
+        "id": cot[0], "consecutivo": cot[1], "cliente": cot[2],
+        "cedula_nit": cot[3] or "", "telefono": cot[4] or "", "direccion": cot[5] or "",
+        "fecha": cot[6], "vigencia": cot[7] or "", "observaciones": cot[8] or "",
+        "total": cot[9], "estado": cot[10], "id_cliente": cot[11], "usuario": cot[12] or "",
+        "negocio": {
+            "nombre": (negocio[0] if negocio else "Ferreteria y Fabrica de Flejes"),
+            "nit": (negocio[1] if negocio else "") or "",
+            "telefono": (negocio[2] if negocio else "") or "",
+            "direccion": (negocio[3] if negocio else "") or "",
+        },
+        "items": [{
+            "id": i[0], "id_producto": i[1], "descripcion": i[2],
+            "cantidad": i[3], "precio_unitario": i[4], "subtotal": i[5],
+        } for i in items],
+    }
+
+@bp.route('/cotizacion/<int:id_cotizacion>', methods=['GET'])
+def vista_publica_cotizacion(id_cotizacion):
+    # Vista publica (sin login) que el cliente abre desde el enlace de WhatsApp.
+    conn = get_db()
+    cot = _cotizacion_completa(conn, id_cotizacion)
+    conn.close()
+    if not cot:
+        return render_template('cotizacion_publica.html', error='Cotizacion no encontrada'), 404
+    return render_template('cotizacion_publica.html', cot=cot, token=request.args.get('t', ''))
+
+@bp.route('/api/cotizaciones/<int:id_cotizacion>/enlace', methods=['GET'])
+@login_required
+def generar_enlace(id_cotizacion):
+    # Genera la URL publica de aprobacion para compartir por WhatsApp.
+    conn = get_db()
+    row = conn.execute("SELECT consecutivo_cotizacion FROM cotizaciones WHERE id = ?",
+                       (id_cotizacion,)).fetchone()
+    conn.close()
+    if not row:
+        return jsonify({"error": "Cotizacion no encontrada"}), 404
+    token = _token_cotizacion(id_cotizacion, row[0])
+    ruta = f'/cotizacion/{id_cotizacion}?t={token}'
+    return jsonify({
+        "ruta": ruta,
+        "ruta_absoluta": request.host_url.rstrip('/') + ruta,
+        "token": token,
+    })
+
+@bp.route('/api/cotizacion/<int:id_cotizacion>/aprobar', methods=['POST'])
+def aprobar_cotizacion(id_cotizacion):
+    # El cliente aprueba la cotizacion desde el enlace publico (con token).
+    data = request.json or {}
+    token = data.get('token')
+    conn = get_db()
+    cot = conn.execute("SELECT consecutivo_cotizacion, estado FROM cotizaciones WHERE id = ?",
+                       (id_cotizacion,)).fetchone()
+    if not cot:
+        conn.close()
+        return jsonify({"error": "Cotizacion no encontrada"}), 404
+    if not _token_valido(id_cotizacion, cot[0], token):
+        conn.close()
+        return jsonify({"error": "Enlace no valido o expirado"}), 403
+    if cot[1] == 'Anulada':
+        conn.close()
+        return jsonify({"error": "Esta cotizacion fue anulada"}), 400
+    conn.execute("UPDATE cotizaciones SET estado = 'Aprobada' WHERE id = ?", (id_cotizacion,))
+    registrar_auditoria(conn, 'aprobar', 'cotizacion', id_cotizacion,
+                        f'Cotizacion {cot[0]} aprobada por el cliente desde el enlace publico')
+    conn.commit()
+    conn.close()
+    return jsonify({"mensaje": "Cotizacion aprobada. Gracias por su confirmacion.", "estado": "Aprobada"})

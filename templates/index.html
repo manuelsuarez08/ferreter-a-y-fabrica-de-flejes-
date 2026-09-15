@@ -1575,6 +1575,7 @@
             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
             <button type="button" class="btn btn-primary fw-bold" onclick="imprimirRecibo('area-factura-pdf', 'factura')">🖨️ Imprimir recibo</button>
             <button type="button" class="btn btn-success fw-bold" onclick="descargarPDF()">📥 Descargar PDF</button>
+            <button type="button" class="btn fw-bold text-white" style="background:#25D366;" onclick="whatsappFactura()">📱 WhatsApp</button>
           </div>
         </div>
       </div>
@@ -1791,6 +1792,7 @@
            <button type="button" class="btn btn-info text-white fw-bold" onclick="imprimirRecibo('area-cotizacion-pdf', 'cotizacion')">🖨️ Imprimir</button>
            <button type="button" class="btn btn-success fw-bold" onclick="descargarCotizacionPDF()">📥 PDF</button>
            <button type="button" class="btn fw-bold text-white" style="background:#25D366;" onclick="abrirModalWhatsapp()">📱 WhatsApp</button>
+           <button type="button" class="btn btn-dark fw-bold" onclick="enviarEnlaceAprobacion()">🔗 Enviar enlace de aprobación</button>
            <button type="button" class="btn btn-primary fw-bold" onclick="convertirCotizacionAVenta()">🛒 Convertir a Venta</button>
          </div>
        </div>
@@ -1879,6 +1881,7 @@
     let equiposAlquilerLista = [];
     let tsCliente, tsProducto, tsProdNombre;
     let facturaActualId = null;
+    let facturaActual = null;
 
     // ── Utilidad de rendimiento: retrasa la ejecución hasta que el usuario
     // deje de escribir (evita una petición por cada tecla). ──────────────
@@ -3349,8 +3352,9 @@
 		const res = await fetch(`/api/ventas/${id}`);
 		const factura = await res.json();
 		if (!res.ok) { alert(`Error: ${factura.error}`); return; }
-				facturaActualId = id;
-			const negocio = factura.negocio || {};
+					facturaActualId = id;
+				facturaActual = factura;
+				const negocio = factura.negocio || {};
 				setTexto('fac-negocio-nombre', (negocio.nombre || 'Ferretería y Fábrica de Flejes').toUpperCase());
 				setTexto('fac-negocio-nit', (negocio.nit ? `NIT: ${negocio.nit}` : '') + (negocio.telefono ? ` | Tel: ${negocio.telefono}` : ''));
 				setTexto('fac-negocio-dir', negocio.direccion || '');
@@ -3404,8 +3408,46 @@
 			if (res.ok) verFactura(facturaActualId);
 		}
 
-		function descargarPDF() {
+			function descargarPDF() {
 			html2pdf().from(document.getElementById('area-factura-pdf')).save(`factura-${facturaActualId}.pdf`);
+		}
+
+		// Construye el mensaje de la factura de venta para WhatsApp.
+		function construirMensajeFactura(f) {
+		const negocio = (f.negocio || {});
+		const moneda = (v) => '$' + Number(v || 0).toLocaleString('es-CO') + ' COP';
+		const lineas = [];
+		lineas.push('*' + (negocio.nombre || 'FERRETERÍA Y FÁBRICA DE FLEJES').toUpperCase() + '*');
+		if (negocio.telefono) lineas.push('Tel: ' + negocio.telefono);
+		if (negocio.direccion) lineas.push(negocio.direccion);
+		lineas.push('');
+		lineas.push('*FACTURA DE VENTA N° ' + f.id + '*');
+			lineas.push(`Fecha: ${f.fecha_dia} ${f.hora}`);
+		lineas.push('Cliente: ' + f.cliente);
+		lineas.push('Pago: ' + f.tipo_pago);
+		lineas.push('');
+		lineas.push('*Detalle:*');
+		(f.items || []).forEach(i => {
+		lineas.push('• ' + i.cantidad + ' x ' + i.nombre + ' = ' + moneda(i.subtotal));
+		});
+		lineas.push('');
+		lineas.push('*TOTAL: ' + moneda(f.total_venta) + '*');
+		const saldo = Number(f.saldo_pendiente || 0);
+		if (saldo > 0) lineas.push('*Saldo pendiente: ' + moneda(saldo) + '*');
+		lineas.push('');
+		lineas.push('¡Gracias por su compra!');
+		lineas.push('Cambios y garantía presentando esta factura dentro de los 8 días.');
+		return lineas.join('\n');
+		}
+
+		function whatsappFactura() {
+		if (!facturaActual) { alert('Abra primero una factura.'); return; }
+		const tel = normalizarTelefonoWA(facturaActual.telefono);
+		const mensaje = construirMensajeFactura(facturaActual);
+		const url = tel
+		? 'https://wa.me/' + tel + '?text=' + encodeURIComponent(mensaje)
+		: 'https://wa.me/?text=' + encodeURIComponent(mensaje);
+		window.open(url, '_blank');
 		}
 
 		async function cargarUsuariosTabla() {
@@ -4385,6 +4427,32 @@
             document.getElementById('wa-telefono').value = tel;
             document.getElementById('wa-mensaje').value = construirMensajeCotizacion(cotizacionActual);
             new bootstrap.Modal(document.getElementById('modalWhatsappCotizacion')).show();
+          }
+
+          // Envía el enlace público de aprobación por WhatsApp.
+          async function enviarEnlaceAprobacion() {
+            if (!cotizacionActual) { alert('Abra primero una cotización.'); return; }
+            const res = await fetch('/api/cotizaciones/' + cotizacionActual.id + '/enlace');
+            const data = await res.json();
+            if (!res.ok) { alert('Error: ' + data.error); return; }
+
+            const tel = normalizarTelefonoWA(cotizacionActual.telefono);
+            const moneda = (v) => '$' + Number(v || 0).toLocaleString('es-CO') + ' COP';
+            const mensaje = [
+              'Hola ' + cotizacionActual.cliente + ',',
+              '',
+              'Le compartimos la cotización *' + cotizacionActual.consecutivo + '* por un total de *' + moneda(cotizacionActual.total) + '*.',
+              '',
+              'Puede revisarla y *aprobarla* desde este enlace seguro:',
+              data.ruta_absoluta,
+              '',
+              'Quedamos atentos. ¡Gracias!'
+            ].join('\n');
+
+            const url = tel
+              ? 'https://wa.me/' + tel + '?text=' + encodeURIComponent(mensaje)
+              : 'https://wa.me/?text=' + encodeURIComponent(mensaje);
+            window.open(url, '_blank');
           }
 
           // Envío rápido desde el listado: carga la cotización y abre WhatsApp.

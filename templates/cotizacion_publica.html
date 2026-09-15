@@ -1,0 +1,180 @@
+{% set NS = cot.negocio if cot else {} %}
+<!DOCTYPE html>
+<html lang="es">
+<head>
+ <meta charset="UTF-8">
+ <meta name="viewport" content="width=device-width, initial-scale=1">
+ <title>{% if cot %}Cotización {{ cot.consecutivo }}{% else %}Cotización{% endif %}</title>
+ <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; padding: 16px;
+      font-family: -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+      background: #f1f3f5; color: #212529;
+    }
+    .contenedor { max-width: 640px; margin: 0 auto; }
+    .tarjeta {
+      background: #fff; border-radius: 10px; padding: 22px;
+      box-shadow: 0 2px 12px rgba(0,0,0,.08);
+    }
+    .encabezado { text-align: center; border-bottom: 2px solid #212529; padding-bottom: 12px; }
+    .encabezado h1 { margin: 0 0 4px; font-size: 20px; letter-spacing: .5px; }
+    .encabezado p { margin: 2px 0; font-size: 12px; color: #6c757d; }
+    .consecutivo { font-weight: bold; margin-top: 10px; font-size: 15px; }
+    .fila { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
+    .bloque { font-size: 13px; }
+    .bloque strong { color: #495057; }
+    table { width: 100%; border-collapse: collapse; margin: 14px 0; font-size: 13px; }
+    th, td { padding: 7px 6px; border-bottom: 1px solid #dee2e6; text-align: left; }
+    th { background: #f8f9fa; font-size: 12px; text-transform: uppercase; color: #495057; }
+    .der { text-align: right; }
+    .tot { font-size: 17px; font-weight: bold; border-top: 2px solid #212529; border-bottom: none; }
+    .obs { background: #fff8e1; border-left: 4px solid #ffc107; padding: 10px 12px; font-size: 13px; border-radius: 4px; margin: 12px 0; }
+    .nota { font-size: 11px; color: #6c757d; text-align: center; margin-top: 14px; line-height: 1.5; }
+    .acciones { margin-top: 18px; text-align: center; }
+    .btn {
+      display: inline-block; width: 100%; padding: 15px; border: 0; border-radius: 8px;
+      background: #198754; color: #fff; font-size: 17px; font-weight: bold;
+      cursor: pointer; text-decoration: none;
+    }
+    .btn:active { transform: scale(.99); }
+    .estado { text-align: center; padding: 14px; border-radius: 8px; font-weight: bold; margin-top: 16px; font-size: 15px; }
+    .estado.aprobada { background: #d1e7dd; color: #0f5132; }
+    .estado.pendiente { background: #fff3cd; color: #664d03; }
+    .estado.anulada { background: #f8d7da; color: #842029; }
+    .badge { display: inline-block; padding: 3px 10px; border-radius: 20px; font-size: 11px; font-weight: bold; }
+    .b-aprobada { background: #d1e7dd; color: #0f5132; }
+    .b-pendiente { background: #fff3cd; color: #664d03; }
+    .b-vencida { background: #e2e3e5; color: #41464b; }
+    .b-anulada { background: #f8d7da; color: #842029; }
+    .firma { margin-top: 22px; text-align: center; font-size: 12px; color: #6c757d; }
+    .firma .linea { border-top: 1px solid #adb5bd; width: 70%; margin: 34px auto 6px; }
+    @media print {
+      body { background: #fff; padding: 0; }
+      .tarjeta { box-shadow: none; }
+      .acciones { display: none; }
+    }
+ </style>
+</head>
+<body>
+ <div class="contenedor">
+    <div class="tarjeta">
+      {% if error %}
+        <div class="encabezado"><h1>Cotización no disponible</h1></div>
+        <p style="text-align:center;color:#842029;">{{ error }}</p>
+      {% else %}
+
+      <div class="encabezado">
+        <h1>{{ (NS.nombre or 'FERRETERÍA Y FÁBRICA DE FLEJES') | upper }}</h1>
+        {% if NS.nit %}<p>NIT: {{ NS.nit }}</p>{% endif %}
+        {% if NS.telefono %}<p>Tel: {{ NS.telefono }}</p>{% endif %}
+        {% if NS.direccion %}<p>{{ NS.direccion }}</p>{% endif %}
+        <div class="consecutivo">COTIZACIÓN N° {{ cot.consecutivo }}</div>
+      </div>
+
+      <div class="fila">
+        <div class="bloque">
+          <strong>Fecha:</strong> {{ cot.fecha }}<br>
+          <strong>Vigencia:</strong> {{ cot.vigencia }}<br>
+          <strong>Estado:</strong>
+          <span class="badge b-{{ cot.estado | lower }}">{{ cot.estado }}</span>
+        </div>
+        <div class="bloque der">
+          <strong>Cliente:</strong> {{ cot.cliente }}<br>
+          {% if cot.cedula_nit %}<strong>Cédula/NIT:</strong> {{ cot.cedula_nit }}<br>{% endif %}
+          {% if cot.telefono %}<strong>Teléfono:</strong> {{ cot.telefono }}{% endif %}
+        </div>
+      </div>
+
+      <table>
+        <thead>
+          <tr>
+            <th class="der" style="width:60px;">Cant.</th>
+            <th>Descripción</th>
+            <th class="der" style="width:110px;">P. Unit.</th>
+            <th class="der" style="width:110px;">Subtotal</th>
+          </tr>
+        </thead>
+        <tbody>
+          {% for i in cot['items'] %}
+          <tr>
+            <td class="der">{{ i.cantidad }}</td>
+            <td>{{ i.descripcion }}</td>
+            <td class="der">$ {{ '{:,.0f}'.format(i.precio_unitario) }}</td>
+            <td class="der">$ {{ '{:,.0f}'.format(i.subtotal) }}</td>
+          </tr>
+          {% endfor %}
+          <tr class="tot">
+            <td colspan="3" class="der">TOTAL COTIZADO:</td>
+            <td class="der">$ {{ '{:,.0f}'.format(cot.total) }} COP</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {% if cot.observaciones %}
+      <div class="obs"><strong>Observaciones:</strong> {{ cot.observaciones }}</div>
+      {% endif %}
+
+      {% if cot.estado == 'Aprobada' %}
+        <div class="estado aprobada">✅ Cotización APROBADA — ¡Gracias por su confirmación!</div>
+      {% elif cot.estado == 'Anulada' %}
+        <div class="estado anulada">Esta cotización fue anulada.</div>
+      {% else %}
+        <div class="acciones">
+          <button class="btn" id="btn-aprobar" onclick="aprobarCotizacion()">✅ Aprobar esta cotización</button>
+        </div>
+        <div id="aviso-aprobacion" class="estado pendiente" style="display:none;">
+          ⏳ Cotización PENDIENTE de aprobación.
+        </div>
+      {% endif %}
+
+      <div class="firma">
+        <div class="linea"></div>
+        Firma / Aprobación del cliente
+      </div>
+
+      <div class="nota">
+        Esta cotización es una propuesta de precio y NO representa una venta.<br>
+        Los precios pueden variar sin previo aviso.
+      </div>
+
+      {% endif %}
+    </div>
+ </div>
+
+  {% if cot and cot.estado != 'Aprobada' and cot.estado != 'Anulada' %}
+ <script>
+    async function aprobarCotizacion() {
+      const btn = document.getElementById('btn-aprobar');
+      const aviso = document.getElementById('aviso-aprobacion');
+      btn.disabled = true;
+      btn.innerText = 'Enviando...';
+      try {
+        const res = await fetch('/api/cotizacion/{{ cot.id }}/aprobar', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ token: '{{ token }}' })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          btn.disabled = false;
+          btn.innerText = '✅ Aprobar esta cotización';
+          alert('No se pudo aprobar: ' + (data.error || 'error desconocido'));
+          return;
+        }
+        btn.style.display = 'none';
+        aviso.style.display = 'none';
+        const ok = document.createElement('div');
+        ok.className = 'estado aprobada';
+        ok.innerText = '✅ Cotización APROBADA — ¡Gracias por su confirmación!';
+        btn.parentNode.appendChild(ok);
+      } catch (e) {
+        btn.disabled = false;
+        btn.innerText = '✅ Aprobar esta cotización';
+        alert('Error de conexión. Verifique e intente de nuevo.');
+      }
+    }
+ </script>
+  {% endif %}
+</body>
+</html>
