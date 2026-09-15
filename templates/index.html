@@ -3277,7 +3277,8 @@
     }
 
     function descargarComprobanteAbono() {
-      html2pdf().from(document.getElementById('area-comprobante-abono')).save(`comprobante-abono-${document.getElementById('abono-id').innerText}.pdf`);
+      generarPDFRecibo(document.getElementById('area-comprobante-abono'),
+                       `comprobante-abono-${document.getElementById('abono-id').innerText}.pdf`);
     }
 
     // Construye el mensaje del recibo de abono para WhatsApp.
@@ -3313,28 +3314,89 @@
 
     // ── Impresión de tirilla térmica (58mm/80mm) ───────────────────────────
     // Se abre una ventana con SOLO el recibo y se lanza print() sin bloquear el POS.
+    // Hoja de estilos completa y AUTOSUFICIENTE para la ventana de impresión /
+    // PDF. No depende de Bootstrap: replica el layout de la factura (rejilla de
+    // 2 columnas, tablas, negritas, separadores) para que la tirilla de 80 mm
+    // salga igual que en pantalla. Se usa tanto en imprimirRecibo() como en la
+    // impresión de respaldo.
     const CSS_TIRILLA = `
       @page { size: 80mm auto; margin: 0; }
       * { box-shadow: none !important; text-shadow: none !important; border-radius: 0 !important; }
-      html, body { width: 100%; max-width: 80mm; margin: 0; padding: 0; background: #fff; }
-      body * { visibility: hidden; }
-      .recibo-termico, .recibo-termico * { visibility: visible; }
-      .recibo-termico { position: absolute; left: 0; top: 0; width: 100%; max-width: 80mm;
-                        margin: 0 auto; padding: 3mm; color: #000; font: 11px "Courier New", monospace; }
-      .recibo-termico * { color: #000 !important; background: transparent !important; }
+      html, body { width: 100%; max-width: 80mm; margin: 0 auto; padding: 0; background: #fff; }
+      body { font: 11px "Courier New", monospace; color: #000; }
+      .recibo-termico { width: 100%; max-width: 80mm; margin: 0 auto; padding: 3mm;
+                        color: #000; font: 11px "Courier New", monospace; box-sizing: border-box; }
+      .recibo-termico * { color: #000 !important; background: transparent !important;
+                          box-sizing: border-box; }
       .recibo-termico h1, .recibo-termico h2, .recibo-termico h3,
       .recibo-termico h4, .recibo-termico h5, .recibo-termico p { margin: 0 0 4px; }
+      .recibo-termico h3 { font-size: 13px; }
+      /* Rejilla de 2 columnas replicada de Bootstrap (Fecha/Cliente). */
+      .recibo-termico .row { display: flex; flex-wrap: wrap; margin: 0 -4px 8px; }
+      .recibo-termico .row > [class*="col-"] { flex: 1 1 50%; max-width: 50%; padding: 0 4px; }
+      /* Tablas de items y totales. */
       .recibo-termico table { width: 100%; border-collapse: collapse; margin-top: 6px; }
-      .recibo-termico th, .recibo-termico td { padding: 3px 0; border-bottom: 1px dashed #000; text-align: left; }
+      .recibo-termico th, .recibo-termico td { padding: 3px 0; border-bottom: 1px dashed #000;
+                                               text-align: left; vertical-align: top; }
+      .recibo-termico thead th { border-bottom: 1px solid #000; font-weight: bold; }
+      .recibo-termico .table-sm th, .recibo-termico .table-sm td { padding: 2px 0; }
+      .recibo-termico table.mb-0 { margin-bottom: 0; }
+      /* Utilidades de Bootstrap usadas en la marca del recibo. */
       .recibo-termico .text-end { text-align: right; }
       .recibo-termico .text-center { text-align: center; }
-      .recibo-termico .row { display: block; }
-      .recibo-termico [class*="col-"] { width: 100%; display: block; }
+      .recibo-termico .text-muted { color: #000 !important; }
+      .recibo-termico .fw-bold, .recibo-termico strong, .recibo-termico b { font-weight: bold; }
+      .recibo-termico .mb-0 { margin-bottom: 0 !important; }
+      .recibo-termico .mb-1 { margin-bottom: 4px !important; }
+      .recibo-termico .mb-2 { margin-bottom: 8px !important; }
       .recibo-termico .card, .recibo-termico .card-body { border: 0 !important; padding: 0 !important; }
-      .recibo-termico .recibo-total { font-size: 14px; font-weight: bold; border-bottom: 2px solid #000; }
-      .recibo-termico .recibo-pie { margin-top: 6px; text-align: center; font-size: 10px; border-top: 1px dashed #000; padding-top: 4px; }
+      .recibo-termico .recibo-total { font-size: 14px; font-weight: bold; }
+      .recibo-termico .recibo-total th, .recibo-termico .recibo-total td {
+        border-bottom: 2px solid #000; font-weight: bold; }
+      .recibo-termico .recibo-saldo th, .recibo-termico .recibo-saldo td { font-weight: bold; }
+      .recibo-termico .recibo-pie { margin-top: 6px; text-align: center; font-size: 10px;
+                                    border-top: 1px dashed #000; padding-top: 4px; }
       .recibo-termico .recibo-sep { border-top: 1px dashed #000; margin: 6px 0; }
     `;
+
+    // Genera un PDF con formato de tirilla (80 mm) a partir de un área de la
+    // factura/comprobante. Se aísla el contenido en un contenedor propio con el
+    // CSS de la tirilla y Bootstrap, de modo que el PDF sale idéntico a pantalla
+    // y sin los estilos del modal (que rompían el layout).
+    function generarPDFRecibo(areaEl, nombreArchivo) {
+      if (!areaEl) return;
+      if (typeof html2pdf === 'undefined') {
+        alert('No se pudo generar el PDF: la librería no cargó. Recargue la página.');
+        return;
+      }
+      const clon = areaEl.cloneNode(true);
+      clon.className = 'recibo-termico';
+
+      // Contenedor temporal fuera de pantalla para medir y capturar sin que el
+      // resto de la página (modal, fondo) afecte al PDF.
+      const cont = document.createElement('div');
+      cont.id = 'cont-temp-pdf';
+      cont.style.cssText = 'position:fixed;left:-10000px;top:0;width:80mm;background:#fff;';
+      const estilo = document.createElement('style');
+      estilo.textContent = CSS_TIRILLA;
+      cont.appendChild(estilo);
+      cont.appendChild(clon);
+      document.body.appendChild(cont);
+
+      const opciones = {
+        margin: 0,
+        filename: nombreArchivo,
+        image: { type: 'jpeg', quality: 0.98 },
+        html2canvas: { scale: 3, useCORS: true, backgroundColor: '#ffffff',
+                       width: cont.scrollWidth, windowWidth: cont.scrollWidth },
+        jsPDF: { unit: 'mm', format: [80, 297], orientation: 'portrait' },
+        pagebreak: { mode: ['css', 'legacy'] },
+      };
+
+      html2pdf().set(opciones).from(cont).save()
+        .then(() => { cont.remove(); })
+        .catch(() => { cont.remove(); alert('No se pudo generar el PDF.'); });
+    }
 
     function imprimirRecibo(elementId, tipo) {
       const el = document.getElementById(elementId);
@@ -3348,22 +3410,36 @@
         return;
       }
 
+      // La ventana de impresión carga el Bootstrap local (mismo origen) para
+      // reproducir el layout de columnas/tablas y luego el CSS de la tirilla,
+      // que gana por ir después y ajusta todo a 80 mm.
+      const bootHref = "{{ url_for('static', filename='vendor/bootstrap.min.css') }}";
       ventana.document.write(`<!DOCTYPE html>
         <html lang="es">
         <head>
           <meta charset="UTF-8">
           <title>${tipo === 'abono' ? 'Recibo de abono' : 'Factura de venta'}</title>
+          <link rel="stylesheet" href="${bootHref}">
           <style>${CSS_TIRILLA}</style>
         </head>
         <body>${contenido.outerHTML}</body>
         </html>`);
       ventana.document.close();
       ventana.focus();
-      // print() es sincrono en la mayoria de navegadores; se encapsula para no
-      // trabar el POS y se cierra la ventana al terminar.
-      setTimeout(() => {
+
+      // Esperar a que el CSS externo (Bootstrap) termine de cargar antes de
+      // imprimir; si tarda demasiado, se imprime de todos modos (la tirilla ya
+      // es autosuficiente sin Bootstrap).
+      const dispararImpresion = () => {
         try { ventana.print(); } finally { setTimeout(() => ventana.close(), 300); }
-      }, 250);
+      };
+      const link = ventana.document.querySelector('link[rel="stylesheet"]');
+      if (!link) { setTimeout(dispararImpresion, 250); return; }
+      let ya = false;
+      const unaVez = () => { if (ya) return; ya = true; setTimeout(dispararImpresion, 150); };
+      link.addEventListener('load', unaVez);
+      link.addEventListener('error', unaVez);
+      setTimeout(unaVez, 2000);
     }
 
 		function setHoyHistorial() {
@@ -3469,9 +3545,9 @@
 			if (res.ok) verFactura(facturaActualId);
 		}
 
-			function descargarPDF() {
-			html2pdf().from(document.getElementById('area-factura-pdf')).save(`factura-${facturaActualId}.pdf`);
-		}
+				function descargarPDF() {
+			generarPDFRecibo(document.getElementById('area-factura-pdf'), `factura-${facturaActualId}.pdf`);
+			}
 
 		// Construye el mensaje de la factura de venta para WhatsApp.
 		function construirMensajeFactura(f) {
