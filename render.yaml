@@ -1,0 +1,41 @@
+# Configuración de despliegue en Render (Blueprint).
+#
+# Objetivo: que las actualizaciones de código NUNCA borren los datos.
+# La base de datos vive en un disco persistente (/var/data), fuera del
+# contenedor, y la app la usa vía la variable FERRETERIA_DB.
+#
+# Cómo usarlo:
+#   1. Subir este archivo al repositorio (rama main).
+#   2. En Render: New + → Blueprint → elegir este repositorio.
+#      (O, si el servicio ya existe, revisar que tenga el disco y la variable
+#       indicados abajo; el Blueprint solo aplica al crearlo desde cero.)
+#
+# IMPORTANTE: si tu servicio YA existe y NO tiene disco persistente, créalo a
+# mano en el dashboard (Settings → Disks → Add Disk) en la ruta /var/data y
+# añade la variable FERRETERIA_DB = /var/data/ferreteria.db. Blueprint no
+# modifica servicios existentes.
+
+services:
+  - type: web
+    name: ferreteria
+    runtime: python
+    plan: starter            # El disco persistente requiere plan de pago.
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "gunicorn app:server --bind 0.0.0.0:$PORT --workers 1 --threads 4 --timeout 120"
+    envVars:
+      # Ruta de la base dentro del disco persistente. Sin esto, Render usaría la
+      # base dentro del contenedor y los datos se perderían en cada despliegue.
+      - key: FERRETERIA_DB
+        value: /var/data/ferreteria.db
+      # Clave de sesión de Flask. Render la genera y la guarda segura.
+      - key: SECRET_KEY
+        generateValue: true
+      # Credenciales opcionales de Siigo (facturación electrónica).
+      # - key: SIIGO_USERNAME
+      #   sync: false
+      # - key: SIIGO_ACCESS_KEY
+      #   sync: false
+    disk:
+      name: datos-ferreteria
+      mountPath: /var/data   # Aquí vive ferreteria.db entre despliegues.
+      sizeGB: 1

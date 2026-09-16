@@ -1,7 +1,29 @@
 # Actualizar los datos en Render
-
 Guía para subir a Render los cambios de la base de datos (por ejemplo, la carga
 del Excel) **sin perder datos** y **sin acceso al Shell ni a Git**.
+
+---
+
+## ⚠️ Lo primero: configurar el disco persistente (solo una vez)
+
+Para que **cada actualización de la página NO borre los datos**, la base debe
+vivir en un **disco persistente**, fuera del contenedor. Si no, Render borra el
+contenedor en cada despliegue y con él todos los productos, ventas y clientes.
+
+En [dashboard.render.com](https://dashboard.render.com) → tu servicio:
+
+1. Menú **Disks** → **Add Disk**:
+   - Name: `datos-ferreteria`
+   - Mount Path: `/var/data`
+   - Size: 1 GB
+2. Menú **Environment** → añade la variable:
+   - `FERRETERIA_DB` = `/var/data/ferreteria.db`
+
+Con esto, la base vive en `/var/data/ferreteria.db` y **sobrevive a todos los
+despliegues**. La app avisa en los logs si en producción falta esta variable.
+
+> Alternativa: usar el archivo `render.yaml` del repositorio como Blueprint, que
+ya deja el disco y la variable configurados. Solo aplica a servicios nuevos.
 
 ---
 

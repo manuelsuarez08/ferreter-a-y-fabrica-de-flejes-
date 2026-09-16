@@ -8,6 +8,7 @@ de Flask más allá de lo necesario.
 import os
 import shutil
 import sqlite3
+from datetime import datetime
 from werkzeug.security import generate_password_hash
 from .config import (
     DB_NAME,
@@ -480,6 +481,29 @@ def init_db():
 
     conn.commit()
     conn.close()
+
+
+def respaldar_base_de_datos():
+    '''Guarda una copia de seguridad de la base antes de tocarla.
+
+    Se ejecuta en cada arranque: si la base ya existe, deja una copia
+    ferreteria-respaldo-arranque-FECHA.db junto a ella. Sirve de red de
+    seguridad ante cualquier migracion o restauracion accidental.
+
+    Devuelve la ruta del respaldo, o None si no habia nada que respaldar.
+    '''
+    if not os.path.exists(DB_NAME):
+        return None
+    try:
+        marca = datetime.now().strftime('%Y%m%d-%H%M%S')
+        destino = os.path.join(
+            os.path.dirname(DB_NAME) or '.', f'ferreteria-respaldo-arranque-{marca}.db'
+        )
+        shutil.copy2(DB_NAME, destino)
+        return destino
+    except OSError:
+        return None
+
 def asegurar_base_de_datos():
     """Prepara la base de datos efectiva, sembrándola si es necesario.
 

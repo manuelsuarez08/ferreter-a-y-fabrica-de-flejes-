@@ -6,7 +6,7 @@ que los módulos se conozcan entre sí. app.py solo delega aquí.
 from flask import Flask
 
 from .config import SECRET_KEY
-from .db import asegurar_base_de_datos, init_db
+from .db import asegurar_base_de_datos, init_db, respaldar_base_de_datos
 from .blueprints import alquiler, catalogo, core, cotizaciones, fabrica, pedidos, ventas
 
 
@@ -34,6 +34,11 @@ def create_app(inicializar_db=True):
         # Si DB_NAME apunta a un disco persistente vacío, se siembra desde el
         # repositorio antes de garantizar el esquema.
         asegurar_base_de_datos()
+        # Red de seguridad: copia de la base ANTES de cualquier migracion, para
+        # no perder datos si algo sale mal al actualizar.
+        respaldo = respaldar_base_de_datos()
+        if respaldo:
+            app.logger.info('Respaldo de seguridad creado: %s', respaldo)
         init_db()
 
     return app

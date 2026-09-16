@@ -42,6 +42,23 @@ def _resolver_db_name():
     return os.environ.get('FERRETERIA_DB') or DB_SEMILLA
 DB_NAME = _resolver_db_name()
 
+# ¿Estamos en un servidor de producción (Render)? Render define RENDER=true.
+EN_PRODUCCION = os.environ.get('RENDER', '').lower() == 'true'
+
+# Si estamos en producción SIN disco persistente configurado, cada despliegue
+# borraría los datos (la base vive dentro del contenedor efímero). Se avisa una
+# sola vez al importar para que quede claro en los logs del servidor.
+if EN_PRODUCCION and not os.environ.get('FERRETERIA_DB'):
+    import warnings
+    warnings.warn(
+        'ATENCION: en produccion (Render) no esta configurada la variable '
+        'FERRETERIA_DB. Sin ella, la base de datos vive dentro del contenedor y '
+        'SE PERDERIA EN CADA DESPLIEGUE. Configure un disco persistente en '
+        '/var/data y la variable FERRETERIA_DB=/var/data/ferreteria.db.',
+        RuntimeWarning,
+        stacklevel=2,
+    )
+
 # Clave secreta de Flask para firmar la sesión.
 SECRET_KEY = os.environ.get('SECRET_KEY', 'clave_secreta_ferreteria')
 
