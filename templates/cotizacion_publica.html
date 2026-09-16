@@ -1,9 +1,10 @@
 {% set NS = cot.negocio if cot else {} %}
 <!DOCTYPE html>
-<html lang="es">
+<html lang="es" translate="no">
 <head>
  <meta charset="UTF-8">
  <meta name="viewport" content="width=device-width, initial-scale=1">
+ <meta name="google" content="notranslate">
  <title>{% if cot %}Cotización {{ cot.consecutivo }}{% else %}Cotización{% endif %}</title>
  <style>
     * { box-sizing: border-box; }

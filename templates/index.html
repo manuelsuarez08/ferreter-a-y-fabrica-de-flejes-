@@ -1,13 +1,15 @@
 <!DOCTYPE html>
-<html lang="es" spellcheck="true">
+<html lang="es" translate="no" spellcheck="true">
 <head>
-  <meta charset="UTF-8">
-  <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Ferretería y Fábrica de Flejes - Sistema POS</title>
+ <meta charset="UTF-8">
+ <meta name="viewport" content="width=device-width, initial-scale=1.0">
+ <meta name="google" content="notranslate">
+ <title>Ferretería y Fábrica de Flejes - Sistema POS</title>
   <link href="{{ url_for('static', filename='vendor/bootstrap.min.css') }}" rel="stylesheet">
   <link href="{{ url_for('static', filename='vendor/tom-select.bootstrap5.min.css') }}" rel="stylesheet">
-  <script src="{{ url_for('static', filename='vendor/html2pdf.bundle.min.js') }}"></script>
-  <script src="{{ url_for('static', filename='vendor/html5-qrcode.min.js') }}"></script>
+   <!-- html2pdf (~885 KB) y html5-qrcode (~367 KB) NO se cargan aquí: se
+        cargan bajo demanda la primera vez que se usan (imprimir/PDF o escanear
+        con cámara). Así la carga inicial de la página es mucho más rápida. -->
   <style>
     body {
       background-color: #f8f9fa;
@@ -2090,17 +2092,42 @@
     </div>
   </div>
 
-  <script src="{{ url_for('static', filename='vendor/bootstrap.bundle.min.js') }}"></script>
-  <script src="{{ url_for('static', filename='vendor/tom-select.complete.min.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='vendor/bootstrap.bundle.min.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='vendor/tom-select.complete.min.js') }}"></script>
 
   <script>
     const ROL_ACTUAL = '{{ rol }}';
+
+    // ── Carga diferida de librerías pesadas ────────────────────────────────
+    // html2pdf (~885 KB) y html5-qrcode (~367 KB) se descargan solo cuando se
+    // necesitan, no al abrir la página. Éstos helpers devuelven una promesa que
+    // se resuelve cuando el script terminó de cargar.
+    const VENDOR_HTML2PDF = "{{ url_for('static', filename='vendor/html2pdf.bundle.min.js') }}";
+    const VENDOR_QRCODE = "{{ url_for('static', filename='vendor/html5-qrcode.min.js') }}";
+    const _scriptsCargados = {};
+    function cargarScriptUnaVez(clave, url) {
+      if (_scriptsCargados[clave]) return _scriptsCargados[clave];
+      _scriptsCargados[clave] = new Promise((resolve, reject) => {
+        const s = document.createElement('script');
+        s.src = url;
+        s.onload = () => resolve();
+        s.onerror = () => { delete _scriptsCargados[clave]; reject(new Error('No se pudo cargar ' + url)); };
+        document.head.appendChild(s);
+      });
+      return _scriptsCargados[clave];
+    }
+    const cargarHtml2Pdf = () => cargarScriptUnaVez('html2pdf', VENDOR_HTML2PDF);
+    const cargarQrCode = () => cargarScriptUnaVez('html5qrcode', VENDOR_QRCODE);
+
     let carrito = [];
     let carritoFlejes = [];
     let productosLista = [];
     let clientesLista = [];
     let equiposAlquilerLista = [];
     let tsCliente, tsProducto, tsProdNombre;
+    // RENDIMIENTO: número máximo de productos que se cargan al abrir la página.
+    // El resto del catálogo se consulta bajo demanda (buscador, escaneo, edición).
+    const LIMITE_CARGA_PRODUCTOS = 300;
     let facturaActualId = null;
     let facturaActual = null;
     let comprobanteAbonoActual = null;
@@ -2658,7 +2685,9 @@
       const resClientes = await fetch('/api/clientes');
       clientesLista = await resClientes.json();
 
-      const resProds = await fetch('/api/productos');
+      // RENDIMIENTO: el buscador del POS es server-side (carga por `load`), así
+      // que no hace falta traer todo el catálogo: basta una muestra como caché.
+      const resProds = await fetch('/api/productos?limite=' + LIMITE_CARGA_PRODUCTOS);
       productosLista = await resProds.json();
 
       if (tsCliente) tsCliente.destroy();
@@ -2837,9 +2866,21 @@
       event.target.value = '';
     }
 
-    function buscarYMostrarProducto(codigo, agregarAlCarrito = false) {
+    async function buscarYMostrarProducto(codigo, agregarAlCarrito = false) {
       const panel = document.getElementById('panel-scan-resultado');
-      const producto = productosLista.find(p => p.codigo_barras === codigo);
+      let producto = productosLista.find(p => p.codigo_barras === codigo);
+
+      // Si el producto no está en memoria (catálogo grande y carga limitada),
+      // se busca directamente por código de barras en el servidor.
+      if (!producto) {
+        try {
+          const res = await fetch('/api/productos/barcode/' + encodeURIComponent(codigo));
+          if (res.ok) {
+            producto = await res.json();
+            if (producto) productosLista.push(producto);
+          }
+        } catch (e) { /* se trata como no encontrado */ }
+      }
 
       if (!producto) {
         panel.className = 'mt-3 panel-scan-resultado no-encontrado p-2 rounded';
@@ -3194,8 +3235,22 @@
       tbody.innerHTML = html;
     }
 
+    // Devuelve un producto por id: desde memoria o, si no está, desde el servidor.
+    async function obtenerProducto(id) {
+      const local = productosLista.find(p => String(p.id) === String(id));
+      if (local) return local;
+      try {
+        const res = await fetch('/api/productos?q=' + encodeURIComponent(String(id)));
+        if (!res.ok) return null;
+        const lista = await res.json();
+        const prod = lista.find(p => String(p.id) === String(id)) || null;
+        if (prod) productosLista.push(prod);
+        return prod;
+      } catch (e) { return null; }
+    }
+
     async function cargarProductosTabla() {
-      const res = await fetch('/api/productos');
+      const res = await fetch('/api/productos?limite=' + LIMITE_CARGA_PRODUCTOS);
       productosLista = await res.json();
       const movimientoProducto = document.getElementById('mov-producto');
       if (movimientoProducto) {
@@ -3293,7 +3348,7 @@
     }
 
     async function editarProducto(id) {
-      const producto = productosLista.find(p => p.id === id);
+      const producto = await obtenerProducto(id);
       if (!producto) return;
       const nombre = prompt('Nombre del producto:', producto.nombre);
       if (nombre === null) return;
@@ -3310,7 +3365,7 @@
 
     // ── Reconteo y auditoría en vivo (AJAX, sin recargar la página) ──────────
     async function recontarProducto(id) {
-      const producto = productosLista.find(p => p.id === id);
+      const producto = await obtenerProducto(id);
       if (!producto) return;
       const contado = prompt(
         `Reconteo de "${producto.nombre}"\nStock en sistema: ${producto.stock_actual}\n\nIngrese la cantidad REAL contada:`,
@@ -3692,11 +3747,12 @@
     // factura/comprobante. Se aísla el contenido en un contenedor propio con el
     // CSS de la tirilla y Bootstrap, de modo que el PDF sale idéntico a pantalla
     // y sin los estilos del modal (que rompían el layout).
-    function generarPDFRecibo(areaEl, nombreArchivo) {
+    async function generarPDFRecibo(areaEl, nombreArchivo) {
       if (!areaEl) return;
+      // La librería se carga bajo demanda la primera vez que se genera un PDF.
       if (typeof html2pdf === 'undefined') {
-        alert('No se pudo generar el PDF: la librería no cargó. Recargue la página.');
-        return;
+        try { await cargarHtml2Pdf(); }
+        catch (e) { alert('No se pudo generar el PDF: la librería no cargó. Revise su conexión.'); return; }
       }
       const clon = areaEl.cloneNode(true);
       clon.className = 'recibo-termico';
@@ -4535,7 +4591,18 @@
       document.getElementById('modalCamaraBarcode').addEventListener('shown.bs.modal', _iniciarCamara, { once: true });
     }
 
-    function _iniciarCamara() {
+    async function _iniciarCamara() {
+      // La librería se carga bajo demanda la primera vez que se abre la cámara.
+      if (typeof Html5Qrcode === 'undefined') {
+        try { await cargarQrCode(); }
+        catch (e) {
+          const errorDiv = document.getElementById('barcode-error');
+          document.getElementById('barcode-error-msg').textContent =
+            'No se pudo cargar el lector de códigos. Revise su conexión.';
+          errorDiv.classList.remove('d-none');
+          return;
+        }
+      }
       if (html5QrScanner) {
         html5QrScanner.clear().catch(() => {});
       }
@@ -5268,8 +5335,12 @@
             cargarCotizaciones();
           }
 
-          function descargarCotizacionPDF() {
+          async function descargarCotizacionPDF() {
             const consec = document.getElementById('cot-ver-consecutivo').innerText || 'cotizacion';
+            if (typeof html2pdf === 'undefined') {
+              try { await cargarHtml2Pdf(); }
+              catch (e) { alert('No se pudo generar el PDF. Revise su conexión.'); return; }
+            }
             html2pdf().from(document.getElementById('area-cotizacion-pdf')).save(`${consec}.pdf`);
           }
 
