@@ -156,7 +156,7 @@
       <a class="navbar-brand fw-bold fs-4" href="#">🛠️ FERRETERÍA Y FÁBRICA DE FLEJES</a>
       
       <div class="d-flex align-items-center gap-3">
-        {% if rol != 'fabrica' and rol != 'pedidos' %}
+        {% if rol != 'fabrica' and rol != 'pedidos' and rol != 'motocarguero' %}
         <!-- Botón de Notificaciones -->
         <button type="button" class="btn btn-warning position-relative fw-bold" onclick="abrirModalNotificaciones()">
           🔔 Reposición
@@ -175,7 +175,7 @@
           🧵 Flejes Listos
           <span id="badge-notificaciones-flejes" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display:none;">0</span>
         </button>
-        {% if rol != 'fabrica' and rol != 'pedidos' %}
+        {% if rol != 'fabrica' and rol != 'pedidos' and rol != 'motocarguero' %}
         <button type="button" class="btn btn-dark position-relative fw-bold" onclick="abrirModalNotificacionesCotizaciones()">
           🧾 Cotizaciones
           <span id="badge-notificaciones-cot" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display:none;">0</span>
@@ -209,14 +209,14 @@
   <div class="container-fluid px-4">
     <!-- Banner de Alerta de stock -->
     <div id="banner-alerta-stock" class="alert alert-warning alert-dismissible fade show d-none" role="alert">
-      <strong>⚠️ Atención:</strong> Hay productos que están a punto de agotarse o con stock en 0. 
+      <strong>⚠️ Atención:</strong> Hay productos que están a punto de agotarse o con stock en 0.
       <button class="btn btn-sm btn-outline-dark ms-2 fw-bold" onclick="abrirModalNotificaciones()">Ver Lista de Pedidos Urgentes</button>
       <button type="button" class="btn-close" data-bs-dismiss="alert" aria-label="Close"></button>
     </div>
 
     <!-- Navegación por pestañas -->
     <ul class="nav nav-tabs flex-nowrap overflow-auto" id="myTab" role="tablist" style="flex-wrap:nowrap!important;white-space:nowrap;">
-      {% set rol_restringido = rol in ['fabrica', 'pedidos'] %}
+      {% set rol_restringido = rol in ['fabrica', 'pedidos', 'motocarguero'] %}
       {% if not rol_restringido %}
       <li class="nav-item">
         <button class="nav-link active" id="ventas-tab" data-bs-toggle="tab" data-bs-target="#ventas" type="button" onclick="cargarFormularioVentas().then(()=>document.getElementById('input-codigo-barras').focus())">🛒 Ventas / Facturación</button>
@@ -242,7 +242,7 @@
       {% endif %}
       {% if rol != 'fabrica' %}
       <li class="nav-item">
-        <button class="nav-link {{ 'active' if rol == 'pedidos' else '' }} position-relative" id="pedidos-tab" data-bs-toggle="tab" data-bs-target="#pedidos" type="button" onclick="activarSubtabPedidos('despachos')">
+        <button class="nav-link {{ 'active' if rol in ['pedidos', 'motocarguero'] else '' }} position-relative" id="pedidos-tab" data-bs-toggle="tab" data-bs-target="#pedidos" type="button" onclick="activarSubtabPedidos('despachos')">
           🚚 Pedidos
           <span id="badge-pedidos" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display:none;">0</span>
         </button>
@@ -255,7 +255,7 @@
         </button>
       </li>
       {% endif %}
-      {% if rol != 'pedidos' %}
+      {% if rol != 'pedidos' and rol != 'motocarguero' %}
       <li class="nav-item">
         <button class="nav-link {{ 'active' if rol == 'fabrica' else '' }} position-relative" id="flejes-tab" data-bs-toggle="tab" data-bs-target="#flejes" type="button" onclick="cargarOrdenesFlejes()">
           🧵 Fábrica de Flejes
@@ -274,11 +274,11 @@
     </ul>
 
     <div class="tab-content bg-white border border-top-0 p-4 rounded-bottom shadow-sm">
-      
+
       <!-- Pestaña Ventas -->
-      <div class="tab-pane fade {{ 'show active' if rol not in ['fabrica','pedidos'] else '' }}" id="ventas">
+      <div class="tab-pane fade {{ 'show active' if rol not in ['fabrica','pedidos','motocarguero'] else '' }}" id="ventas">
         <h4 class="mb-3">Nueva Venta</h4>
-        
+
         <div class="card p-3 mb-4 bg-light border">
           <!-- Tipo de entrega -->
           <div class="mb-3">
@@ -1159,7 +1159,7 @@
       {% endif %}
 
       <!-- ══════════════ PESTAÑA PEDIDOS ══════════════ -->
-      <div class="tab-pane fade {{ 'show active' if rol == 'pedidos' else '' }}" id="pedidos">
+      <div class="tab-pane fade {{ 'show active' if rol in ['pedidos','motocarguero'] else '' }}" id="pedidos">
 
         <!-- Sub-pestañas: Despachos (para_llevar) | Pedidos manuales -->
         <ul class="nav nav-pills mb-3 gap-2" id="pedidos-subtabs">
@@ -2182,7 +2182,7 @@
         cargarOrdenesFlejes();
         return;
       }
-      if (ROL_ACTUAL === 'pedidos') {
+      if (ROL_ACTUAL === 'pedidos' || ROL_ACTUAL === 'motocarguero') {
         activarSubtabPedidos('despachos');
         return;
       }
