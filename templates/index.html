@@ -594,7 +594,7 @@
                    oninput="filtrarTablaProductos(this.value)">
           </div>
           <div class="col-md-7 text-muted small">
-            La tabla muestra solo los primeros 30 resultados para mantener la página rápida; usa el buscador para acotar.
+            Se muestra el catálogo completo, paginado. Usa el buscador para acotar por nombre, código o categoría.
           </div>
         </div>
 
@@ -618,6 +618,17 @@
               <tr><td colspan="11" class="text-center text-muted">Cargando productos...</td></tr>
             </tbody>
           </table>
+        </div>
+
+        <!-- Paginación del inventario: permite ver TODO el catálogo por páginas -->
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mt-3">
+          <div class="text-muted small" id="info-paginacion-productos"></div>
+          <div class="btn-group" role="group" aria-label="Paginación de productos">
+            <button type="button" class="btn btn-outline-primary btn-sm" id="btn-prod-anterior"
+                    onclick="cambiarPaginaProductos(-1)">‹ Anterior</button>
+            <button type="button" class="btn btn-outline-primary btn-sm" id="btn-prod-siguiente"
+                    onclick="cambiarPaginaProductos(1)">Siguiente ›</button>
+          </div>
         </div>
       </div>
 
@@ -3190,9 +3201,11 @@
       window.location.href = `mailto:${destino}?subject=${asunto}&body=${cuerpo}`;
     }
 
-    // RENDIMIENTO: solo se pintan las primeras N filas del inventario para no
-    // congelar el navegador con cientos de filas; el resto se filtra buscando.
-    const LIMITE_TABLA_INVENTARIO = 30;
+    // PAGINACIÓN del inventario: se muestran todas las filas del catálogo, en
+    // páginas, para no congelar el navegador con cientos de filas a la vez.
+    const FILAS_POR_PAGINA = 50;
+    let paginaProductosActual = 1;
+    let productosParaPaginar = [];   // lista sobre la que se pagina (cargada o filtrada)
 
     function renderFilaProducto(p) {
       const estado = p.stock_actual <= p.stock_minimo
@@ -3220,19 +3233,61 @@
         </tr>`;
     }
 
+    // Pinta la página actual de la lista recibida. Reinicia a la página 1.
     function pintarTablaProductos(lista) {
+      productosParaPaginar = lista || [];
+      paginaProductosActual = 1;
+      renderPaginaProductos();
+    }
+
+    // Renderiza la página activa y actualiza los controles de paginación.
+    function renderPaginaProductos() {
       const tbody = document.getElementById('tabla-productos-body');
       if (!tbody) return;
-      if (!lista.length) {
-        tbody.innerHTML = '<tr><td colspan="11" class="text-center text-muted">Sin productos que coincidan.</td></tr>';
+      const total = productosParaPaginar.length;
+
+      if (!total) {
+        tbody.innerHTML = '<tr><td colspan="10" class="text-center text-muted">Sin productos que coincidan.</td></tr>';
+        actualizarControlesPaginacion(0, 0);
         return;
       }
-      const visibles = lista.slice(0, LIMITE_TABLA_INVENTARIO);
-      let html = visibles.map(renderFilaProducto).join('');
-      if (lista.length > visibles.length) {
-        html += `<tr><td colspan="11" class="text-center text-muted small">Mostrando ${visibles.length} de ${lista.length}. Usa el buscador para acotar.</td></tr>`;
+
+      const totalPaginas = Math.ceil(total / FILAS_POR_PAGINA);
+      if (paginaProductosActual > totalPaginas) paginaProductosActual = totalPaginas;
+      if (paginaProductosActual < 1) paginaProductosActual = 1;
+
+      const inicio = (paginaProductosActual - 1) * FILAS_POR_PAGINA;
+      const visibles = productosParaPaginar.slice(inicio, inicio + FILAS_POR_PAGINA);
+
+      tbody.innerHTML = visibles.map(renderFilaProducto).join('');
+      actualizarControlesPaginacion(total, totalPaginas);
+    }
+
+    function actualizarControlesPaginacion(total, totalPaginas) {
+      const info = document.getElementById('info-paginacion-productos');
+      const btnPrev = document.getElementById('btn-prod-anterior');
+      const btnNext = document.getElementById('btn-prod-siguiente');
+
+      if (!total) {
+        if (info) info.textContent = '0 productos';
+        if (btnPrev) btnPrev.disabled = true;
+        if (btnNext) btnNext.disabled = true;
+        return;
       }
-      tbody.innerHTML = html;
+
+      const inicio = (paginaProductosActual - 1) * FILAS_POR_PAGINA + 1;
+      const fin = Math.min(paginaProductosActual * FILAS_POR_PAGINA, total);
+      if (info) info.textContent = `Mostrando ${inicio}–${fin} de ${total} productos (página ${paginaProductosActual} de ${totalPaginas})`;
+      if (btnPrev) btnPrev.disabled = paginaProductosActual <= 1;
+      if (btnNext) btnNext.disabled = paginaProductosActual >= totalPaginas;
+    }
+
+    function cambiarPaginaProductos(delta) {
+      paginaProductosActual += delta;
+      renderPaginaProductos();
+      // Llevar la vista al inicio de la tabla
+      document.getElementById('tabla-productos-body')
+        ?.scrollIntoView({ behavior: 'smooth', block: 'start' });
     }
 
     // Devuelve un producto por id: desde memoria o, si no está, desde el servidor.
@@ -3250,11 +3305,13 @@
     }
 
     async function cargarProductosTabla() {
-      const res = await fetch('/api/productos?limite=' + LIMITE_CARGA_PRODUCTOS);
+      // Carga TODO el catálogo (hasta el tope del endpoint) para poder verlo
+      // completo en el inventario. La tabla lo pagina para no congelarse.
+      const res = await fetch('/api/productos?limite=2000');
       productosLista = await res.json();
       const movimientoProducto = document.getElementById('mov-producto');
       if (movimientoProducto) {
-        movimientoProducto.innerHTML = '<option value="">Producto</option>' + productosLista.slice(0, LIMITE_TABLA_INVENTARIO).map(p => `<option value="${p.id}">${escapeHtml(p.nombre || '')} (stock: ${p.stock_actual})</option>`).join('');
+        movimientoProducto.innerHTML = '<option value="">Producto</option>' + productosLista.map(p => `<option value="${p.id}">${escapeHtml(p.nombre || '')} (stock: ${p.stock_actual})</option>`).join('');
       }
 
       pintarTablaProductos(productosLista);
@@ -3280,7 +3337,7 @@
       const q = (texto || '').trim();
       if (!q) { pintarTablaProductos(productosLista); return; }
       try {
-        const res = await fetch('/api/productos?limite=100&q=' + encodeURIComponent(q));
+        const res = await fetch('/api/productos?limite=2000&q=' + encodeURIComponent(q));
         const data = await res.json();
         pintarTablaProductos(data);
       } catch (e) {
