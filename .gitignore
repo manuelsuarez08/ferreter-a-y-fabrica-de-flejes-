@@ -17,3 +17,9 @@ venv/
 # Residuos y archivos de trabajo temporales
 *.obsoleto-*
 _qa_*.mjs
+# Scripts locales de verificacion (no son parte de la app)
+_test_*.py
+_ver_*.py
+_probar_*.py
+_chk_*.py
+_verif_*.py
