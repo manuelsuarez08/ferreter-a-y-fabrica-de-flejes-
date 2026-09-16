@@ -304,19 +304,151 @@ def gastos_negocio():
         return jsonify({"error": "Datos del gasto inválidos"}), 400
 
 
+@bp.route('/api/cierre-diario', methods=['GET'])
+@login_required
+def cierre_diario():
+    # Vista completa del cierre de un dia: resumen, productos vendidos, gastos,
+    # abonos, fiados y el desglose de caja para cuadrar. El parametro `fecha`
+    # (YYYY-MM-DD) es opcional; por defecto, hoy.
+    conn = get_db()
+    fecha = str(request.args.get('fecha') or datetime.now().strftime('%Y-%m-%d'))
+
+    # ── Ventas del día (sin anuladas) ────────────────────
+    ventas = conn.execute(
+        "SELECT id, id_cliente, hora, total_venta, saldo_pendiente, tipo_pago "
+        "FROM ventas WHERE fecha_dia = ? AND COALESCE(anulada, 0) = 0 ORDER BY hora, id",
+        (fecha,),
+    ).fetchall()
+    total_ventas = sum((v[3] or 0) for v in ventas)
+    total_credito = sum((v[4] or 0) for v in ventas)
+    ventas_efectivo = sum((v[3] or 0) for v in ventas if (v[5] or '') == 'efectivo')
+
+    # ── Detalle de productos vendidos (una fila por linea) ──
+    detalle = conn.execute(
+        "SELECT p.codigo_barras, p.nombre, dv.cantidad, dv.precio_unitario, "
+        "       dv.subtotal, v.tipo_pago, v.hora "
+        "FROM detalle_ventas dv "
+        "JOIN ventas v ON v.id = dv.id_venta "
+        "JOIN productos p ON p.id = dv.id_producto "
+        "WHERE v.fecha_dia = ? AND COALESCE(v.anulada, 0) = 0 "
+        "ORDER BY v.hora, v.id",
+        (fecha,),
+    ).fetchall()
+    productos_vendidos = [{
+        "codigo": r[0] or '', "nombre": r[1] or '', "cantidad": r[2] or 0,
+        "precio_unitario": r[3] or 0, "subtotal": r[4] or 0,
+        "tipo_pago": r[5] or '', "hora": r[6] or '',
+    } for r in detalle]
+
+    # ── Costo de lo vendido (para la utilidad) ────────────
+    costo = conn.execute(
+        "SELECT COALESCE(SUM(dv.cantidad * COALESCE(p.precio_costo, 0)), 0) "
+        "FROM detalle_ventas dv "
+        "JOIN ventas v ON v.id = dv.id_venta "
+        "JOIN productos p ON p.id = dv.id_producto "
+        "WHERE v.fecha_dia = ? AND COALESCE(v.anulada, 0) = 0",
+        (fecha,),
+    ).fetchone()[0]
+    utilidad_bruta = total_ventas - costo
+    # ── Gastos del día ────────────────────
+    gastos = conn.execute(
+        "SELECT id, categoria, descripcion, monto, usuario, fecha "
+        "FROM gastos WHERE fecha = ? ORDER BY id", (fecha,)
+    ).fetchall()
+    total_gastos = sum((g[3] or 0) for g in gastos)
+    lista_gastos = [{
+        "id": g[0], "categoria": g[1] or '', "descripcion": g[2] or '',
+        "monto": g[3] or 0, "usuario": g[4] or '', "hora": (g[5] or '')[11:16],
+    } for g in gastos]
+
+    # ── Abonos recibidos hoy ────────────────
+    abonos = conn.execute(
+        "SELECT a.id, c.nombre, a.monto, a.fecha, "
+        "  (SELECT COALESCE(SUM(v2.saldo_pendiente), 0) FROM ventas v2 "
+        "   WHERE v2.id_cliente = a.id_cliente AND COALESCE(v2.anulada, 0) = 0) "
+        "FROM abonos a JOIN clientes c ON c.id = a.id_cliente "
+        "WHERE substr(a.fecha, 1, 10) = ? ORDER BY a.id",
+        (fecha,),
+    ).fetchall()
+    total_abonos = sum((a[2] or 0) for a in abonos)
+    lista_abonos = [{
+        "id": a[0], "cliente": a[1] or '', "monto": a[2] or 0,
+        "hora": (a[3] or '')[11:16], "saldo_pendiente": a[4] or 0,
+    } for a in abonos]
+
+    # ── Ventas a crédito (fiados) de hoy ──────────────────
+    fiados = conn.execute(
+        "SELECT v.id, c.nombre, v.total_venta, COALESCE(v.saldo_pendiente, 0), v.hora "
+        "FROM ventas v JOIN clientes c ON c.id = v.id_cliente "
+        "WHERE v.fecha_dia = ? AND v.tipo_pago = 'credito' "
+        "AND COALESCE(v.anulada, 0) = 0 ORDER BY v.hora, v.id",
+        (fecha,),
+    ).fetchall()
+    lista_fiados = [{
+        "id": f[0], "cliente": f[1] or '', "total": f[2] or 0,
+        "saldo": f[3] or 0, "hora": f[4] or '',
+    } for f in fiados]
+
+    # ── Desglose de caja (cuadre) ─────────────────────────
+    base_fila = conn.execute(
+        "SELECT COALESCE(base_inicial, 0) FROM cierres_caja WHERE fecha = ?", (fecha,)
+    ).fetchone()
+    base = (base_fila[0] if base_fila else 0) or 0
+    efectivo_esperado = base + ventas_efectivo + total_abonos - total_gastos
+    cierre_guardado = conn.execute(
+        "SELECT efectivo_contado, diferencia, observaciones, fecha_registro, "
+        "COALESCE(base_inicial, 0) "
+        "FROM cierres_caja WHERE fecha = ?", (fecha,)
+    ).fetchone()
+
+    conn.close()
+    return jsonify({
+        "fecha": fecha,
+        "resumen": {
+            "total_ventas": total_ventas,
+            "total_abonos": total_abonos,
+            "total_gastos": total_gastos,
+            "total_credito": total_credito,
+            "costo": costo,
+            "utilidad_bruta": utilidad_bruta,
+            "ganancia_neta": utilidad_bruta - total_gastos,
+            "num_ventas": len(ventas),
+        },
+        "productos_vendidos": productos_vendidos,
+        "gastos": lista_gastos,
+        "abonos": lista_abonos,
+        "fiados": lista_fiados,
+        "caja": {
+            "base_inicial": base,
+            "efectivo_ventas": ventas_efectivo,
+            "efectivo_abonos": total_abonos,
+            "gastos_efectivo": total_gastos,
+            "efectivo_esperado": efectivo_esperado,
+        },
+        "cierre_guardado": ({
+            "efectivo_contado": cierre_guardado[0],
+            "diferencia": cierre_guardado[1],
+            "observaciones": cierre_guardado[2] or '',
+            "fecha_registro": cierre_guardado[3],
+            "base_inicial": cierre_guardado[4] or 0,
+        } if cierre_guardado else None),
+    })
+
 @bp.route('/api/cierres-caja', methods=['GET', 'POST'])
 @login_required
 def cierres_caja():
     conn = get_db()
     if request.method == 'GET':
         rows = conn.execute(
-            "SELECT id, fecha, efectivo_esperado, efectivo_contado, diferencia, observaciones, "
-            "usuario, fecha_registro FROM cierres_caja ORDER BY id DESC LIMIT 100"
+            "SELECT id, fecha, COALESCE(base_inicial, 0), efectivo_esperado, efectivo_contado, "
+            "diferencia, observaciones, usuario, fecha_registro "
+            "FROM cierres_caja ORDER BY id DESC LIMIT 100"
         ).fetchall()
         conn.close()
-        return jsonify([{"id": r[0], "fecha": r[1], "efectivo_esperado": r[2],
-                         "efectivo_contado": r[3], "diferencia": r[4], "observaciones": r[5] or "",
-                         "usuario": r[6], "fecha_registro": r[7]} for r in rows])
+        return jsonify([{"id": r[0], "fecha": r[1], "base_inicial": r[2],
+                         "efectivo_esperado": r[3],
+                         "efectivo_contado": r[4], "diferencia": r[5], "observaciones": r[6] or "",
+                         "usuario": r[7], "fecha_registro": r[8]} for r in rows])
 
     if session.get('rol') != 'admin':
         conn.close()
@@ -339,19 +471,22 @@ def cierres_caja():
         gastos = cursor.execute(
             "SELECT COALESCE(SUM(monto), 0) FROM gastos WHERE fecha = ?", (fecha,)
         ).fetchone()[0]
-        efectivo_esperado = ventas_efectivo + abonos - gastos
+        base_inicial = float(data.get('base_inicial', 0) or 0)
+        efectivo_esperado = base_inicial + ventas_efectivo + abonos - gastos
         diferencia = contado - efectivo_esperado
         cursor.execute(
             """
-            INSERT INTO cierres_caja (fecha, efectivo_esperado, efectivo_contado, diferencia,
-                                      observaciones, usuario, fecha_registro)
-            VALUES (:fecha, :esperado, :contado, :diferencia, :obs, :usuario, :registro)
-            ON CONFLICT(fecha) DO UPDATE SET efectivo_esperado = excluded.efectivo_esperado,
+            INSERT INTO cierres_caja (fecha, base_inicial, efectivo_esperado, efectivo_contado,
+                                      diferencia, observaciones, usuario, fecha_registro)
+            VALUES (:fecha, :base, :esperado, :contado, :diferencia, :obs, :usuario, :registro)
+            ON CONFLICT(fecha) DO UPDATE SET base_inicial = excluded.base_inicial,
+            efectivo_esperado = excluded.efectivo_esperado,
             efectivo_contado = excluded.efectivo_contado, diferencia = excluded.diferencia,
             observaciones = excluded.observaciones, usuario = excluded.usuario,
             fecha_registro = excluded.fecha_registro
             """,
-            {'fecha': fecha, 'esperado': efectivo_esperado, 'contado': contado,
+            {'fecha': fecha, 'base': base_inicial, 'esperado': efectivo_esperado,
+             'contado': contado,
              'diferencia': diferencia, 'obs': observaciones, 'usuario': session['usuario'],
              'registro': datetime.now().strftime('%Y-%m-%d %H:%M:%S')},
         )

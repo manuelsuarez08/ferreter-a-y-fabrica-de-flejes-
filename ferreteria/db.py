@@ -236,6 +236,7 @@ def _crear_tablas_operacion(cursor):
         CREATE TABLE IF NOT EXISTS cierres_caja (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             fecha TEXT UNIQUE NOT NULL,
+            base_inicial REAL NOT NULL DEFAULT 0,
             efectivo_esperado REAL NOT NULL,
             efectivo_contado REAL NOT NULL,
             diferencia REAL NOT NULL,
@@ -401,6 +402,9 @@ def _aplicar_migraciones(cursor):
         ('ventas', 'siigo_intentos', 'INTEGER NOT NULL DEFAULT 0'),
     ):
         migrar_columna(cursor, tabla, columna, definicion)
+
+    # Base inicial de caja para el módulo de cierre diario.
+    migrar_columna(cursor, 'cierres_caja', 'base_inicial', 'REAL NOT NULL DEFAULT 0')
 
     for tabla in ('equipos_alquiler', 'equipos'):
         for columna, definicion in (

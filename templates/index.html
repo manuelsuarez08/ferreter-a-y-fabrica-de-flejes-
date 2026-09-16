@@ -1015,6 +1015,123 @@
             </div>
           </div>
         </div>
+        <!-- ══════ CIERRE DIARIO Y BALANCE ══════ -->
+        <div class="card p-3 border mb-4">
+          <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+            <h4 class="fw-bold mb-0">📊 Cierre Diario y Balance</h4>
+            <div class="d-flex gap-2 align-items-center">
+              <label class="fw-bold mb-0">Fecha:</label>
+              <input type="date" id="cierre-diario-fecha" class="form-control form-control-sm" style="width:auto">
+              <button class="btn btn-sm btn-dark fw-bold" onclick="cargarCierreDiario()">🔄 Actualizar</button>
+            </div>
+          </div>
+
+          <!-- 1. TARJETAS DE RESUMEN -->
+          <div class="row g-3 mb-4">
+            <div class="col-md-3">
+              <div class="card text-white bg-success p-3 h-100">
+                <small class="text-uppercase">Total Ventas del Día</small>
+                <h3 class="fw-bold mb-0" id="cd-ventas">$ 0</h3>
+                <small id="cd-num-ventas">0 ventas</small>
+              </div>
+            </div>
+            <div class="col-md-3">
+              <div class="card text-white bg-primary p-3 h-100">
+                <small class="text-uppercase">Abonos Recibidos</small>
+                <h3 class="fw-bold mb-0" id="cd-abonos">$ 0</h3>
+                <small>Cobro de cartera</small>
+              </div>
+            </div>
+            <div class="col-md-3">
+              <div class="card text-white bg-danger p-3 h-100">
+                <small class="text-uppercase">Gastos del Día</small>
+                <h3 class="fw-bold mb-0" id="cd-gastos">$ 0</h3>
+                <small>Salidas de dinero</small>
+              </div>
+            </div>
+            <div class="col-md-3">
+              <div class="card text-white bg-dark p-3 h-100">
+                <small class="text-uppercase">Ganancia Neta Real</small>
+                <h3 class="fw-bold mb-0" id="cd-ganancia">$ 0</h3>
+                <small>Utilidad − Gastos</small>
+              </div>
+            </div>
+          </div>
+
+          <div class="row g-4">
+            <!-- 2. TABLAS DETALLADAS -->
+            <div class="col-lg-8">
+              <h5 class="fw-bold">🧾 Detalle de Productos Vendidos</h5>
+              <div class="table-responsive mb-3" style="max-height:320px;overflow:auto">
+                <table class="table table-sm table-striped">
+                  <thead class="table-dark"><tr><th>Código</th><th>Producto</th><th>Cant.</th><th>Precio</th><th>Subtotal</th><th>Pago</th></tr></thead>
+                  <tbody id="cd-tabla-productos"></tbody>
+                </table>
+              </div>
+
+              <h5 class="fw-bold">💸 Gastos y Salidas de Dinero</h5>
+              <div class="table-responsive mb-3">
+                <table class="table table-sm table-striped">
+                  <thead class="table-dark"><tr><th>Hora</th><th>Concepto</th><th>Categoría</th><th>Monto</th></tr></thead>
+                  <tbody id="cd-tabla-gastos"></tbody>
+                </table>
+              </div>
+
+              <h5 class="fw-bold">💰 Abonos Recibidos</h5>
+              <div class="table-responsive mb-3">
+                <table class="table table-sm table-striped">
+                  <thead class="table-dark"><tr><th>Hora</th><th>Cliente</th><th>Monto</th><th>Saldo Pendiente</th></tr></thead>
+                  <tbody id="cd-tabla-abonos"></tbody>
+                </table>
+              </div>
+
+              <h5 class="fw-bold">📝 Ventas a Crédito (Fiados de Hoy)</h5>
+              <div class="table-responsive mb-3">
+                <table class="table table-sm table-striped">
+                  <thead class="table-dark"><tr><th>Hora</th><th>Cliente</th><th>Total</th><th>Queda Pendiente</th></tr></thead>
+                  <tbody id="cd-tabla-fiados"></tbody>
+                </table>
+              </div>
+            </div>
+
+            <!-- 3. CALCULADORA Y CUADRE EN VIVO -->
+            <div class="col-lg-4">
+              <div class="card border-dark p-3 sticky-top" style="top:80px">
+                <h5 class="fw-bold">🧮 Cuadre de Caja</h5>
+                <table class="table table-sm mb-2">
+                  <tbody>
+                    <tr>
+                      <td>Base Inicial</td>
+                      <td class="text-end" style="width:130px">
+                        <input type="number" id="cd-base-input" class="form-control form-control-sm text-end"
+                               placeholder="0" min="0" step="1000" value="0"
+                               oninput="recalcularCajaCierre()" title="Dinero con el que inicia la caja hoy">
+                        <span class="d-none" id="cd-base">$ 0</span>
+                      </td>
+                    </tr>
+                    <tr class="table-success"><td>(+) Efectivo de Ventas</td><td class="text-end" id="cd-ef-ventas">$ 0</td></tr>
+                    <tr class="table-success"><td>(+) Efectivo de Abonos</td><td class="text-end" id="cd-ef-abonos">$ 0</td></tr>
+                    <tr class="table-danger"><td>(−) Gastos en Efectivo</td><td class="text-end" id="cd-ef-gastos">$ 0</td></tr>
+                    <tr class="fw-bold table-dark"><td>= EFECTIVO ESPERADO</td><td class="text-end" id="cd-ef-esperado">$ 0</td></tr>
+                  </tbody>
+                </table>
+                <label class="form-label fw-bold">Efectivo Físico (contado)</label>
+                <input type="number" id="cd-ef-contado" class="form-control form-control-lg mb-2"
+                       placeholder="0" min="0" step="100" oninput="calcularDiferenciaCierre()">
+                <div id="cd-diferencia" class="alert alert-secondary text-center fw-bold mb-2">Diferencia: $ 0</div>
+                <input type="text" id="cd-observaciones" class="form-control form-control-sm mb-2" placeholder="Observaciones (opcional)">
+              </div>
+            </div>
+          </div>
+
+          <!-- 4. ACCIONES -->
+          <div class="d-flex gap-2 flex-wrap mt-4">
+            <button class="btn btn-success fw-bold" onclick="guardarCierreDiario()">✅ Guardar y Cerrar Día</button>
+            <button class="btn btn-outline-dark fw-bold" onclick="imprimirTirillaCierre()">🖨️ Imprimir Tirilla de Cierre</button>
+            <button class="btn btn-outline-danger fw-bold" onclick="descargarPdfCierre()">📄 Descargar PDF para el Jefe</button>
+          </div>
+        </div>
+
         <h5>Gastos recientes</h5>
         <div class="table-responsive mb-4"><table class="table table-sm"><thead><tr><th>Fecha</th><th>Categoría</th><th>Descripción</th><th>Monto</th><th>Usuario</th></tr></thead><tbody id="tabla-gastos-body"></tbody></table></div>
         <h5>Cierres de caja recientes</h5>
@@ -3944,6 +4061,281 @@
       document.getElementById('tabla-cierres-body').innerHTML = cierres.map(c => `<tr><td>${c.fecha}</td><td>${monedaCOP(c.efectivo_esperado)}</td><td>${monedaCOP(c.efectivo_contado)}</td><td class="${c.diferencia < 0 ? 'text-danger' : 'text-success'}">${monedaCOP(c.diferencia)}</td><td>${c.usuario}</td></tr>`).join('');
       document.getElementById('tabla-movimientos-body').innerHTML = movimientos.map(m => `<tr><td>${m.fecha}</td><td>${m.producto}</td><td>${m.tipo}</td><td>${m.cantidad}</td><td>${m.motivo}</td><td>${m.usuario}</td></tr>`).join('');
       document.getElementById('tabla-auditoria-body').innerHTML = auditoria.map(a => `<tr><td>${a.fecha}</td><td>${a.usuario}</td><td>${a.accion}</td><td>${a.entidad} #${a.entidad_id || ''}</td><td>${a.detalles || ''}</td></tr>`).join('');
+      // Carga también la vista del Cierre Diario (con la fecha de hoy por defecto).
+      const fechaCD = document.getElementById('cierre-diario-fecha');
+      if (fechaCD && !fechaCD.value) fechaCD.value = fechaHoy;
+      cargarCierreDiario();
+    }
+
+    // ══════
+    //  CIERRE DIARIO Y BALANCE
+    // ══════
+    let datosCierreDiario = null; // guarda el ultimo cierre cargado
+    // Carga y pinta toda la vista del cierre de un dia.
+    async function cargarCierreDiario() {
+      const input = document.getElementById('cierre-diario-fecha');
+      if (!input.value) input.value = new Date().toISOString().slice(0, 10);
+      const fecha = input.value;
+      try {
+        const res = await fetch('/api/cierre-diario?fecha=' + encodeURIComponent(fecha));
+        const d = await res.json();
+        if (!res.ok) { alert('Error: ' + (d.error || 'no se pudo cargar el cierre')); return; }
+        datosCierreDiario = d;
+        pintarCierreDiario(d);
+      } catch (e) {
+        console.error('Error cargando cierre diario:', e);
+      }
+    }
+
+    function pintarCierreDiario(d) {
+      const r = d.resumen || {};
+      const caja = d.caja || {};
+
+      // ── Tarjetas superiores ──
+      setTexto('cd-ventas', monedaCOP(r.total_ventas || 0));
+      setTexto('cd-num-ventas', (r.num_ventas || 0) + ' ventas');
+      setTexto('cd-abonos', monedaCOP(r.total_abonos || 0));
+      setTexto('cd-gastos', monedaCOP(r.total_gastos || 0));
+      setTexto('cd-ganancia', monedaCOP(r.ganancia_neta || 0));
+
+      // ── Tabla 1: productos vendidos ──
+      const tbProd = document.getElementById('cd-tabla-productos');
+      tbProd.innerHTML = (d.productos_vendidos || []).length
+        ? d.productos_vendidos.map(p => `<tr>
+            <td>${escapeHtml(p.codigo || '')}</td>
+            <td>${escapeHtml(p.nombre || '')}</td>
+            <td>${p.cantidad}</td>
+            <td>${monedaCOP(p.precio_unitario || 0)}</td>
+            <td>${monedaCOP(p.subtotal || 0)}</td>
+            <td>${escapeHtml(p.tipo_pago || '')}</td>
+          </tr>`).join('')
+        : '<tr><td colspan="6" class="text-center text-muted">No hubo ventas este día.</td></tr>';
+
+      // ── Tabla 2: gastos ──
+      const tbGast = document.getElementById('cd-tabla-gastos');
+      tbGast.innerHTML = (d.gastos || []).length
+        ? d.gastos.map(g => `<tr>
+            <td>${escapeHtml(g.hora || '')}</td>
+            <td>${escapeHtml(g.descripcion || '')}</td>
+            <td>${escapeHtml(g.categoria || '')}</td>
+            <td class="text-danger">${monedaCOP(g.monto || 0)}</td>
+          </tr>`).join('')
+        : '<tr><td colspan="4" class="text-center text-muted">No hubo gastos este día.</td></tr>';
+
+      // ── Tabla 3: abonos recibidos ──
+      const tbAbo = document.getElementById('cd-tabla-abonos');
+      tbAbo.innerHTML = (d.abonos || []).length
+        ? d.abonos.map(a => `<tr>
+            <td>${escapeHtml(a.hora || '')}</td>
+            <td>${escapeHtml(a.cliente || '')}</td>
+            <td class="text-success fw-bold">${monedaCOP(a.monto || 0)}</td>
+            <td>${monedaCOP(a.saldo_pendiente || 0)}</td>
+          </tr>`).join('')
+        : '<tr><td colspan="4" class="text-center text-muted">No hubo abonos este día.</td></tr>';
+
+      // ── Tabla 4: fiados del día ──
+      const tbFi = document.getElementById('cd-tabla-fiados');
+      tbFi.innerHTML = (d.fiados || []).length
+        ? d.fiados.map(f => `<tr>
+            <td>${escapeHtml(f.hora || '')}</td>
+            <td>${escapeHtml(f.cliente || '')}</td>
+            <td>${monedaCOP(f.total || 0)}</td>
+            <td class="text-danger fw-bold">${monedaCOP(f.saldo || 0)}</td>
+          </tr>`).join('')
+        : '<tr><td colspan="4" class="text-center text-muted">No hubo ventas a crédito este día.</td></tr>';
+
+      // ── Panel de cuadre ──
+      // La base inicial es EDITABLE: si ya habia un cierre guardado se recupera
+      // su valor; si no, se conserva lo que el administrador haya escrito.
+      const inputBase = document.getElementById('cd-base-input');
+      if (inputBase) {
+        const baseGuardada = (d.cierre_guardado && d.cierre_guardado.base_inicial != null)
+          ? d.cierre_guardado.base_inicial
+          : (caja.base_inicial || 0);
+        inputBase.value = baseGuardada || 0;
+      }
+      setTexto('cd-ef-ventas', monedaCOP(caja.efectivo_ventas || 0));
+      setTexto('cd-ef-abonos', monedaCOP(caja.efectivo_abonos || 0));
+      setTexto('cd-ef-gastos', monedaCOP(caja.gastos_efectivo || 0));
+      recalcularCajaCierre();
+
+      // Si ya habia un cierre guardado, precarga lo contado.
+      const contado = document.getElementById('cd-ef-contado');
+      if (d.cierre_guardado && contado.value === '') {
+        contado.value = d.cierre_guardado.efectivo_contado || '';
+      }
+      document.getElementById('cd-observaciones').value =
+        (d.cierre_guardado && d.cierre_guardado.observaciones) || '';
+
+      calcularDiferenciaCierre();
+    }
+
+    // Recalcula el EFECTIVO ESPERADO en vivo al escribir la base inicial:
+    //   esperado = base + efectivo_ventas + efectivo_abonos - gastos_efectivo
+    function recalcularCajaCierre() {
+      if (!datosCierreDiario || !datosCierreDiario.caja) return;
+      const caja = datosCierreDiario.caja;
+      const inputBase = document.getElementById('cd-base-input');
+      const base = inputBase ? (parseFloat(inputBase.value) || 0) : (caja.base_inicial || 0);
+      const esperado = base + (caja.efectivo_ventas || 0) + (caja.efectivo_abonos || 0)
+                       - (caja.gastos_efectivo || 0);
+      // Se guarda en memoria para que los botones (guardar/tirilla/PDF) usen
+      // exactamente el mismo valor que el administrador ve en pantalla.
+      datosCierreDiario.caja.base_inicial = base;
+      datosCierreDiario.caja.efectivo_esperado = esperado;
+      setTexto('cd-base', monedaCOP(base));
+      setTexto('cd-ef-esperado', monedaCOP(esperado));
+      calcularDiferenciaCierre();
+    }
+
+    // Calculo en vivo de la diferencia (sobra / falta).
+    function calcularDiferenciaCierre() {
+      const esperado = (datosCierreDiario && datosCierreDiario.caja)
+        ? (datosCierreDiario.caja.efectivo_esperado || 0) : 0;
+      const contado = parseFloat(document.getElementById('cd-ef-contado').value) || 0;
+      const dif = contado - esperado;
+      const el = document.getElementById('cd-diferencia');
+      el.classList.remove('alert-secondary', 'alert-success', 'alert-danger', 'alert-warning');
+      if (Math.abs(dif) < 1) {
+        el.classList.add('alert-success');
+        el.innerText = '✅ Caja cuadrada exacta';
+      } else if (dif > 0) {
+        el.classList.add('alert-warning');
+        el.innerText = '⚠️ SOBRA: ' + monedaCOP(dif);
+      } else {
+        el.classList.add('alert-danger');
+        el.innerText = '❌ FALTA: ' + monedaCOP(Math.abs(dif));
+      }
+    }
+
+    // Boton 1: Guardar y Cerrar Dia.
+    async function guardarCierreDiario() {
+      if (!datosCierreDiario) { alert('Primero carga el cierre del día.'); return; }
+      const contado = parseFloat(document.getElementById('cd-ef-contado').value);
+      if (isNaN(contado)) { alert('Ingresa el efectivo físico (contado) para cerrar.'); return; }
+      // Se re-lee la base del campo para no guardar un valor desactualizado.
+      recalcularCajaCierre();
+      const payload = {
+        fecha: datosCierreDiario.fecha,
+        efectivo_esperado: datosCierreDiario.caja.efectivo_esperado,
+        efectivo_contado: contado,
+        base_inicial: datosCierreDiario.caja.base_inicial,
+        observaciones: document.getElementById('cd-observaciones').value.trim(),
+      };
+      const res = await fetch('/api/cierres-caja', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload),
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert('✅ Cierre guardado. Diferencia: ' + monedaCOP(data.diferencia || 0));
+        cargarCierreDiario();
+      } else {
+        alert('❌ ' + (data.error || 'No se pudo guardar el cierre'));
+      }
+    }
+
+    // Boton 2: Imprimir tirilla de cierre.
+    function imprimirTirillaCierre() {
+      if (!datosCierreDiario) { alert('Primero carga el cierre del día.'); return; }
+      const d = datosCierreDiario;
+      const r = d.resumen || {};
+      const caja = d.caja || {};
+      const contado = parseFloat(document.getElementById('cd-ef-contado').value) || 0;
+      const dif = contado - (caja.efectivo_esperado || 0);
+      const negocio = (document.getElementById('config-nombre').value || 'FERRETERÍA').toUpperCase();
+
+      const filas = (d.productos_vendidos || []).map(p =>
+        `${p.cantidad} x ${p.nombre} = ${monedaCOP(p.subtotal)}`).join('<br>') || 'Sin ventas';
+
+      const win = window.open('', '_blank', 'width=380,height=650');
+      win.document.write(
+        '<html><head><title>Cierre ' + d.fecha + '</title><style>' +
+        'body{font-family:monospace;font-size:12px;margin:6px;width:300px}' +
+        'h3{text-align:center;margin:4px 0}hr{border-top:1px dashed #000}' +
+        '.fila{display:flex;justify-content:space-between}' +
+        '</style></head><body>' +
+        '<h3>' + negocio + '</h3>' +
+        '<div style="text-align:center">CIERRE DE CAJA<br>' + d.fecha + '</div><hr>' +
+        '<div class="fila"><b>TOTAL VENTAS</b><span>' + monedaCOP(r.total_ventas || 0) + '</span></div>' +
+        '<div class="fila"><b>ABONOS</b><span>' + monedaCOP(r.total_abonos || 0) + '</span></div>' +
+        '<div class="fila"><b>GASTOS</b><span>' + monedaCOP(r.total_gastos || 0) + '</span></div>' +
+        '<div class="fila"><b>GANANCIA NETA</b><span>' + monedaCOP(r.ganancia_neta || 0) + '</span></div>' +
+        '<hr><b>CUADRE DE CAJA</b>' +
+        '<div class="fila"><span>Base inicial</span><span>' + monedaCOP(caja.base_inicial || 0) + '</span></div>' +
+        '<div class="fila"><span>+ Efectivo ventas</span><span>' + monedaCOP(caja.efectivo_ventas || 0) + '</span></div>' +
+        '<div class="fila"><span>+ Efectivo abonos</span><span>' + monedaCOP(caja.efectivo_abonos || 0) + '</span></div>' +
+        '<div class="fila"><span>- Gastos</span><span>' + monedaCOP(caja.gastos_efectivo || 0) + '</span></div>' +
+        '<div class="fila"><b>= ESPERADO</b><span>' + monedaCOP(caja.efectivo_esperado || 0) + '</span></div>' +
+        '<div class="fila"><b>CONTADO</b><span>' + monedaCOP(contado) + '</span></div>' +
+        '<div class="fila"><b>' + (Math.abs(dif) < 1 ? 'CUADRADA' : (dif > 0 ? 'SOBRA' : 'FALTA')) +
+        '</b><span>' + monedaCOP(Math.abs(dif)) + '</span></div><hr>' +
+        '<b>PRODUCTOS VENDIDOS</b><br>' + filas +
+        '<hr><div style="text-align:center">Firma: ______________</div>' +
+        '</body></html>');
+      win.document.close();
+      win.focus();
+      setTimeout(() => win.print(), 400);
+    }
+
+    // Boton 3: Descargar PDF para el jefe.
+    function descargarPdfCierre() {
+      if (!datosCierreDiario) { alert('Primero carga el cierre del día.'); return; }
+      const d = datosCierreDiario;
+      const r = d.resumen || {};
+      const caja = d.caja || {};
+      const contado = parseFloat(document.getElementById('cd-ef-contado').value) || 0;
+      const dif = contado - (caja.efectivo_esperado || 0);
+      const negocio = (document.getElementById('config-nombre').value || 'FERRETERÍA').toUpperCase();
+
+      const tablas = (titulo, filasHTML) =>
+        '<h3>' + titulo + '</h3><table border="1" cellspacing="0" cellpadding="4" width="100%">' + filasHTML + '</table>';
+
+      const productos = (d.productos_vendidos || []).map(p =>
+        '<tr><td>' + escapeHtml(p.nombre) + '</td><td align="right">' + p.cantidad + '</td><td align="right">' +
+        monedaCOP(p.subtotal) + '</td><td>' + escapeHtml(p.tipo_pago) + '</td></tr>').join('');
+      const gastos = (d.gastos || []).map(g =>
+        '<tr><td>' + escapeHtml(g.hora) + '</td><td>' + escapeHtml(g.descripcion) + '</td><td>' +
+        escapeHtml(g.categoria) + '</td><td align="right">' + monedaCOP(g.monto) + '</td></tr>').join('');
+      const abonos = (d.abonos || []).map(a =>
+        '<tr><td>' + escapeHtml(a.hora) + '</td><td>' + escapeHtml(a.cliente) + '</td><td align="right">' +
+        monedaCOP(a.monto) + '</td><td align="right">' + monedaCOP(a.saldo_pendiente) + '</td></tr>').join('');
+      const fiados = (d.fiados || []).map(f =>
+        '<tr><td>' + escapeHtml(f.hora) + '</td><td>' + escapeHtml(f.cliente) + '</td><td align="right">' +
+        monedaCOP(f.total) + '</td><td align="right">' + monedaCOP(f.saldo) + '</td></tr>').join('');
+
+      const html =
+        '<html><head><title>Cierre ' + d.fecha + '</title><style>' +
+        'body{font-family:Arial;font-size:12px;padding:20px}' +
+        'h1{font-size:18px}h3{font-size:14px;margin-top:18px}' +
+        '.resumen td{padding:6px;font-size:14px}' +
+        '</style></head><body>' +
+        '<h1>' + negocio + ' — Cierre Diario ' + d.fecha + '</h1>' +
+        tablas('Resumen',
+          '<tr><td>Total Ventas</td><td align="right"><b>' + monedaCOP(r.total_ventas || 0) + '</b></td></tr>' +
+          '<tr><td>Abonos Recibidos</td><td align="right"><b>' + monedaCOP(r.total_abonos || 0) + '</b></td></tr>' +
+          '<tr><td>Gastos del Día</td><td align="right"><b>' + monedaCOP(r.total_gastos || 0) + '</b></td></tr>' +
+          '<tr><td>Ganancia Neta Real</td><td align="right"><b>' + monedaCOP(r.ganancia_neta || 0) + '</b></td></tr>') +
+        tablas('Cuadre de Caja',
+          '<tr><td>Base Inicial</td><td align="right">' + monedaCOP(caja.base_inicial || 0) + '</td></tr>' +
+          '<tr><td>(+) Efectivo Ventas</td><td align="right">' + monedaCOP(caja.efectivo_ventas || 0) + '</td></tr>' +
+          '<tr><td>(+) Efectivo Abonos</td><td align="right">' + monedaCOP(caja.efectivo_abonos || 0) + '</td></tr>' +
+          '<tr><td>(−) Gastos</td><td align="right">' + monedaCOP(caja.gastos_efectivo || 0) + '</td></tr>' +
+          '<tr><td><b>= Efectivo Esperado</b></td><td align="right"><b>' + monedaCOP(caja.efectivo_esperado || 0) + '</b></td></tr>' +
+          '<tr><td>Efectivo Contado</td><td align="right">' + monedaCOP(contado) + '</td></tr>' +
+          '<tr><td><b>Diferencia</b></td><td align="right"><b>' + (dif > 0 ? 'SOBRA ' : (dif < 0 ? 'FALTA ' : 'CUADRADA ')) +
+          monedaCOP(Math.abs(dif)) + '</b></td></tr>') +
+        (productos ? tablas('Productos Vendidos', '<tr><th>Producto</th><th>Cant.</th><th>Subtotal</th><th>Pago</th></tr>' + productos) : '') +
+        (gastos ? tablas('Gastos', '<tr><th>Hora</th><th>Concepto</th><th>Categoría</th><th>Monto</th></tr>' + gastos) : '') +
+        (abonos ? tablas('Abonos Recibidos', '<tr><th>Hora</th><th>Cliente</th><th>Monto</th><th>Saldo</th></tr>' + abonos) : '') +
+        (fiados ? tablas('Fiados del Día', '<tr><th>Hora</th><th>Cliente</th><th>Total</th><th>Pendiente</th></tr>' + fiados) : '') +
+        '<p style="margin-top:24px">Generado: ' + new Date().toLocaleString('es-CO') + '</p>' +
+        '</body></html>';
+
+      const win = window.open('', '_blank');
+      win.document.write(html);
+      win.document.close();
+      win.focus();
+      setTimeout(() => win.print(), 500);
     }
 
     async function registrarGasto(event) {
