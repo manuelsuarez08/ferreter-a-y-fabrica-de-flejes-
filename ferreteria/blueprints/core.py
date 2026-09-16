@@ -3,9 +3,10 @@
 Se agrupan en un único blueprint de propósito general por ser rutas
 transversales de baja cohesión entre sí pero alto acoplamiento al usuario.
 """
+import os
+import shutil
 import sqlite3
 from datetime import datetime
-
 from flask import (
     Blueprint, jsonify, redirect, render_template, request,
     send_file, session, url_for,
@@ -87,6 +88,88 @@ def logout():
 def descargar_respaldo():
     nombre = f"ferreteria-respaldo-{datetime.now().strftime('%Y%m%d-%H%M%S')}.db"
     return send_file(DB_NAME, as_attachment=True, download_name=nombre)
+
+@bp.route('/api/restaurar', methods=['POST'])
+@admin_required
+def restaurar_respaldo():
+    """Reemplaza la base de datos actual por el archivo SQLite que se suba.
+
+    Pensado para entornos con disco persistente (Render /var/data), donde el
+    código nuevo NO reemplaza la base existente. Así se puede actualizar desde
+    el navegador sin acceso al Shell ni a Git.
+
+    Seguridad:
+      - Solo administradores.
+      - Valida que el archivo sea una base SQLite real y tenga las tablas
+        mínimas, antes de tocar la actual.
+      - Guarda una copia de la base actual junto a ella (mismo directorio) por
+        si hay que volver atrás.
+    """
+    archivo = request.files.get('archivo')
+    if not archivo or not archivo.filename:
+        return jsonify({"error": "No se recibió ningún archivo"}), 400
+    # 1) Se escribe el archivo subido en un temporal dentro del mismo directorio
+    #    de la base (así el os.replace final es atómico en el mismo volumen).
+    carpeta = os.path.dirname(os.path.abspath(DB_NAME)) or '.'
+    tmp_nuevo = os.path.join(carpeta, '_restaurar_nuevo.db')
+    archivo.save(tmp_nuevo)
+
+    # 2) Validación: debe ser SQLite y tener las tablas clave.
+    try:
+        with open(tmp_nuevo, 'rb') as f:
+            cabecera = f.read(16)
+        if cabecera != b'SQLite format 3\x00':
+            raise ValueError('El archivo no es una base de datos SQLite válida.')
+
+        prueba = sqlite3.connect(tmp_nuevo)
+        tablas = {r[0] for r in prueba.execute(
+            "SELECT name FROM sqlite_master WHERE type='table'")}
+        prueba.close()
+        faltantes = {'ventas', 'clientes', 'productos'} - tablas
+        if faltantes:
+            raise ValueError('La base no tiene las tablas esperadas: ' + ', '.join(sorted(faltantes)))
+    except Exception as e:
+        try:
+            os.remove(tmp_nuevo)
+        except OSError:
+            pass
+        return jsonify({"error": f"Archivo inválido: {e}"}), 400
+    # 3) Respaldo de la base actual (no se sobreescribe un respaldo anterior).
+    respaldo = None
+    if os.path.exists(DB_NAME):
+        respaldo = os.path.join(
+            carpeta, f"ferreteria-respaldo-antes-restaurar-{datetime.now().strftime('%Y%m%d-%H%M%S')}.db")
+        try:
+            shutil.copy2(DB_NAME, respaldo)
+        except Exception:
+            respaldo = None
+    # 4) Reemplazo atómico.
+    try:
+        os.replace(tmp_nuevo, DB_NAME)
+        # Limpia los archivos WAL/SHM viejos para que no queden datos colgados.
+        for sufijo in ('-wal', '-shm'):
+            ruta = DB_NAME + sufijo
+            if os.path.exists(ruta):
+                try:
+                    os.remove(ruta)
+                except OSError:
+                    pass
+    except Exception as e:
+        return jsonify({"error": f"No se pudo reemplazar la base: {e}"}), 500
+    # 5) Cuenta final para confirmar al usuario que quedó bien.
+    try:
+        conn = get_db()
+        ventas = conn.execute("SELECT COUNT(*) FROM ventas").fetchone()[0]
+        clientes = conn.execute("SELECT COUNT(*) FROM clientes").fetchone()[0]
+        productos = conn.execute("SELECT COUNT(*) FROM productos").fetchone()[0]
+        conn.close()
+    except Exception as e:
+        return jsonify({"error": f"La base se reemplazó pero no se pudo leer: {e}"}), 500
+    return jsonify({
+        "mensaje": "Base de datos restaurada correctamente",
+        "ventas": ventas, "clientes": clientes, "productos": productos,
+        "respaldo_anterior": os.path.basename(respaldo) if respaldo else None,
+    })
 
 
 @bp.route('/api/configuracion', methods=['GET', 'PUT'])

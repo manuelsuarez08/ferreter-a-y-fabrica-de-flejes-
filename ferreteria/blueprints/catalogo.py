@@ -28,11 +28,13 @@ def handle_clientes():
 
     if request.method == 'GET':
         rows = cursor.execute(
-            "SELECT id, nombre, cedula_nit, telefono, direccion FROM clientes ORDER BY id DESC"
+            "SELECT id, nombre, cedula_nit, telefono, direccion, "
+            "COALESCE(email, ''), COALESCE(tipo_documento, 'CC') FROM clientes ORDER BY id DESC"
         ).fetchall()
         conn.close()
         return jsonify([{"id": r[0], "nombre": r[1], "cedula_nit": r[2],
-                         "telefono": r[3], "direccion": r[4] or ""} for r in rows])
+                         "telefono": r[3], "direccion": r[4] or "",
+                         "email": r[5] or "", "tipo_documento": r[6] or "CC"} for r in rows])
 
     data = request.json
     if not data or not str(data.get('nombre', '')).strip():
@@ -41,10 +43,12 @@ def handle_clientes():
 
     try:
         cursor.execute(
-            "INSERT INTO clientes (nombre, cedula_nit, telefono, direccion) "
-            "VALUES (:nombre, :nit, :telefono, :direccion)",
+            "INSERT INTO clientes (nombre, cedula_nit, telefono, direccion, email, tipo_documento) "
+            "VALUES (:nombre, :nit, :telefono, :direccion, :email, :tipo_documento)",
             {'nombre': data['nombre'].strip(), 'nit': str(data.get('cedula_nit', '')).strip() or None,
-             'telefono': data.get('telefono', '').strip(), 'direccion': data.get('direccion', '').strip()},
+             'telefono': data.get('telefono', '').strip(), 'direccion': data.get('direccion', '').strip(),
+             'email': str(data.get('email', '')).strip(),
+             'tipo_documento': (str(data.get('tipo_documento', '')).strip() or 'CC')},
         )
         conn.commit()
         conn.close()
@@ -65,9 +69,12 @@ def actualizar_cliente(id_cliente):
     conn = get_db()
     try:
         conn.execute(
-            "UPDATE clientes SET nombre = ?, cedula_nit = ?, telefono = ?, direccion = ? WHERE id = ?",
+            "UPDATE clientes SET nombre = ?, cedula_nit = ?, telefono = ?, direccion = ?, "
+            "email = ?, tipo_documento = ? WHERE id = ?",
             (nombre, str(data.get('cedula_nit', '')).strip() or None,
-             str(data.get('telefono', '')).strip(), str(data.get('direccion', '')).strip(), id_cliente),
+             str(data.get('telefono', '')).strip(), str(data.get('direccion', '')).strip(),
+             str(data.get('email', '')).strip(),
+             (str(data.get('tipo_documento', '')).strip() or 'CC'), id_cliente),
         )
         if conn.total_changes == 0:
             conn.close()

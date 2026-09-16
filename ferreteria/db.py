@@ -373,6 +373,9 @@ def _aplicar_migraciones(cursor):
     """Migraciones idempotentes sobre bases de datos ya existentes."""
     for tabla, columna, definicion in (
         ('clientes', 'direccion', 'TEXT'),
+        # Datos requeridos por la factura electrónica de Siigo.
+        ('clientes', 'email', 'TEXT'),
+        ('clientes', 'tipo_documento', "TEXT DEFAULT 'CC'"),
         ('ventas', 'direccion_cliente', 'TEXT'),
         ('productos', 'codigo_barras', 'TEXT'),
         ('productos', 'auditado', 'INTEGER NOT NULL DEFAULT 0'),
@@ -385,6 +388,17 @@ def _aplicar_migraciones(cursor):
         ('ventas', 'numero_pedido', 'INTEGER'),
         ('ventas', 'estado_despacho', "TEXT DEFAULT 'pendiente_preparar'"),
         ('usuarios', 'nombre_completo', 'TEXT'),
+        # ── Facturación electrónica opcional (Siigo) ────────────────────────
+        # Estado: 'no_solicitada' (venta normal) | 'pendiente' (solicitada, sin
+        # transmitir) | 'aprobada' | 'error' (rechazada o sin conexión).
+        ('ventas', 'siigo_estado', "TEXT NOT NULL DEFAULT 'no_solicitada'"),
+        ('ventas', 'siigo_numero', 'TEXT'),
+        ('ventas', 'siigo_cufe', 'TEXT'),
+        ('ventas', 'siigo_pdf_url', 'TEXT'),
+        ('ventas', 'siigo_xml_url', 'TEXT'),
+        ('ventas', 'siigo_error', 'TEXT'),
+        ('ventas', 'siigo_fecha_emision', 'TEXT'),
+        ('ventas', 'siigo_intentos', 'INTEGER NOT NULL DEFAULT 0'),
     ):
         migrar_columna(cursor, tabla, columna, definicion)
 
