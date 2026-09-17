@@ -101,6 +101,20 @@ def _leer_flotante(data, clave, default=0.0):
     except (ValueError, TypeError):
         return default
 
+def _desglosar_iva(precio_final, iva_tasa):
+    """Separa un precio FINAL (con IVA) en (precio_base, valor_iva).
+
+      base = precio_final / (1 + tasa/100)
+      iva  = precio_final - base
+    Si la tasa es 0, el precio final es todo base (producto exento). Los valores
+    se redondean a pesos para que base + iva cuadre exactamente con el final.
+    """
+    precio_final = round(float(precio_final or 0), 2)
+    if iva_tasa <= 0:
+        return precio_final, 0.0
+    base = round(precio_final / (1 + iva_tasa / 100))
+    return float(base), float(precio_final - base)
+
 
 @bp.route('/api/productos', methods=['GET', 'POST'])
 @login_required
@@ -158,7 +172,9 @@ def _listar_productos(cursor, conn):
         limite, offset = None, 0
 
     sql = ("SELECT id, nombre, categoria, dimensiones, codigo_barras, precio_venta, "
-           "stock_actual, stock_minimo, auditado, stock_inicial, fecha_auditoria FROM productos")
+           "stock_actual, stock_minimo, auditado, stock_inicial, fecha_auditoria, "
+           "COALESCE(precio_base, precio_venta), COALESCE(iva_valor, 0), "
+           "COALESCE(iva_tasa, 0) FROM productos")
     where, params = [], []
     if not incluir_inactivos:
         where.append("COALESCE(activo, 1) = 1")
@@ -180,6 +196,7 @@ def _listar_productos(cursor, conn):
         "codigo_barras": r[4] or "", "precio_venta": r[5],
         "stock_actual": r[6], "stock_minimo": r[7],
         "auditado": bool(r[8]), "stock_inicial": r[9] or 0, "fecha_auditoria": r[10],
+        "precio_base": r[11], "iva_valor": r[12], "iva_tasa": r[13],
     } for r in rows])
 
 
@@ -197,6 +214,13 @@ def _crear_o_reabastecer_producto(cursor, conn):
     precio_venta = _leer_flotante(data, 'precio_venta')
     stock_ingresado = _leer_entero(data, 'stock_actual', 0)
     stock_minimo = max(0, _leer_entero(data, 'stock_minimo', 5))
+
+    # Desglose de IVA del producto. El precio_venta que llega del formulario es
+    # SIEMPRE el precio FINAL (lo que paga el cliente). A partir de el y de la
+    # tasa se calcula el valor base (sin IVA) y el iva incluido:
+    #   base = precio_final / (1 + tasa/100)   iva = precio_final - base
+    iva_tasa = max(0.0, min(100.0, _leer_flotante(data, 'iva_tasa', 0)))
+    precio_base, iva_valor = _desglosar_iva(precio_venta, iva_tasa)
 
     if not nombre or precio_venta < 0 or precio_costo < 0:
         conn.close()
@@ -228,10 +252,12 @@ def _crear_o_reabastecer_producto(cursor, conn):
             """
             UPDATE productos
             SET categoria = ?, codigo_barras = COALESCE(?, codigo_barras), precio_costo = ?,
-                precio_venta = ?, stock_actual = ?, stock_minimo = ?
+                precio_venta = ?, stock_actual = ?, stock_minimo = ?,
+                precio_base = ?, iva_valor = ?, iva_tasa = ?
             WHERE id = ?
             """,
-            (categoria, codigo_barras, precio_costo, precio_venta, nuevo_stock, stock_minimo, id_prod),
+            (categoria, codigo_barras, precio_costo, precio_venta, nuevo_stock, stock_minimo,
+             precio_base, iva_valor, iva_tasa, id_prod),
         )
         cursor.execute(
             "INSERT INTO movimientos_inventario (id_producto, tipo, cantidad, motivo, usuario, fecha) "
@@ -246,11 +272,14 @@ def _crear_o_reabastecer_producto(cursor, conn):
 
     cursor.execute(
         "INSERT INTO productos (nombre, categoria, dimensiones, codigo_barras, precio_costo, "
-        "precio_venta, stock_actual, stock_minimo, stock_inicial, auditado, activo) "
-        "VALUES (:nombre, :categoria, :dimensiones, :codigo, :costo, :venta, :stock, :minimo, :stock, 0, 1)",
+        "precio_venta, stock_actual, stock_minimo, stock_inicial, auditado, activo, "
+        "precio_base, iva_valor, iva_tasa) "
+        "VALUES (:nombre, :categoria, :dimensiones, :codigo, :costo, :venta, :stock, :minimo, "
+        ":stock, 0, 1, :base, :iva, :tasa)",
         {'nombre': nombre, 'categoria': categoria, 'dimensiones': dimensiones,
          'codigo': codigo_barras, 'costo': precio_costo, 'venta': precio_venta,
-         'stock': stock_ingresado, 'minimo': stock_minimo},
+         'stock': stock_ingresado, 'minimo': stock_minimo,
+         'base': precio_base, 'iva': iva_valor, 'tasa': iva_tasa},
     )
     id_producto = cursor.lastrowid
     cursor.execute(

@@ -555,11 +555,6 @@
               <label class="form-label fw-bold">Dimensiones / Medida</label>
               <input type="text" id="prod-dimensiones" class="form-control" placeholder="Ej: 10x10 cm, 1/2 pulgada" spellcheck="false">
             </div>
-            <!-- Precio de costo oculto: se conserva en la DB pero ya no se pide en la interfaz -->
-            <div class="col-md-3">
-              <label class="form-label fw-bold">Precio Venta ($)</label>
-              <input type="number" step="0.01" id="prod-venta" class="form-control" required>
-            </div>
             <div class="col-md-2">
               <label class="form-label fw-bold" id="label-stock-ingreso">Cantidad a Ingresar</label>
               <input type="number" id="prod-stock" class="form-control" min="0" value="0" required>
@@ -572,6 +567,62 @@
               <button type="submit" id="btn-guardar-prod" class="btn btn-primary w-100 fw-bold">📦 Guardar / Reabastecer</button>
             </div>
           </form>
+
+          <!-- ── Precio y desglose de IVA ──────────────────────────────
+               El precio que se guarda SIEMPRE es el FINAL (lo que paga el
+               cliente, con IVA incluido). Segun la factura del proveedor, el
+               usuario elige en que casilla escribe el numero y el sistema
+               calcula el resto en vivo. -->
+          <div class="card p-3 mt-3 border-primary">
+            <h6 class="fw-bold mb-3">💰 Precio e IVA</h6>
+            <div class="row g-3">
+              <div class="col-md-3">
+                <label class="form-label fw-bold" id="label-precio-entrada">Precio Base (sin IVA)</label>
+                <input type="number" step="0.01" min="0" id="prod-precio-entrada" class="form-control" required
+                       placeholder="Escriba el precio">
+              </div>
+              <div class="col-md-3">
+                <label class="form-label fw-bold">IVA (%)</label>
+                <select id="prod-iva-tasa" class="form-select">
+                  <option value="19">19% (general)</option>
+                  <option value="5">5%</option>
+                  <option value="0">0% (exento)</option>
+                </select>
+              </div>
+              <div class="col-md-6">
+                <label class="form-label fw-bold d-block">¿Cómo viene la factura del proveedor?</label>
+                <div class="form-check form-check-inline">
+                  <input class="form-check-input" type="radio" name="modo-iva" id="prod-modo-sin"
+                         value="sin" checked onchange="recalcularPrecioProducto()">
+                  <label class="form-check-label" for="prod-modo-sin">La factura NO trae IVA</label>
+                </div>
+                <div class="form-check form-check-inline">
+                  <input class="form-check-input" type="radio" name="modo-iva" id="prod-modo-con"
+                         value="con" onchange="recalcularPrecioProducto()">
+                  <label class="form-check-label" for="prod-modo-con">La factura YA incluye IVA</label>
+                </div>
+              </div>
+            </div>
+
+            <!-- Vista previa en tiempo real del desglose -->
+            <div class="alert alert-secondary mt-3 mb-0" id="prod-preview-iva">
+              <div class="row text-center">
+                <div class="col-4">
+                  <div class="small text-muted">Precio Base</div>
+                  <div class="fw-bold" id="preview-base">$ 0 COP</div>
+                </div>
+                <div class="col-4">
+                  <div class="small text-muted">IVA <span id="preview-tasa">(19%)</span></div>
+                  <div class="fw-bold" id="preview-iva">$ 0 COP</div>
+                </div>
+                <div class="col-4">
+                  <div class="small text-muted">Precio Final (venta)</div>
+                  <div class="fw-bold text-primary" id="preview-total">$ 0 COP</div>
+                </div>
+              </div>
+              <div class="small text-center text-muted mt-2" id="preview-ayuda"></div>
+            </div>
+          </div>
         </div>
 
         <div class="card p-3 mb-4 border-warning bg-light">
@@ -2273,6 +2324,14 @@
       cargarCatalogoEquiposAlquiler();
       cargarAlquileresActivos();
       cargarOrdenesFlejes();
+
+      // Vista previa del precio/IVA del producto: se recalcula al escribir el
+      // precio o cambiar la tasa (los radios ya lo llaman en su onchange).
+      const precioEntrada = document.getElementById('prod-precio-entrada');
+      if (precioEntrada) precioEntrada.addEventListener('input', recalcularPrecioProducto);
+      const tasaSelect = document.getElementById('prod-iva-tasa');
+      if (tasaSelect) tasaSelect.addEventListener('change', recalcularPrecioProducto);
+      recalcularPrecioProducto();
     });
 
     // ── Notificaciones de flejes listos (general + pedidos) ─────────────────
@@ -3470,33 +3529,90 @@
         document.getElementById('prod-categoria').value = '';
         document.getElementById('prod-dimensiones').value = '';
         document.getElementById('prod-codigo-barras').value = '';
-        document.getElementById('prod-venta').value = '';
+        document.getElementById('prod-precio-entrada').value = '';
         document.getElementById('prod-minimo').value = 5;
         etiquetaStock.innerText = 'Cantidad a Ingresar';
         campoStock.value = 0;
+        recalcularPrecioProducto();
         return;
       }
 
       document.getElementById('prod-categoria').value = producto.categoria || '';
       document.getElementById('prod-dimensiones').value = producto.dimensiones || '';
       document.getElementById('prod-codigo-barras').value = producto.codigo_barras || '';
-      document.getElementById('prod-venta').value = producto.precio_venta;
+      // Al reabastecer un producto existente se muestra su tasa de IVA y su
+      // precio base (sin IVA) en el campo de entrada, en modo "factura sin IVA".
+      const tasaProd = document.getElementById('prod-iva-tasa');
+      if (tasaProd) tasaProd.value = String(producto.iva_tasa || 0);
+      const modoSin = document.getElementById('prod-modo-sin');
+      if (modoSin) modoSin.checked = true;
+      const baseProd = producto.precio_base !== undefined && producto.precio_base !== null
+        ? producto.precio_base : producto.precio_venta;
+      document.getElementById('prod-precio-entrada').value = baseProd;
       document.getElementById('prod-minimo').value = producto.stock_minimo;
       etiquetaStock.innerText = `Cantidad a Ingresar (stock actual: ${producto.stock_actual})`;
       campoStock.value = 0;
+      recalcularPrecioProducto();
+    }
+
+    // Lee los campos de precio/IVA y devuelve SIEMPRE el precio FINAL (lo que
+    // paga el cliente, con IVA) y la tasa aplicada.
+    //   - La factura NO trae IVA  -> lo escrito es la base;  final = base * (1+t)
+    //   - La factura YA trae IVA  -> lo escrito es el final;  base = final / (1+t)
+    function leerPrecioEIVA() {
+      const escrito = Number(document.getElementById('prod-precio-entrada').value || 0);
+      const tasa = Number(document.getElementById('prod-iva-tasa').value || 0);
+      const facturaConIva = document.getElementById('prod-modo-con').checked;
+      let base, iva, final;
+      if (facturaConIva) {
+        // Caso B: lo escrito ES el total con IVA -> se desglosa.
+        final = escrito;
+        base = tasa > 0 ? Math.round(escrito / (1 + tasa / 100)) : escrito;
+        iva = final - base;
+      } else {
+        // Caso A: lo escrito es la base -> se le suma el IVA.
+        base = escrito;
+        iva = Math.round(escrito * tasa / 100);
+        final = base + iva;
+      }
+      return { base, iva, final, tasa, facturaConIva };
+    }
+
+    // Vista previa en vivo: Precio Base / IVA / Precio Final.
+    function recalcularPrecioProducto() {
+      const p = leerPrecioEIVA();
+      setTexto('preview-base', monedaCOP(p.base));
+      setTexto('preview-iva', monedaCOP(p.iva));
+      setTexto('preview-total', monedaCOP(p.final));
+      setTexto('preview-tasa', `(${p.tasa}%)`);
+      const etiqueta = document.getElementById('label-precio-entrada');
+      if (etiqueta) {
+        etiqueta.innerText = p.facturaConIva ? 'Precio Total (IVA incluido)' : 'Precio Base (sin IVA)';
+      }
+      const ayuda = document.getElementById('preview-ayuda');
+      if (ayuda) {
+        ayuda.innerText = p.facturaConIva
+          ? `La factura ya incluye IVA: de $${p.final.toLocaleString('es-CO')} se separan $${p.base.toLocaleString('es-CO')} de base + $${p.iva.toLocaleString('es-CO')} de IVA.`
+          : `A la base de $${p.base.toLocaleString('es-CO')} se le suma $${p.iva.toLocaleString('es-CO')} de IVA = $${p.final.toLocaleString('es-CO')}.`;
+      }
+      return p;
     }
 
     async function guardarProducto(e) {
       e.preventDefault();
       const nombreSeleccionado = document.getElementById('prod-nombre').value;
       const productoSeleccionado = productosLista.find(p => String(p.id) === String(nombreSeleccionado));
+      // El servidor recibe el precio FINAL y la tasa; el desglose lo calcula el
+      // backend (fuente de verdad) con la misma formula.
+      const precio = leerPrecioEIVA();
       const payload = {
         nombre: productoSeleccionado ? productoSeleccionado.nombre : nombreSeleccionado,
         categoria: document.getElementById('prod-categoria').value,
         dimensiones: document.getElementById('prod-dimensiones').value,
         codigo_barras: document.getElementById('prod-codigo-barras').value.trim(),
         // Precio de costo ya NO se envía desde la interfaz (opcional en la DB).
-        precio_venta: document.getElementById('prod-venta').value,
+        precio_venta: precio.final,
+        iva_tasa: precio.tasa,
         stock_actual: document.getElementById('prod-stock').value,
         stock_minimo: document.getElementById('prod-minimo').value
       };

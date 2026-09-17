@@ -423,6 +423,14 @@ def _aplicar_migraciones(cursor):
     migrar_columna(cursor, 'ventas', 'iva_valor', 'REAL NOT NULL DEFAULT 0')
     migrar_columna(cursor, 'ventas', 'iva_porcentaje', 'REAL NOT NULL DEFAULT 0')
 
+    # Desglose de IVA por producto. El precio_venta sigue siendo el PRECIO FINAL
+    # (lo que paga el cliente, ya con IVA). precio_base es el valor sin IVA y
+    # iva_valor el impuesto incluido. iv_tasa guarda el % aplicado a ese
+    # producto (0 = exento). Productos antiguos: base = precio_venta, iva = 0.
+    migrar_columna(cursor, 'productos', 'precio_base', 'REAL NOT NULL DEFAULT 0')
+    migrar_columna(cursor, 'productos', 'iva_valor', 'REAL NOT NULL DEFAULT 0')
+    migrar_columna(cursor, 'productos', 'iva_tasa', 'REAL NOT NULL DEFAULT 0')
+
     for tabla in ('equipos_alquiler', 'equipos'):
         for columna, definicion in (
             ('medidas', 'TEXT'),
@@ -437,6 +445,14 @@ def _aplicar_migraciones(cursor):
     # Los productos existentes se consideran activos.
     try:
         cursor.execute("UPDATE productos SET activo = 1 WHERE activo IS NULL")
+    except sqlite3.Error:
+        pass
+    # Productos creados ANTES del desglose de IVA: no lo traian, asi que su
+    # precio_venta ES el valor base (iva 0). Se rellena una sola vez para que
+    # las columnas nuevas no queden en 0 y las cuentas cuadren.
+    try:
+        cursor.execute("UPDATE productos SET precio_base = precio_venta "
+                       "WHERE COALESCE(precio_base, 0) = 0 AND COALESCE(precio_venta, 0) > 0")
     except sqlite3.Error:
         pass
 
