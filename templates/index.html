@@ -23,6 +23,36 @@
       max-width: 650px;
       margin: 0 auto;
     }
+    /* Logo del negocio en facturas, recibos y cotizaciones. El archivo tiene
+       fondo oscuro propio, así que se muestra circular para integrarlo bien
+       tanto en pantalla como al imprimir. */
+    .logo-documento {
+      width: 104px;
+      height: 104px;
+      object-fit: cover;
+      border-radius: 50%;
+      background: #111;
+      display: block;
+      margin: 0 auto 10px;
+    }
+    /* Versión pequeña para la barra de navegación. */
+    .logo-navbar {
+      width: 42px;
+      height: 42px;
+      object-fit: cover;
+      border-radius: 50%;
+      background: #111;
+      border: 2px solid rgba(255, 255, 255, .55);
+      flex-shrink: 0;
+    }
+    /* Al imprimir, los colores de fondo del navegador no salen por defecto:
+       se fuerza la impresión del logo para que el recibo lo conserve. */
+    @media print {
+      .logo-documento, .logo-navbar {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
+    }
     .recibo-termico {
       width: 100%;
       max-width: 80mm;
@@ -153,8 +183,12 @@
   <!-- Navbar -->
   <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4 shadow-sm">
     <div class="container-fluid">
-      <a class="navbar-brand fw-bold fs-4" href="#">🛠️ FERRETERÍA Y FÁBRICA DE FLEJES</a>
-      
+      <a class="navbar-brand fw-bold fs-4 d-flex align-items-center gap-2" href="#">
+        <img src="{{ url_for('static', filename='logo_ferreteria.jpeg') }}"
+             alt="Logo Ferretería y Fábrica de Flejes" class="logo-navbar">
+        <span>FERRETERÍA Y FÁBRICA DE FLEJES</span>
+      </a>
+
       <div class="d-flex align-items-center gap-3">
         {% if rol != 'fabrica' and rol != 'pedidos' and rol != 'motocarguero' %}
         <!-- Botón de Notificaciones -->
@@ -1673,6 +1707,8 @@
         <div class="modal-body">
           <div id="area-factura-pdf" class="factura-box">
             <div class="text-center mb-2">
+              <img src="{{ url_for('static', filename='logo_ferreteria.jpeg') }}"
+                   alt="Logo Ferretería y Fábrica de Flejes" class="logo-documento">
               <h3 class="fw-bold mb-0" id="fac-negocio-nombre">FERRETERÍA Y FÁBRICA DE FLEJES</h3>
               <p class="text-muted mb-0">Venta de Materiales de Construcción y Flejes a Medida</p>
               <p class="text-muted mb-0" id="fac-negocio-nit"></p>
@@ -1806,6 +1842,8 @@
         <div class="modal-body">
           <div id="area-comprobante-abono" class="factura-box">
             <div class="text-center mb-2">
+              <img src="{{ url_for('static', filename='logo_ferreteria.jpeg') }}"
+                   alt="Logo Ferretería y Fábrica de Flejes" class="logo-documento">
               <h3 class="fw-bold mb-0" id="abono-negocio-nombre">FERRETERÍA Y FÁBRICA DE FLEJES</h3>
               <p class="text-muted mb-0" id="abono-negocio-nit"></p>
               <p class="text-muted mb-0" id="abono-negocio-dir"></p>
@@ -1953,6 +1991,8 @@
          <div class="modal-body">
            <div id="area-cotizacion-pdf" class="factura-box">
              <div class="text-center mb-2">
+               <img src="{{ url_for('static', filename='logo_ferreteria.jpeg') }}"
+                    alt="Logo Ferretería y Fábrica de Flejes" class="logo-documento">
                <h3 class="fw-bold mb-0" id="cot-negocio-nombre">FERRETERÍA Y FÁBRICA DE FLEJES</h3>
                <p class="text-muted mb-0" id="cot-negocio-nit"></p>
                <p class="text-muted mb-0" id="cot-negocio-dir"></p>

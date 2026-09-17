@@ -20,6 +20,12 @@
     }
     .encabezado { text-align: center; border-bottom: 2px solid #212529; padding-bottom: 12px; }
     .encabezado h1 { margin: 0 0 4px; font-size: 20px; letter-spacing: .5px; }
+    /* Logo del negocio. El archivo original tiene fondo oscuro, así que se
+       muestra circular para integrarse con el resto del documento. */
+    .logo-documento {
+      width: 108px; height: 108px; object-fit: cover; border-radius: 50%;
+      background: #111; display: block; margin: 0 auto 10px;
+    }
     .encabezado p { margin: 2px 0; font-size: 12px; color: #6c757d; }
     .consecutivo { font-weight: bold; margin-top: 10px; font-size: 15px; }
     .fila { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 10px; margin: 16px 0; }
@@ -54,6 +60,11 @@
       body { background: #fff; padding: 0; }
       .tarjeta { box-shadow: none; }
       .acciones { display: none; }
+      /* Fuerza la impresión del logo: el navegador omite fondos por defecto. */
+      .logo-documento {
+        -webkit-print-color-adjust: exact;
+        print-color-adjust: exact;
+      }
     }
  </style>
 </head>
@@ -66,6 +77,8 @@
       {% else %}
 
       <div class="encabezado">
+        <img src="{{ url_for('static', filename='logo_ferreteria.jpeg') }}"
+             alt="Logo Ferretería y Fábrica de Flejes" class="logo-documento">
         <h1>{{ (NS.nombre or 'FERRETERÍA Y FÁBRICA DE FLEJES') | upper }}</h1>
         {% if NS.nit %}<p>NIT: {{ NS.nit }}</p>{% endif %}
         {% if NS.telefono %}<p>Tel: {{ NS.telefono }}</p>{% endif %}

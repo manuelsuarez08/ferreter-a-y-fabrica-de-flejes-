@@ -23,12 +23,28 @@
             box-shadow: 0 4px 12px rgba(0,0,0,0.1);
             background: #ffffff;
         }
+        /* Logo del negocio: el archivo trae fondo oscuro propio, por eso se
+           muestra circular y con un aro para que no se vea recortado. */
+        .login-logo {
+            width: 132px;
+            height: 132px;
+            object-fit: cover;
+            border-radius: 50%;
+            background: #111;
+            display: block;
+            margin: 0 auto 14px;
+        }
     </style>
 </head>
 <body>
 
 <div class="login-card">
-    <h3 class="text-center mb-4 text-primary">Acceso al Sistema</h3>
+    <img src="{{ url_for('static', filename='logo_ferreteria.jpeg') }}"
+         alt="Logo Ferretería y Fábrica de Flejes" class="login-logo">
+    <h3 class="text-center mb-1 text-primary">Acceso al Sistema</h3>
+    <p class="text-center text-muted mb-4" style="font-size:.85rem;">
+        Ferretería y Fábrica de Flejes
+    </p>
     
     {% if error %}
         <div class="alert alert-danger" role="alert">
