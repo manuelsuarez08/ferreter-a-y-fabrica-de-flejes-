@@ -73,9 +73,19 @@ def _es_producto_fleje(nombre, categoria, item):
     )
 
 
+def _leer_config_iva(cursor):
+    # Devuelve (porcentaje, activo) del IVA configurado para el negocio.
+    fila = cursor.execute(
+        "SELECT COALESCE(iva_porcentaje, 19), COALESCE(iva_activo, 1) FROM configuracion WHERE id = 1"
+    ).fetchone()
+    if not fila:
+        return 19.0, True
+    return float(fila[0] or 0), bool(fila[1])
+
+
 def _construir_detalles(cursor, conn, items):
     """Valida los ítems y calcula el total. Devuelve (total, detalles) o un error."""
-    total_venta = 0
+    subtotal_venta = 0
     detalles = []
     for item in items:
         item_id = item['id_producto']
@@ -93,12 +103,21 @@ def _construir_detalles(cursor, conn, items):
 
         # VENTAS PERMISIVAS: no se valida stock ni precio de costo.
         subtotal = cantidad * precio_venta
-        total_venta += subtotal
+        subtotal_venta += subtotal
         detalles.append({
             'id_producto': item_id, 'cantidad': cantidad, 'precio': precio_venta,
             'nombre': nombre_producto, 'categoria': categoria_producto, 'item': item,
         })
-    return (total_venta, detalles), None
+
+    # IVA sobre el subtotal. Se redondea a pesos (sin centavos) para que la
+    # tirilla cuadre exacto: total = subtotal + iva.
+    iva_porcentaje, iva_activo = _leer_config_iva(cursor)
+    if iva_activo and iva_porcentaje > 0:
+        iva_valor = round(subtotal_venta * iva_porcentaje / 100)
+    else:
+        iva_porcentaje, iva_valor = 0.0, 0
+    total_venta = subtotal_venta + iva_valor
+    return (subtotal_venta, iva_valor, iva_porcentaje, total_venta, detalles), None
 
 
 def _validar_datos_factura_electronica(cliente):
@@ -183,7 +202,7 @@ def _registrar_venta():
     if error:
         conn.close()
         return error
-    total_venta, detalles = resultado
+    subtotal_venta, iva_valor, iva_porcentaje, total_venta, detalles = resultado
 
     now = datetime.now()
     saldo_pendiente = total_venta if tipo_pago == 'credito' else 0
@@ -203,14 +222,15 @@ def _registrar_venta():
             """
             INSERT INTO ventas (id_cliente, fecha_dia, hora, total_venta, saldo_pendiente,
                                 tipo_pago, direccion_cliente, tipo_entrega, numero_pedido,
-                                siigo_estado)
+                                siigo_estado, subtotal_venta, iva_valor, iva_porcentaje)
             VALUES (:cliente, :dia, :hora, :total, :saldo, :pago, :direccion, :entrega, :pedido,
-                    :siigo_estado)
+                    :siigo_estado, :subtotal, :iva, :iva_pct)
             """,
             {'cliente': id_cliente, 'dia': now.strftime('%Y-%m-%d'), 'hora': now.strftime('%H:%M:%S'),
              'total': total_venta, 'saldo': saldo_pendiente, 'pago': tipo_pago,
              'direccion': direccion_cliente, 'entrega': tipo_entrega, 'pedido': numero_pedido,
-             'siigo_estado': _estado_siigo_inicial(factura_electronica)},
+             'siigo_estado': _estado_siigo_inicial(factura_electronica),
+             'subtotal': subtotal_venta, 'iva': iva_valor, 'iva_pct': iva_porcentaje},
         )
         id_venta = cursor.lastrowid
 
@@ -505,7 +525,9 @@ def get_factura_detalle(id_venta):
                v.numero_pedido,
                COALESCE(v.siigo_estado, 'no_solicitada'), v.siigo_numero,
                v.siigo_cufe, v.siigo_pdf_url, v.siigo_error,
-               COALESCE(c.email, ''), COALESCE(c.tipo_documento, 'CC')
+               COALESCE(c.email, ''), COALESCE(c.tipo_documento, 'CC'),
+               COALESCE(v.subtotal_venta, 0), COALESCE(v.iva_valor, 0),
+               COALESCE(v.iva_porcentaje, 0)
         FROM ventas v JOIN clientes c ON v.id_cliente = c.id WHERE v.id = ?
         """, (id_venta,)
     ).fetchone()
@@ -545,6 +567,9 @@ def get_factura_detalle(id_venta):
         "siigo_error": venta[19] or "",
         "email": venta[20] or "",
         "tipo_documento": venta[21] or "CC",
+        "subtotal_venta": venta[22] or 0,
+        "iva_valor": venta[23] or 0,
+        "iva_porcentaje": venta[24] or 0,
         "negocio": {
             "nombre": (negocio[0] if negocio else "Ferretería y Fábrica de Flejes"),
             "nit": (negocio[1] if negocio else "") or "",

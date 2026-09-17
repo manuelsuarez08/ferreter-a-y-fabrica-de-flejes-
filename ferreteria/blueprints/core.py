@@ -178,11 +178,13 @@ def configuracion_negocio():
     conn = get_db()
     if request.method == 'GET':
         row = conn.execute(
-            "SELECT nombre, nit, telefono, direccion, consecutivo FROM configuracion WHERE id = 1"
+            "SELECT nombre, nit, telefono, direccion, consecutivo, "
+            "COALESCE(iva_porcentaje, 19), COALESCE(iva_activo, 1) FROM configuracion WHERE id = 1"
         ).fetchone()
         conn.close()
         return jsonify({"nombre": row[0], "nit": row[1], "telefono": row[2],
-                        "direccion": row[3], "consecutivo": row[4]})
+                        "direccion": row[3], "consecutivo": row[4],
+                        "iva_porcentaje": row[5], "iva_activo": bool(row[6])})
 
     if session.get('rol') != 'admin':
         conn.close()
@@ -194,6 +196,16 @@ def configuracion_negocio():
         (str(data.get('nombre', '')).strip(), str(data.get('nit', '')).strip(),
          str(data.get('telefono', '')).strip(), str(data.get('direccion', '')).strip()),
     )
+    # El IVA solo se toca si viene en la peticion (para no borrarlo desde otros
+    # formularios que guardan solo el nombre del negocio).
+    if 'iva_porcentaje' in data:
+        try:
+            pct = max(0.0, min(100.0, float(data.get('iva_porcentaje') or 0)))
+        except (ValueError, TypeError):
+            pct = 19.0
+        activo = 1 if data.get('iva_activo', True) in (True, 1, '1', 'true', 'on') else 0
+        conn.execute("UPDATE configuracion SET iva_porcentaje = ?, iva_activo = ? WHERE id = 1",
+                     (pct, activo))
     registrar_auditoria(conn, 'actualizar', 'configuracion', 1, 'Datos del negocio actualizados')
     conn.commit()
     conn.close()

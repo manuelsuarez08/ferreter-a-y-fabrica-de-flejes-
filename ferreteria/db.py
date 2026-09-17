@@ -412,6 +412,17 @@ def _aplicar_migraciones(cursor):
     # Base inicial de caja para el módulo de cierre diario.
     migrar_columna(cursor, 'cierres_caja', 'base_inicial', 'REAL NOT NULL DEFAULT 0')
 
+    # IVA configurable desde la app (porcentaje sobre el subtotal). Se guarda en
+    # configuracion para poder cambiarlo sin tocar codigo. Por defecto 19%.
+    migrar_columna(cursor, 'configuracion', 'iva_porcentaje', 'REAL NOT NULL DEFAULT 19')
+    migrar_columna(cursor, 'configuracion', 'iva_activo', 'INTEGER NOT NULL DEFAULT 1')
+
+    # Desglose de cada venta: subtotal (sin IVA) e IVA aplicado. Quedan a 0 en
+    # las ventas antiguas, que se hicieron sin IVA.
+    migrar_columna(cursor, 'ventas', 'subtotal_venta', 'REAL NOT NULL DEFAULT 0')
+    migrar_columna(cursor, 'ventas', 'iva_valor', 'REAL NOT NULL DEFAULT 0')
+    migrar_columna(cursor, 'ventas', 'iva_porcentaje', 'REAL NOT NULL DEFAULT 0')
+
     for tabla in ('equipos_alquiler', 'equipos'):
         for columna, definicion in (
             ('medidas', 'TEXT'),

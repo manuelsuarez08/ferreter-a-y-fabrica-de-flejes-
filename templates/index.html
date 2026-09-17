@@ -515,7 +515,11 @@
         </div>
 
         <div class="d-flex justify-content-between align-items-center bg-light p-3 rounded border">
-          <h4 class="m-0">Total Venta: <span id="total-venta-texto" class="text-primary fw-bold">$ 0 COP</span></h4>
+          <div>
+            <div class="text-muted small">Subtotal: <span id="subtotal-venta-texto">$ 0 COP</span></div>
+            <div class="text-muted small" id="fila-iva-pos">IVA <span id="iva-porcentaje-pos"></span>: <span id="iva-venta-texto">$ 0 COP</span></div>
+            <h4 class="m-0">Total Venta: <span id="total-venta-texto" class="text-primary fw-bold">$ 0 COP</span></h4>
+          </div>
           <button class="btn btn-primary btn-lg fw-bold" onclick="procesarVenta()">💾 Registrar / Facturar Venta</button>
         </div>
       </div>
@@ -1043,6 +1047,16 @@
           <div class="col-md-3"><label class="form-label">NIT</label><input id="config-nit" class="form-control" spellcheck="false"></div>
           <div class="col-md-3"><label class="form-label">Teléfono</label><input id="config-telefono" class="form-control" spellcheck="false"></div>
           <div class="col-md-3"><label class="form-label">Dirección</label><input id="config-direccion" class="form-control" spellcheck="true"></div>
+          <div class="col-md-2">
+            <label class="form-label">IVA (%)</label>
+            <input id="config-iva" type="number" min="0" max="100" step="0.01" class="form-control" placeholder="19">
+          </div>
+          <div class="col-md-2 d-flex align-items-end">
+            <div class="form-check mb-2">
+              <input id="config-iva-activo" class="form-check-input" type="checkbox">
+              <label class="form-check-label" for="config-iva-activo">Cobrar IVA</label>
+            </div>
+          </div>
         </form>
         <div class="row g-4 mb-4">
           <div class="col-lg-6">
@@ -1759,6 +1773,7 @@
               <tbody>
                 <tr><th>Subtotal</th><td class="text-end" id="fac-subtotal"></td></tr>
                 <tr><th>Descuento</th><td class="text-end" id="fac-descuento">$ 0 COP</td></tr>
+                <tr id="fac-fila-iva"><th>IVA <span id="fac-iva-pct"></span></th><td class="text-end" id="fac-iva"></td></tr>
                 <tr class="recibo-total"><th>TOTAL A PAGAR</th><td class="text-end" id="fac-total"></td></tr>
                 <tr id="fac-fila-saldo" class="recibo-saldo"><th>Saldo pendiente</th><td class="text-end" id="fac-saldo"></td></tr>
               </tbody>
@@ -2183,6 +2198,10 @@
 
     let carrito = [];
     let carritoFlejes = [];
+    // IVA vigente del negocio (se carga desde /api/configuracion). Se calcula en
+    // el POS solo para mostrarlo; el cobro real lo hace el servidor.
+    let ivaPorcentaje = 19;
+    let ivaActivo = true;
     let productosLista = [];
     let clientesLista = [];
     let equiposAlquilerLista = [];
@@ -3046,9 +3065,9 @@
         return;
       }
 
-      let total = 0;
+      let subtotal = 0;
       carrito.forEach((item, index) => {
-        total += item.subtotal;
+        subtotal += item.subtotal;
         tbody.innerHTML += `
           <tr>
               <td>${escapeHtml(item.nombre)}</td>
@@ -3060,7 +3079,19 @@
         `;
       });
 
-      document.getElementById('total-venta-texto').innerText = monedaCOP(total);
+      // IVA en vivo: mismo calculo redondeado que hace el servidor, para que el
+      // total que ve el cajero sea exactamente el que se guarda.
+      const ivaValor = ivaActivo ? Math.round(subtotal * ivaPorcentaje / 100) : 0;
+      const filaIvaPos = document.getElementById('fila-iva-pos');
+      if (ivaValor > 0) {
+        setTexto('subtotal-venta-texto', monedaCOP(subtotal));
+        setTexto('iva-porcentaje-pos', `(${ivaPorcentaje}%)`);
+        setTexto('iva-venta-texto', monedaCOP(ivaValor));
+        if (filaIvaPos) filaIvaPos.style.display = '';
+      } else if (filaIvaPos) {
+        filaIvaPos.style.display = 'none';
+      }
+      document.getElementById('total-venta-texto').innerText = monedaCOP(subtotal + ivaValor);
     }
 
     function eliminarDelCarrito(index) {
@@ -4201,12 +4232,25 @@
 			         `<tr><td class="text-center">${i.cantidad}</td><td>${escapeHtml(i.nombre)}</td><td class="text-end">${monedaCOP(i.subtotal)}</td></tr>`
 			       ).join('');
 
-			       // Totales: subtotal, descuento, total, metodo de pago y saldo pendiente.
-			       const descuento = Number(factura.descuento || 0);
-			       setTexto('fac-subtotal', monedaCOP(factura.total_venta));
-			       setTexto('fac-descuento', monedaCOP(descuento));
-			       setTexto('fac-total', monedaCOP(factura.total_venta - descuento));
-			       setTexto('fac-saldo', monedaCOP(factura.saldo_pendiente || 0));
+			       // Totales: subtotal, descuento, IVA, total, metodo de pago y saldo.
+			         // Si la venta es nueva trae el desglose (subtotal_venta / iva_valor);
+			         // las ventas antiguas no lo tenian, asi que se usa el total como base.
+			         const descuento = Number(factura.descuento || 0);
+			         const ivaValor = Number(factura.iva_valor || 0);
+			         const ivaPct = Number(factura.iva_porcentaje || 0);
+			         const subtotal = Number(factura.subtotal_venta || 0) || (Number(factura.total_venta || 0) - ivaValor);
+			         setTexto('fac-subtotal', monedaCOP(subtotal));
+			         setTexto('fac-descuento', monedaCOP(descuento));
+			         const filaIva = document.getElementById('fac-fila-iva');
+			         if (ivaValor > 0) {
+			           setTexto('fac-iva-pct', `(${ivaPct}%)`);
+			           setTexto('fac-iva', monedaCOP(ivaValor));
+			           if (filaIva) filaIva.style.display = '';
+			         } else if (filaIva) {
+			           filaIva.style.display = 'none';
+			         }
+			         setTexto('fac-total', monedaCOP(factura.total_venta - descuento));
+			         setTexto('fac-saldo', monedaCOP(factura.saldo_pendiente || 0));
 			       const filaSaldo = document.getElementById('fac-fila-saldo');
 			       if (filaSaldo) filaSaldo.style.display = (Number(factura.saldo_pendiente || 0) > 0) ? '' : 'none';
 			       	       const aviso = document.getElementById('fac-aviso-anulada');
@@ -4774,7 +4818,17 @@
         const res = await fetch('/api/configuracion');
         if (!res.ok) return;
         window.datosNegocio = await res.json();
+        // IVA configurado: se refleja en el POS y en la tirilla.
+        if (window.datosNegocio.iva_porcentaje !== undefined) {
+          ivaPorcentaje = Number(window.datosNegocio.iva_porcentaje) || 0;
+          ivaActivo = window.datosNegocio.iva_activo !== false;
+        }
+        const inputIva = document.getElementById('config-iva');
+        if (inputIva) inputIva.value = ivaPorcentaje;
+        const checkIva = document.getElementById('config-iva-activo');
+        if (checkIva) checkIva.checked = ivaActivo;
         actualizarBotonAutoImprimir();
+        actualizarTablaCarrito();
       } catch (e) { /* silencioso: la tirilla usa valores por defecto */ }
     }
 
@@ -4783,11 +4837,14 @@
         nombre: document.getElementById('config-nombre').value,
         nit: document.getElementById('config-nit').value,
         telefono: document.getElementById('config-telefono').value,
-        direccion: document.getElementById('config-direccion').value
+        direccion: document.getElementById('config-direccion').value,
+        iva_porcentaje: document.getElementById('config-iva') ? document.getElementById('config-iva').value : undefined,
+        iva_activo: document.getElementById('config-iva-activo') ? document.getElementById('config-iva-activo').checked : true
       };
       const res = await fetch('/api/configuracion', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json();
       alert(res.ok ? data.mensaje : `Error: ${data.error}`);
+      if (res.ok) cargarDatosNegocio();
     }
 
     // Reemplaza la base de datos completa por un archivo .db subido por el admin.
