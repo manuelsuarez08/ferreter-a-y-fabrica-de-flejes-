@@ -35,4 +35,9 @@ server = app
 
 if __name__ == '__main__':
     port = int(os.environ.get('PORT', 5000))
-    app.run(host='0.0.0.0', port=port)
+    # threaded=True es OBLIGATORIO aqui: sin esto el servidor de desarrollo de
+    # Flask atiende UNA peticion a la vez y las ~11 peticiones que dispara el
+    # navegador al abrir una pantalla se encolan; el POS llegaba a tardar 20+
+    # segundos. Con hilos, cada peticion se atiende en paralelo (el servidor
+    # responde cada endpoint en ~10 ms).
+    app.run(host='0.0.0.0', port=port, threaded=True)
