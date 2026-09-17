@@ -23,17 +23,18 @@
       max-width: 650px;
       margin: 0 auto;
     }
-    /* Logo del negocio en facturas, recibos y cotizaciones. El archivo tiene
-       fondo oscuro propio, así que se muestra circular para integrarlo bien
-       tanto en pantalla como al imprimir. */
+    /* Logo del negocio en facturas, recibos y cotizaciones. El archivo trae
+       fondo oscuro propio; al imprimir en papel termico blanco un recorte
+       circular deja un borde sucio, asi que se muestra tal cual y pequeno: el
+       nombre del negocio ya se lee aparte, en texto. */
     .logo-documento {
-      width: 104px;
-      height: 104px;
-      object-fit: cover;
-      border-radius: 50%;
-      background: #111;
+      width: 62px;
+      height: auto;
+      max-height: 62px;
+      object-fit: contain;
+      background: transparent;
       display: block;
-      margin: 0 auto 10px;
+      margin: 0 auto 6px;
     }
     /* Versión pequeña para la barra de navegación. */
     .logo-navbar {
@@ -53,6 +54,13 @@
         print-color-adjust: exact;
       }
     }
+    /* La tirilla térmica base en pantalla (se sobreescribe al imprimir). */
+    .recibo-termico .logo-documento {
+      width: 58px;
+      height: auto;
+      max-height: 58px;
+      margin: 0 auto 4px;
+    }
     .recibo-termico {
       width: 100%;
       max-width: 80mm;
@@ -61,10 +69,10 @@
       color: #000;
       background: #fff;
       font-family: "Courier New", monospace;
-      font-size: 11px;
+      font-size: 15px;
     }
     .recibo-termico .recibo-total {
-      font-size: 14px;
+      font-size: 19px;
       font-weight: bold;
       border-bottom: 2px solid #000;
     }
@@ -72,11 +80,11 @@
       font-weight: bold;
     }
     .recibo-termico .recibo-pie {
-      margin-top: 6px;
+      margin-top: 8px;
       text-align: center;
-      font-size: 10px;
+      font-size: 13px;
       border-top: 1px dashed #000;
-      padding-top: 4px;
+      padding-top: 6px;
     }
     .recibo-termico .recibo-sep {
       border-top: 1px dashed #000;
@@ -1713,26 +1721,29 @@
               <p class="text-muted mb-0">Venta de Materiales de Construcción y Flejes a Medida</p>
               <p class="text-muted mb-0" id="fac-negocio-nit"></p>
               <p class="text-muted mb-0" id="fac-negocio-dir"></p>
-              <p class="fw-bold mb-0">FACTURA DE VENTA N° <span id="fac-id"></span></p>
+              <p class="fac-numero">FACTURA DE VENTA N° <span id="fac-id"></span></p>
             </div>
             <div class="recibo-sep"></div>
 
-            <div class="row mb-2">
-              <div class="col-6">
-                <p class="mb-1"><strong>Fecha:</strong> <span id="fac-fecha"></span></p>
-                <p class="mb-1"><strong>Hora:</strong> <span id="fac-hora"></span></p>
-                <p class="mb-1"><strong>Medio de Pago:</strong> <span id="fac-pago"></span></p>
-              </div>
-              <div class="col-6">
-                <p class="mb-1"><strong>Cliente:</strong> <span id="fac-cliente-nombre"></span></p>
-                <p class="mb-1"><strong>Cédula/NIT:</strong> <span id="fac-cliente-nit"></span></p>
-                <p class="mb-1"><strong>Teléfono:</strong> <span id="fac-cliente-tel"></span></p>
-                <p class="mb-1"><strong>Dirección:</strong> <span id="fac-cliente-dir"></span></p>
-              </div>
+            <!-- Datos en lista vertical: cada dato ocupa su propia linea para
+                 que se lea de corrido en la tirilla (sin columnas apretadas). -->
+            <div class="recibo-datos">
+              <p><strong>Fecha:</strong> <span id="fac-fecha"></span></p>
+              <p><strong>Hora:</strong> <span id="fac-hora"></span></p>
+              <p><strong>Medio de Pago:</strong> <span id="fac-pago"></span></p>
+              <p><strong>Cliente:</strong> <span id="fac-cliente-nombre"></span></p>
+              <p><strong>Cédula/NIT:</strong> <span id="fac-cliente-nit"></span></p>
+              <p><strong>Teléfono:</strong> <span id="fac-cliente-tel"></span></p>
+              <p><strong>Dirección:</strong> <span id="fac-cliente-dir"></span></p>
             </div>
             <div class="recibo-sep"></div>
 
-            <table class="table table-sm mb-0">
+            <table class="table table-sm mb-0 tabla-items">
+              <colgroup>
+                <col class="col-cant">
+                <col>
+                <col class="col-valor">
+              </colgroup>
               <thead class="table-light">
                 <tr>
                   <th class="text-center">Cant.</th>
@@ -1749,7 +1760,6 @@
                 <tr><th>Subtotal</th><td class="text-end" id="fac-subtotal"></td></tr>
                 <tr><th>Descuento</th><td class="text-end" id="fac-descuento">$ 0 COP</td></tr>
                 <tr class="recibo-total"><th>TOTAL A PAGAR</th><td class="text-end" id="fac-total"></td></tr>
-                <tr><th>Método de pago</th><td class="text-end" id="fac-metodo-pago"></td></tr>
                 <tr id="fac-fila-saldo" class="recibo-saldo"><th>Saldo pendiente</th><td class="text-end" id="fac-saldo"></td></tr>
               </tbody>
             </table>
@@ -2207,6 +2217,14 @@
 
       function monedaCOP(valor) {
         return `$ ${Math.round(Number(valor) || 0).toLocaleString('es-CO')} COP`;
+      }
+
+      // Convierte una fecha ISO (2026-01-01) al formato colombiano (01/01/2026)
+      // para que la tirilla impresa sea fácil de leer. Si no la puede parsear,
+      // devuelve el valor original sin romper la factura.
+      function fechaCO(iso) {
+        const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso ?? ''));
+        return m ? `${m[3]}/${m[2]}/${m[1]}` : (iso ?? '');
       }
 
       function escapeHtml(value) {
@@ -3809,39 +3827,73 @@
       @page { size: 80mm auto; margin: 0; }
       * { box-shadow: none !important; text-shadow: none !important; border-radius: 0 !important; }
       html, body { width: 100%; max-width: 80mm; margin: 0 auto; padding: 0; background: #fff; }
-      body { font: 11px "Courier New", monospace; color: #000; }
+      /* Letra grande y clara: en papel termico la prioridad es que se entienda,
+         no que quepa apretado. 15px se lee bien incluso con rollo gastado. */
+      body { font: 15px "Courier New", monospace; color: #000; }
       .recibo-termico { width: 100%; max-width: 80mm; margin: 0 auto; padding: 3mm;
-                        color: #000; font: 11px "Courier New", monospace; box-sizing: border-box; }
+                        color: #000; font: 15px "Courier New", monospace; box-sizing: border-box; }
       .recibo-termico * { color: #000 !important; background: transparent !important;
                           box-sizing: border-box; }
       .recibo-termico h1, .recibo-termico h2, .recibo-termico h3,
-      .recibo-termico h4, .recibo-termico h5, .recibo-termico p { margin: 0 0 4px; }
-      .recibo-termico h3 { font-size: 13px; }
-      /* Rejilla de 2 columnas replicada de Bootstrap (Fecha/Cliente). */
-      .recibo-termico .row { display: flex; flex-wrap: wrap; margin: 0 -4px 8px; }
-      .recibo-termico .row > [class*="col-"] { flex: 1 1 50%; max-width: 50%; padding: 0 4px; }
+      .recibo-termico h4, .recibo-termico h5, .recibo-termico p { margin: 0 0 5px; }
+      .recibo-termico h3 { font-size: 17px; line-height: 1.25; }
+      /* Logo pequeno y centrado. Sin circulo forzado: en papel termico blanco el
+         recorte circular deja un borde oscuro sucio, asi que se muestra tal cual
+         y el nombre del negocio se lee aparte, en texto grande. */
+      .recibo-termico .logo-documento { width: 58px; height: auto; max-height: 58px;
+                                        object-fit: contain; border-radius: 0;
+                                        background: transparent; display: block;
+                                        margin: 0 auto 5px; }
+      /* Numero de factura: dato clave, va destacado y centrado. */
+      .recibo-termico .fac-numero { font-size: 17px; font-weight: bold; margin-top: 4px;
+                                    text-align: center; }
+      /* Datos del encabezado: una linea por dato. Cada etiqueta y su valor van
+         pegados al borde izquierdo para que se lean de corrido, sin cortarse ni
+         quedar descolgados a la derecha (como pasaba antes). */
+      .recibo-termico .recibo-datos { display: block; margin: 0 0 6px; }
+      .recibo-termico .recibo-datos p { margin: 0 0 5px !important; text-align: left !important;
+                                        line-height: 1.35; }
+      /* La etiqueta y su valor quedan pegados: si el texto es largo, baja todo
+         junto en vez de dejar "Cliente:" solo en su linea. */
+      .recibo-termico .recibo-datos p strong { display: inline; white-space: nowrap; }
+      /* Compatibilidad con la rejilla de Bootstrap por si alguna vista la usa. */
+      .recibo-termico .row { display: block; margin: 0 0 6px; }
+      .recibo-termico .row > [class*="col-"] { display: block; padding: 0;
+                                              margin-bottom: 6px; text-align: left !important; }
+      .recibo-termico .row > [class*="col-"] > p { margin: 0 0 4px; text-align: left !important; }
+      .recibo-termico .row > .col-6 { width: 100%; }
       /* Tablas de items y totales. */
-      .recibo-termico table { width: 100%; border-collapse: collapse; margin-top: 6px; }
-      .recibo-termico th, .recibo-termico td { padding: 3px 0; border-bottom: 1px dashed #000;
-                                               text-align: left; vertical-align: top; }
+      .recibo-termico table { width: 100%; border-collapse: collapse; margin-top: 8px;
+                              table-layout: fixed; }
+      .recibo-termico th, .recibo-termico td { padding: 6px 0; border-bottom: 1px dashed #000;
+                                               text-align: left; vertical-align: top;
+                                               font-size: 15px; line-height: 1.25; }
       .recibo-termico thead th { border-bottom: 1px solid #000; font-weight: bold; }
-      .recibo-termico .table-sm th, .recibo-termico .table-sm td { padding: 2px 0; }
+      .recibo-termico .table-sm th, .recibo-termico .table-sm td { padding: 5px 0; }
       .recibo-termico table.mb-0 { margin-bottom: 0; }
+      /* Evita que un precio, una cantidad o una etiqueta se parta en dos lineas. */
+      .recibo-termico .text-end, .recibo-termico .derecha { white-space: nowrap; }
+      .recibo-termico .recibo-sep { clear: both; }
+      /* Tabla de items: anchos fijos para que el producto no aplaste al valor.
+         El valor manda mas ancho para que un precio largo quepa entero. */
+      .recibo-termico .tabla-items col.col-cant { width: 13mm; }
+      .recibo-termico .tabla-items col.col-valor { width: 29mm; }
       /* Utilidades de Bootstrap usadas en la marca del recibo. */
-      .recibo-termico .text-end { text-align: right; }
       .recibo-termico .text-center { text-align: center; }
       .recibo-termico .text-muted { color: #000 !important; }
       .recibo-termico .fw-bold, .recibo-termico strong, .recibo-termico b { font-weight: bold; }
+      .recibo-termico .small { font-size: 13px !important; }
       .recibo-termico .mb-0 { margin-bottom: 0 !important; }
       .recibo-termico .mb-1 { margin-bottom: 4px !important; }
       .recibo-termico .mb-2 { margin-bottom: 8px !important; }
       .recibo-termico .card, .recibo-termico .card-body { border: 0 !important; padding: 0 !important; }
-      .recibo-termico .recibo-total { font-size: 14px; font-weight: bold; }
+      .recibo-termico .recibo-total { font-size: 19px; font-weight: bold; }
       .recibo-termico .recibo-total th, .recibo-termico .recibo-total td {
         border-bottom: 2px solid #000; font-weight: bold; }
       .recibo-termico .recibo-saldo th, .recibo-termico .recibo-saldo td { font-weight: bold; }
-      .recibo-termico .recibo-pie { margin-top: 6px; text-align: center; font-size: 10px;
-                                    border-top: 1px dashed #000; padding-top: 4px; }
+      .recibo-termico .recibo-pie { margin-top: 8px; text-align: center; font-size: 13px;
+                                    line-height: 1.3; border-top: 1px dashed #000;
+                                    padding-top: 6px; }
       .recibo-termico .recibo-sep { border-top: 1px dashed #000; margin: 6px 0; }
     `;
 
@@ -4022,8 +4074,8 @@
 				setTexto('fac-negocio-nombre', (negocio.nombre || 'Ferretería y Fábrica de Flejes').toUpperCase());
 				setTexto('fac-negocio-nit', (negocio.nit ? `NIT: ${negocio.nit}` : '') + (negocio.telefono ? ` | Tel: ${negocio.telefono}` : ''));
 				setTexto('fac-negocio-dir', negocio.direccion || '');
-				setTexto('fac-id', factura.id);
-				setTexto('fac-fecha', factura.fecha_dia);
+					setTexto('fac-id', factura.id);
+				setTexto('fac-fecha', fechaCO(factura.fecha_dia));
 				setTexto('fac-hora', factura.hora);
 				setTexto('fac-pago', factura.tipo_pago);
 				setTexto('fac-metodo-pago', factura.tipo_pago);
