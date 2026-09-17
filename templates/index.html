@@ -3369,27 +3369,47 @@
       } catch (e) { return null; }
     }
 
+    // Refresca SOLO las vistas que dependen de la lista ya cargada
+    // (productosLista), sin volver a pedir el catálogo al servidor. Se usa tras
+    // crear/editar/eliminar un producto: devuelve la sensación de instantáneo
+    // porque no vuelve a descargar los ~380 KB del catálogo ni rearma todo.
+    function opcionesProducto() {
+      return productosLista.map(p => ({ value: p.id, text: `${p.nombre}${p.dimensiones ? ` [${p.dimensiones}]` : ''}` }));
+    }
+
+    function refrescarVistasProductos() {
+      const movimientoProducto = document.getElementById('mov-producto');
+      if (movimientoProducto) {
+        movimientoProducto.innerHTML = '<option value="">Producto</option>' +
+          productosLista.map(p => `<option value="${p.id}">${escapeHtml(p.nombre || '')} (stock: ${p.stock_actual})</option>`).join('');
+      }
+
+      pintarTablaProductos(productosLista);
+
+      // El buscador se ACTUALIZA en sitio (no se destruye ni recrea): recrearlo
+      // con 1658 opciones en cada guardado era el mayor causante de la demora.
+      if (tsProdNombre) {
+        tsProdNombre.clearOptions();
+        tsProdNombre.addOptions(opcionesProducto());
+      } else {
+        tsProdNombre = new TomSelect('#prod-nombre', {
+          options: opcionesProducto(),
+          create: true,
+          maxOptions: 50,
+          onChange: function(val) {
+            mostrarDatosProductoInventario(val);
+          }
+        });
+      }
+    }
+
     async function cargarProductosTabla() {
       // Carga TODO el catálogo (hasta el tope del endpoint) para poder verlo
       // completo en el inventario. La tabla lo pagina para no congelarse.
       const res = await fetch('/api/productos?limite=2000');
       productosLista = await res.json();
-      const movimientoProducto = document.getElementById('mov-producto');
-      if (movimientoProducto) {
-        movimientoProducto.innerHTML = '<option value="">Producto</option>' + productosLista.map(p => `<option value="${p.id}">${escapeHtml(p.nombre || '')} (stock: ${p.stock_actual})</option>`).join('');
-      }
 
-      pintarTablaProductos(productosLista);
-
-      if (tsProdNombre) tsProdNombre.destroy();
-      tsProdNombre = new TomSelect('#prod-nombre', {
-        options: productosLista.map(p => ({ value: p.id, text: `${p.nombre}${p.dimensiones ? ` [${p.dimensiones}]` : ''}` })),
-        create: true,
-        maxOptions: 50,
-        onChange: function(val) {
-          mostrarDatosProductoInventario(val);
-        }
-      });
+      refrescarVistasProductos();
 
       await cargarInventarioFlejes();
     }
@@ -3458,12 +3478,57 @@
 
       const data = await res.json();
       if (res.ok) {
-        alert(data.mensaje);
+        // Se limpia el formulario y se avisa SIN bloquear con alert(): el alert
+        // detenia todo (incluso el repintado) hasta que el usuario lo cerrara.
         document.getElementById('form-producto').reset();
-        cargarProductosTabla();
+        mostrarAvisoProducto(data.mensaje);
+
+        // En vez de recargar TODO el catalogo (380 KB + rearmar el buscador con
+        // 1658 opciones), se inserta el producto recien guardado en la lista en
+        // memoria y solo se refrescan las vistas. Instantaneo.
+        await aplicarProductoGuardado(payload, productoSeleccionado);
         cargarNotificaciones();
       } else {
-        alert('Error: ' + data.error);
+        mostrarAvisoProducto('Error: ' + data.error, true);
+      }
+    }
+
+    // Aviso no bloqueante en la parte superior del formulario de producto.
+    function mostrarAvisoProducto(texto, esError) {
+      let aviso = document.getElementById('prod-aviso');
+      if (!aviso) {
+        aviso = document.createElement('div');
+        aviso.id = 'prod-aviso';
+        const form = document.getElementById('form-producto');
+        form.parentNode.insertBefore(aviso, form);
+      }
+      aviso.className = 'alert py-2 mb-2 ' + (esError ? 'alert-danger' : 'alert-success');
+      aviso.innerText = texto;
+      clearTimeout(aviso._t);
+      aviso._t = setTimeout(() => { aviso.remove(); }, 4000);
+    }
+
+    // Actualiza la lista en memoria con el producto recien creado o reabastecido
+    // y refresca las vistas. Si es nuevo (el backend no devuelve el id), se
+    // sincroniza una sola vez.
+    async function aplicarProductoGuardado(payload, productoSeleccionado) {
+      const cant = parseInt(payload.stock_actual, 10) || 0;
+      if (productoSeleccionado) {
+        // Reabastecimiento: ya conocemos el id, se ajusta el stock en memoria.
+        productoSeleccionado.stock_actual = (Number(productoSeleccionado.stock_actual) || 0) + cant;
+        if (payload.categoria !== undefined) productoSeleccionado.categoria = payload.categoria;
+        if (payload.dimensiones !== undefined) productoSeleccionado.dimensiones = payload.dimensiones;
+        if (payload.codigo_barras) productoSeleccionado.codigo_barras = payload.codigo_barras;
+        productoSeleccionado.precio_venta = Number(payload.precio_venta) || productoSeleccionado.precio_venta;
+        productoSeleccionado.stock_minimo = parseInt(payload.stock_minimo, 10) || productoSeleccionado.stock_minimo;
+        refrescarVistasProductos();
+        return;
+      }
+      // Producto nuevo: se sincroniza una sola vez para tenerlo en la lista.
+      const res = await fetch('/api/productos?limite=2000');
+      if (res.ok) {
+        productosLista = await res.json();
+        refrescarVistasProductos();
       }
     }
 
@@ -3479,8 +3544,13 @@
         body: JSON.stringify({ ...producto, nombre, precio_venta: precioVenta })
       });
       const data = await res.json();
-      alert(res.ok ? data.mensaje : `Error: ${data.error}`);
-      if (res.ok) cargarProductosTabla();
+      mostrarAvisoProducto(res.ok ? data.mensaje : `Error: ${data.error}`, !res.ok);
+      if (res.ok) {
+        // Actualiza en memoria (nombre/precio ya conocidos) sin recargar todo.
+        producto.nombre = nombre;
+        producto.precio_venta = Number(precioVenta) || producto.precio_venta;
+        refrescarVistasProductos();
+      }
     }
 
     // ── Reconteo y auditoría en vivo (AJAX, sin recargar la página) ──────────
@@ -3530,8 +3600,10 @@
         alert('Error: ' + data.error);
         return;
       }
-      alert(data.mensaje);
-      cargarProductosTabla();
+      // Quita el producto de la lista en memoria y refresca solo las vistas.
+      productosLista = productosLista.filter(p => p.id !== id);
+      mostrarAvisoProducto(data.mensaje);
+      refrescarVistasProductos();
       cargarFormularioVentas();
     }
 
