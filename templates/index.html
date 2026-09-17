@@ -3914,30 +3914,56 @@
       const clon = areaEl.cloneNode(true);
       clon.className = 'recibo-termico';
 
-      // Contenedor temporal fuera de pantalla para medir y capturar sin que el
-      // resto de la página (modal, fondo) afecte al PDF.
+      // Contenedor temporal para capturar. Se deja en el flujo normal del
+      // documento (bloque, no absoluto ni fuera de pantalla) con height:auto,
+      // porque html2canvas necesita medir su alto real. Antes se colocaba en
+      // position:absolute + opacity:0 y el canvas salia con alto 0 (PDF en
+      // blanco). Se oculta a la vista con un envoltorio de altura 0 y overflow
+      // hidden, que NO afecta la medicion.
+      const envoltorio = document.createElement('div');
+      envoltorio.id = 'cont-temp-pdf-wrap';
+      envoltorio.style.cssText = 'position:fixed;left:0;top:0;height:0;overflow:hidden;' +
+                                 'z-index:-1;pointer-events:none;';
+
       const cont = document.createElement('div');
       cont.id = 'cont-temp-pdf';
-      cont.style.cssText = 'position:fixed;left:-10000px;top:0;width:80mm;background:#fff;';
+      // Se fija en la esquina (0,0) para que html2canvas capture empezando en el
+      // contenedor y no en la coordenada donde lo ubique la pagina.
+      cont.style.cssText = 'width:80mm;background:#fff;color:#000;box-sizing:border-box;';
+      cont.style.position = 'absolute';
+      cont.style.left = '0';
+      cont.style.top = '0';
       const estilo = document.createElement('style');
       estilo.textContent = CSS_TIRILLA;
       cont.appendChild(estilo);
       cont.appendChild(clon);
-      document.body.appendChild(cont);
+      envoltorio.appendChild(cont);
+      document.body.appendChild(envoltorio);
 
+      // Dejar que el navegador calcule el layout antes de medir/capturar.
+      await new Promise(r => setTimeout(r, 150));
+
+      const anchoPx = cont.offsetWidth || 302;      // 302px ~ 80mm
+      const altoPx = cont.offsetHeight || 800;
       const opciones = {
         margin: 0,
         filename: nombreArchivo,
         image: { type: 'jpeg', quality: 0.98 },
-        html2canvas: { scale: 3, useCORS: true, backgroundColor: '#ffffff',
-                       width: cont.scrollWidth, windowWidth: cont.scrollWidth },
+        html2canvas: { scale: 2, useCORS: true, backgroundColor: '#ffffff',
+                       width: anchoPx, height: altoPx,
+                       x: 0, y: 0, scrollX: 0, scrollY: 0,
+                       windowWidth: anchoPx, windowHeight: altoPx },
         jsPDF: { unit: 'mm', format: [80, 297], orientation: 'portrait' },
         pagebreak: { mode: ['css', 'legacy'] },
       };
 
       html2pdf().set(opciones).from(cont).save()
-        .then(() => { cont.remove(); })
-        .catch(() => { cont.remove(); alert('No se pudo generar el PDF.'); });
+        .then(() => { envoltorio.remove(); })
+        .catch((err) => {
+          envoltorio.remove();
+          console.error('Error generando PDF:', err);
+          alert('No se pudo generar el PDF.');
+        });
     }
 
     function imprimirRecibo(elementId, tipo) {
