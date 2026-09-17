@@ -1169,12 +1169,14 @@
               🚚 Cola de Despacho
             </button>
           </li>
+          {% if rol != 'motocarguero' %}
           <li class="nav-item">
             <button class="nav-link fw-bold" id="subtab-manuales-btn"
               onclick="activarSubtabPedidos('manuales')">
               📋 Pedidos Manuales
             </button>
           </li>
+          {% endif %}
         </ul>
 
         <!-- ── SUB-PANEL: COLA DE DESPACHO (ventas para_llevar) ── -->
@@ -1185,10 +1187,9 @@
               <select id="despacho-filtro-estado" class="form-select form-select-sm" style="width:auto"
                       onchange="cargarDespachos()">
                 <option value="">Todos los estados</option>
-                <option value="pendiente_preparar">⏳ Pendiente por preparar</option>
-                <option value="preparando">📦 Preparando</option>
-                <option value="listo">✅ Listo para despacho</option>
-                <option value="entregado">🏠 Entregado</option>
+                <option value="pendiente_preparar">🟠 Pendiente en Bodega</option>
+                <option value="listo">🔵 Listo para Entrega</option>
+                <option value="entregado">🟢 Entregado</option>
               </select>
               <button class="btn btn-outline-secondary btn-sm" onclick="cargarDespachos()" title="Actualizar">🔄</button>
             </div>
@@ -2342,16 +2343,17 @@
         const res = await fetch('/api/fabrica/ordenes');
         if (!res.ok) throw new Error('No se pudo cargar el taller');
         const ordenes = await res.json();
+        // El tbody solo se renderiza en la pestaña de Fábrica (rol admin).
         const tbody = document.getElementById('tabla-ordenes-flejes');
         const badge = document.getElementById('badge-flejes');
         const cola = document.getElementById('flejes-ordenes-cola');
         const figurando = document.getElementById('flejes-ordenes-figurando');
         const completadas = document.getElementById('flejes-ordenes-completadas');
 
-        tbody.innerHTML = '';
+        if (tbody) tbody.innerHTML = '';
         if (!ordenes.length) {
-          tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">No hay órdenes actualmente.</td></tr>';
-        } else {
+          if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">No hay órdenes actualmente.</td></tr>';
+        } else if (tbody) {
           ordenes.forEach((orden) => {
             const estadoBadge = orden.estado === 'En Cola'
               ? '<span class="badge bg-primary">En Cola</span>'
@@ -2378,19 +2380,24 @@
         const colaCount = ordenes.filter(o => o.estado === 'En Cola').length;
         const figurandoCount = ordenes.filter(o => o.estado === 'En Figurado').length;
         const completadasCount = ordenes.filter(o => o.estado === 'Completado').length;
-        cola.textContent = colaCount;
-        figurando.textContent = figurandoCount;
-        completadas.textContent = completadasCount;
+        // Los contadores solo existen en la pestaña de Fábrica (rol admin):
+        // para los demás roles se valida null igual que en activarSubtabPedidos.
+        if (cola) cola.textContent = colaCount;
+        if (figurando) figurando.textContent = figurandoCount;
+        if (completadas) completadas.textContent = completadasCount;
         const pendientes = colaCount + figurandoCount;
-        badge.textContent = pendientes;
-        badge.style.display = pendientes > 0 ? 'inline-block' : 'none';
+        if (badge) {
+          badge.textContent = pendientes;
+          badge.style.display = pendientes > 0 ? 'inline-block' : 'none';
+        }
 
         // Reutiliza la carga centralizada del inventario de hierro (actualiza
         // tanto la pestaña de Inventario como la de Fábrica de Flejes).
         cargarInventarioFlejes();
       } catch (err) {
         console.error('Error cargando órdenes de flejes:', err);
-        document.getElementById('tabla-ordenes-flejes').innerHTML = '<tr><td colspan="7" class="text-center text-danger">No se pudo cargar el panel de producción.</td></tr>';
+        const tbody = document.getElementById('tabla-ordenes-flejes');
+        if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="text-center text-danger">No se pudo cargar el panel de producción.</td></tr>';
       }
     }
 
@@ -4850,10 +4857,15 @@
     // ── Tabla de pedidos ─────────────────────────────────────────────────────
     function activarSubtabPedidos(tipo) {
       const mostrarDespachos = tipo === 'despachos';
-      document.getElementById('subtab-despachos').classList.toggle('d-none', !mostrarDespachos);
-      document.getElementById('subtab-manuales').classList.toggle('d-none', mostrarDespachos);
-      document.getElementById('subtab-despachos-btn').classList.toggle('active', mostrarDespachos);
-      document.getElementById('subtab-manuales-btn').classList.toggle('active', !mostrarDespachos);
+      // El motocarguero no tiene la subtab de pedidos manuales: se valida null.
+      const panelDespachos = document.getElementById('subtab-despachos');
+      const panelManuales = document.getElementById('subtab-manuales');
+      const btnDespachos = document.getElementById('subtab-despachos-btn');
+      const btnManuales = document.getElementById('subtab-manuales-btn');
+      if (panelDespachos) panelDespachos.classList.toggle('d-none', !mostrarDespachos);
+      if (panelManuales) panelManuales.classList.toggle('d-none', mostrarDespachos);
+      if (btnDespachos) btnDespachos.classList.toggle('active', mostrarDespachos);
+      if (btnManuales) btnManuales.classList.toggle('active', !mostrarDespachos);
       if (mostrarDespachos) cargarDespachos();
       else cargarPedidos();
 
@@ -4863,49 +4875,136 @@
       }).catch(() => {});
     }
 
+    // Etiqueta y color de badge por estado de despacho.
+    const ESTADOS_DESPACHO_INFO = {
+      pendiente_preparar: ['🟠 Pendiente en Bodega', 'warning text-dark'],
+      listo:              ['🔵 Listo para Entrega', 'primary'],
+      entregado:          ['🟢 Entregado', 'success'],
+    };
+
     async function cargarDespachos() {
-      const tbody = document.getElementById('tabla-despachos-body');
+      const contenedor = document.getElementById('tabla-despachos-body');
       const estado = document.getElementById('despacho-filtro-estado').value;
-      tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">Cargando...</td></tr>';
+
+      // El motocarguero no ve la tabla de escritorio: ve tarjetas móviles.
+      if (ROL_ACTUAL === 'motocarguero') {
+        return cargarDespachosMotocarguero(estado);
+      }
+
+      // ── Vista BODEGA / admin: tabla con botón "Pedido Listo" ──
+      contenedor.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-3">Cargando...</td></tr>';
       try {
         const url = '/api/ventas/despachos' + (estado ? '?estado=' + encodeURIComponent(estado) : '');
         const res = await fetch(url);
         const despachos = await res.json();
         if (!res.ok) throw new Error(despachos.error || `Error ${res.status}`);
         if (!despachos.length) {
-          tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No hay pedidos para llevar.</td></tr>';
+          contenedor.innerHTML = '<tr><td colspan="8" class="text-center text-muted py-4">No hay pedidos para despachar.</td></tr>';
           return;
         }
-
-        tbody.innerHTML = despachos.map(p => {
-          const estadoInfo = {
-            pendiente_preparar: ['⏳ Pendiente por preparar', 'warning text-dark'],
-            preparando: ['📦 Preparando', 'info text-dark'],
-            listo: ['✅ Listo para despacho', 'success'],
-            entregado: ['🏠 Entregado', 'secondary']
-          }[p.estado_despacho] || [p.estado_despacho, 'secondary'];
-          const siguiente = {
-            pendiente_preparar: ['preparando', '📦 Preparar'],
-            preparando: ['listo', '✅ Marcar listo'],
-            listo: ['entregado', '🏠 Marcar entregado']
-          }[p.estado_despacho];
-          const accion = siguiente
-            ? `<button class="btn btn-sm btn-outline-primary" onclick="actualizarEstadoDespacho(${p.id_venta}, '${siguiente[0]}')">${siguiente[1]}</button>`
+        contenedor.innerHTML = despachos.map(p => {
+          const info = ESTADOS_DESPACHO_INFO[p.estado_despacho] || [p.estado_despacho, 'secondary'];
+          const cobro = p.cobrar_contra_entrega > 0
+            ? `<br><small class="text-danger fw-bold">💰 Cobrar: ${monedaCOP(p.cobrar_contra_entrega)}</small>`
             : '';
+          const accion = p.estado_despacho === 'pendiente_preparar'
+            ? `<button class="btn btn-sm btn-warning fw-bold" onclick="marcarPedidoListo(${p.id_venta}, ${p.numero_pedido})">✅ Pedido Listo</button>`
+            : (p.estado_despacho === 'listo'
+                ? '<span class="text-muted small">En reparto</span>'
+                : `<span class="text-muted small">Entregado por ${escapeHtml(p.entregado_por || '—')}</span>`);
           return `<tr>
             <td class="fw-bold">#${p.numero_pedido}</td>
             <td>${escapeHtml(p.cliente)}<br><small class="text-muted">${escapeHtml(p.telefono || '')}</small></td>
             <td class="small">${escapeHtml(p.productos)}</td>
             <td class="small">${escapeHtml(p.direccion || '—')}</td>
-            <td class="fw-bold text-primary">${monedaCOP(p.total_venta)}</td>
-            <td><span class="badge bg-${estadoInfo[1]}">${estadoInfo[0]}</span></td>
+            <td class="fw-bold text-primary">${monedaCOP(p.total_venta)}${cobro}</td>
+            <td><span class="badge bg-${info[1]}">${info[0]}</span></td>
             <td class="small">${escapeHtml(`${p.fecha_dia} ${p.hora}`)}</td>
             <td>${accion}</td>
           </tr>`;
         }).join('');
       } catch (err) {
-        tbody.innerHTML = `<tr><td colspan="8" class="text-danger text-center">${escapeHtml(err.message || 'No se pudo cargar la cola de despacho.')}</td></tr>`;
+        contenedor.innerHTML = `<tr><td colspan="8" class="text-danger text-center">${escapeHtml(err.message || 'No se pudo cargar la cola de despacho.')}</td></tr>`;
       }
+    }
+
+    // ── Vista del MOTOCARGUERO: tarjetas tipo móvil con datos de entrega ──
+    async function cargarDespachosMotocarguero(estado) {
+      const cont = document.getElementById('tabla-despachos-body');
+      const tabla = cont.closest('table');
+      const thead = tabla ? tabla.querySelector('thead') : null;
+      const filtros = document.getElementById('despacho-filtro-estado');
+      if (filtros) filtros.classList.add('d-none');
+      cont.innerHTML = '<tr><td class="text-center text-muted py-3">Cargando pedidos asignados...</td></tr>';
+      try {
+        const url = '/api/ventas/despachos' + (estado ? '?estado=' + encodeURIComponent(estado) : '');
+        const res = await fetch(url);
+        const despachos = await res.json();
+        if (!res.ok) throw new Error(despachos.error || `Error ${res.status}`);
+
+        const pendientes = despachos.filter(p => p.estado_despacho === 'listo');
+        const entregados = despachos.filter(p => p.estado_despacho === 'entregado');
+
+        if (!despachos.length) {
+          cont.innerHTML = '<tr><td class="text-center text-muted py-4">No tienes entregas pendientes.</td></tr>';
+          return;
+        }
+
+        const tarjeta = (p) => {
+          const cobro = p.cobrar_contra_entrega > 0;
+          const metodo = ({
+            efectivo: '💵 Efectivo', credito: '💳 Crédito', nequi_daviplata: '📱 Nequi/Daviplata',
+            tarjeta: '💳 Tarjeta', transferencia: '🏦 Transferencia'
+          })[p.tipo_pago] || escapeHtml(p.tipo_pago || '—');
+          const boton = p.estado_despacho === 'listo'
+            ? `<button class="btn btn-success fw-bold w-100 mt-2" onclick="marcarPedidoEntregado(${p.id_venta}, ${p.numero_pedido}, ${p.cobrar_contra_entrega})">✅ Marcar como Entregado</button>`
+            : `<div class="alert alert-success py-2 mt-2 mb-0 small">✅ Entregado el ${escapeHtml(p.entregado_fecha || '')}</div>`;
+          return `
+            <div class="card mb-3 shadow-sm border-${p.estado_despacho === 'listo' ? 'primary' : 'success'}">
+              <div class="card-body">
+                <div class="d-flex justify-content-between align-items-start mb-2">
+                  <h5 class="mb-0 fw-bold">#${p.numero_pedido} · ${escapeHtml(p.cliente)}</h5>
+                  <span class="badge bg-${(ESTADOS_DESPACHO_INFO[p.estado_despacho] || ['', 'secondary'])[1]}">${(ESTADOS_DESPACHO_INFO[p.estado_despacho] || [p.estado_despacho, ''])[0]}</span>
+                </div>
+                <div class="mb-2"><a href="tel:${escapeHtml(p.telefono || '')}" class="text-decoration-none fw-semibold">📞 ${escapeHtml(p.telefono || 'Sin teléfono')}</a></div>
+                <div class="mb-2"><a href="https://maps.google.com/?q=${encodeURIComponent(p.direccion || '')}" target="_blank" class="text-decoration-none">📍 ${escapeHtml(p.direccion || 'Sin dirección')}</a></div>
+                <div class="small text-muted mb-1">🛒 ${escapeHtml(p.productos)}</div>
+                <div class="small mb-1">Pago: ${metodo} · Total: <strong>${monedaCOP(p.total_venta)}</strong></div>
+                ${cobro ? `<div class="alert alert-danger py-2 my-2 fw-bold text-center">💰 COBRAR AL ENTREGAR: ${monedaCOP(p.cobrar_contra_entrega)}</div>` : ''}
+                ${p.preparado_por ? `<div class="small text-muted">Alistado por ${escapeHtml(p.preparado_por)} ${escapeHtml(p.preparado_fecha || '')}</div>` : ''}
+                ${boton}
+              </div>
+            </div>`;
+        };
+
+        let html = '';
+        if (pendientes.length) {
+          html += `<tr><td><h6 class="text-primary fw-bold mt-2">🔵 Por entregar (${pendientes.length})</h6></td></tr>`;
+          html += pendientes.map(p => `<tr><td class="p-0 border-0">${tarjeta(p)}</td></tr>`).join('');
+        }
+        if (entregados.length) {
+          html += `<tr><td><h6 class="text-success fw-bold mt-3">🟢 Entregados hoy (${entregados.length})</h6></td></tr>`;
+          html += entregados.map(p => `<tr><td class="p-0 border-0">${tarjeta(p)}</td></tr>`).join('');
+        }
+        if (thead) thead.classList.add('d-none');
+        cont.innerHTML = html;
+      } catch (err) {
+        cont.innerHTML = `<tr><td class="text-danger text-center">${escapeHtml(err.message || 'No se pudieron cargar tus entregas.')}</td></tr>`;
+      }
+    }
+
+    function marcarPedidoListo(idVenta, numeroPedido) {
+      if (!confirm(`¿Confirmar que el pedido #${numeroPedido} está listo para entrega?\n\nPasará a la pantalla del motocarguero.`)) return;
+      actualizarEstadoDespacho(idVenta, 'listo');
+    }
+
+    function marcarPedidoEntregado(idVenta, numeroPedido, cobrar) {
+      let msg = `¿Confirmar entrega del pedido #${numeroPedido}?`;
+      if (cobrar > 0) {
+        msg += `\n\n⚠️ RECUERDE COBRAR: ${monedaCOP(cobrar)}`;
+      }
+      if (!confirm(msg)) return;
+      actualizarEstadoDespacho(idVenta, 'entregado');
     }
 
     async function actualizarEstadoDespacho(idVenta, estadoDespacho) {

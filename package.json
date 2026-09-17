@@ -1,0 +1,29 @@
+{
+  "name": "ferreteria.db",
+  "version": "1.0.0",
+  "description": "",
+  "main": "index.js",
+  "directories": {
+    "test": "tests"
+  },
+  "scripts": {
+    "test": "node run-tests.mjs",
+    "test:despacho": "node _qa_flujo_despacho_runner.mjs",
+    "test:reset": "node -e \"require('child_process').execFileSync('.venv/Scripts/python.exe', ['_reset_venta_prueba.py'], { stdio: 'inherit' })\"",
+    "test:full": "node run-tests.mjs",
+    "test:python": ".venv/Scripts/python.exe -m pytest tests -q || .venv/Scripts/python.exe tests/test_deteccion_puerto.py"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/manuelsuarez08/ferreter-a-y-fabrica-de-flejes-.git"
+  },
+  "keywords": [],
+  "type": "commonjs",
+  "bugs": {
+    "url": "https://github.com/manuelsuarez08/ferreter-a-y-fabrica-de-flejes-/issues"
+  },
+  "homepage": "https://github.com/manuelsuarez08/ferreter-a-y-fabrica-de-flejes-#readme",
+  "devDependencies": {
+    "playwright": "^1.63.0"
+  }
+}

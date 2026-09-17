@@ -16,10 +16,21 @@ venv/
 .env
 # Residuos y archivos de trabajo temporales
 *.obsoleto-*
-_qa_*.mjs
 # Scripts locales de verificacion (no son parte de la app)
 _test_*.py
 _ver_*.py
 _probar_*.py
 _chk_*.py
 _verif_*.py
+# Logs del servidor de desarrollo
+_server_*.log
+_salida_test.log
+_render_tmp.html
+# Dependencias de Node (Playwright y scripts de QA)
+node_modules/
+# Pruebas de QA con navegador (locales, requieren Playwright)
+_qa_*.mjs
+# Scripts de un solo uso ya aplicados
+_borrar_*.py
+_fix_*.py
+_validar_js.mjs

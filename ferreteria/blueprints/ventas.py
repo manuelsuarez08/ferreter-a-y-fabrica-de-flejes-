@@ -399,6 +399,7 @@ def estado_siigo():
 def get_despachos():
     """Devuelve las ventas 'para_llevar' ordenadas por numero_pedido."""
     conn = get_db()
+    rol = session.get('rol')
     estado_filtro = request.args.get('estado', '')
     query = """
         SELECT v.id, v.numero_pedido, v.fecha_dia, v.hora,
@@ -406,7 +407,12 @@ def get_despachos():
                COALESCE(v.direccion_cliente, c.direccion, '') AS direccion,
                v.total_venta, v.tipo_pago, v.anulada,
                GROUP_CONCAT(p.nombre || ' (x' || dv.cantidad || ')', ', ') AS productos,
-               COALESCE(v.estado_despacho, 'pendiente_preparar')
+               COALESCE(v.estado_despacho, 'pendiente_preparar') AS estado_despacho,
+               v.saldo_pendiente,
+               COALESCE(v.despacho_preparado_por, ''),
+               COALESCE(v.despacho_preparado_fecha, ''),
+               COALESCE(v.despacho_entregado_por, ''),
+               COALESCE(v.despacho_entregado_fecha, '')
         FROM ventas v
         JOIN clientes c ON c.id = v.id_cliente
         LEFT JOIN detalle_ventas dv ON dv.id_venta = v.id
@@ -414,6 +420,9 @@ def get_despachos():
         WHERE v.tipo_entrega = 'para_llevar' AND v.anulada = 0
     """
     params = []
+    # El motocarguero solo ve lo que esta listo para entregar.
+    if rol == 'motocarguero':
+        query += " AND COALESCE(v.estado_despacho, 'pendiente_preparar') IN ('listo', 'entregado')"
     if estado_filtro:
         query += " AND COALESCE(v.estado_despacho, 'pendiente_preparar') = ?"
         params.append(estado_filtro)
@@ -426,6 +435,10 @@ def get_despachos():
         "cliente": r[4], "telefono": r[5], "cedula_nit": r[6], "direccion": r[7] or "",
         "total_venta": r[8], "tipo_pago": r[9], "anulada": bool(r[10]),
         "productos": r[11] or "", "estado_despacho": r[12],
+        "saldo_pendiente": r[13] or 0,
+        "preparado_por": r[14], "preparado_fecha": r[15],
+        "entregado_por": r[16], "entregado_fecha": r[17],
+        "cobrar_contra_entrega": round(float(r[13] or 0), 2),
     } for r in rows])
 
 
@@ -433,27 +446,50 @@ def get_despachos():
 @login_required
 def cambiar_estado_despacho(id_venta):
     """Cambia el estado_despacho de una venta para_llevar."""
-    from ..config import ESTADOS_DESPACHO
+    from ..config import ESTADOS_DESPACHO, TRANSICIONES_DESPACHO
     data = request.json or {}
     nuevo = (data.get('estado_despacho') or '').strip()
     if nuevo not in ESTADOS_DESPACHO:
         return jsonify({"error": f"Estado inválido. Válidos: {', '.join(ESTADOS_DESPACHO)}"}), 400
+    rol = session.get('rol')
+    usuario = session.get('usuario')
 
     conn = get_db()
-    venta = conn.execute("SELECT id, tipo_entrega FROM ventas WHERE id = ?", (id_venta,)).fetchone()
+    venta = conn.execute(
+        "SELECT tipo_entrega, COALESCE(estado_despacho, 'pendiente_preparar') FROM ventas WHERE id = ?",
+        (id_venta,),
+    ).fetchone()
     if not venta:
         conn.close()
         return jsonify({"error": "Venta no encontrada"}), 404
-    if venta[1] != 'para_llevar':
+    if venta[0] != 'para_llevar':
         conn.close()
         return jsonify({"error": "Esta venta no es de tipo para_llevar"}), 400
-
-    conn.execute("UPDATE ventas SET estado_despacho = ? WHERE id = ?", (nuevo, id_venta))
+    # Validar que el rol pueda hacer esta transicion.
+    estado_actual = venta[1]
+    permitidos = TRANSICIONES_DESPACHO.get(estado_actual, {})
+    if rol not in permitidos or nuevo not in permitidos[rol]:
+        conn.close()
+        return jsonify({
+            "error": f"El rol '{rol}' no puede cambiar el despacho de '{estado_actual}' a '{nuevo}'"
+        }), 403
+    ahora = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+    updates = ["estado_despacho = :nuevo"]
+    cambios = {'nuevo': nuevo, 'id': id_venta}
+    if nuevo == 'listo':
+        updates += ["despacho_preparado_por = :prep_por", "despacho_preparado_fecha = :prep_fecha"]
+        cambios['prep_por'] = usuario
+        cambios['prep_fecha'] = ahora
+    elif nuevo == 'entregado':
+        updates += ["despacho_entregado_por = :ent_por", "despacho_entregado_fecha = :ent_fecha"]
+        cambios['ent_por'] = usuario
+        cambios['ent_fecha'] = ahora
+    conn.execute(f"UPDATE ventas SET {', '.join(updates)} WHERE id = :id", cambios)
     registrar_auditoria(conn, 'estado_despacho', 'venta', id_venta,
-                        f'Estado despacho -> {nuevo} por {session["usuario"]}')
+                        f'{estado_actual} -> {nuevo} por {usuario}')
     conn.commit()
     conn.close()
-    return jsonify({"mensaje": f"Estado actualizado a '{nuevo}'"})
+    return jsonify({"mensaje": f"Estado actualizado a '{nuevo}'", "estado_despacho": nuevo})
 
 
 @bp.route('/api/ventas/<int:id_venta>', methods=['GET'])

@@ -126,7 +126,25 @@ ESTADOS_EQUIPO = ('Disponible', 'En Alquiler', 'En Mantenimiento')
 ESTADOS_ORDEN_FLEJE = ('En Cola', 'En Figurado', 'Completado')
 
 # Estados del flujo de despacho de ventas "para llevar".
-ESTADOS_DESPACHO = ('pendiente_preparar', 'preparando', 'listo', 'entregado')
+#   pendiente_preparar -> La ve BODEGA (badge naranja). Debe alistar el pedido.
+#   listo              -> La ve el MOTOCARGUERO (badge azul). Debe entregar.
+#   entregado          -> Historial (badge verde).
+ESTADOS_DESPACHO = ('pendiente_preparar', 'listo', 'entregado')
+
+# Transiciones permitidas por rol en el despacho de ventas "para llevar".
+# Bodega prepara; el motocarguero entrega. Admin puede hacer todo (rescate).
+TRANSICIONES_DESPACHO = {
+    'pendiente_preparar': {'bodega': ['listo'], 'admin': ['listo', 'entregado']},
+    'listo':              {'motocarguero': ['entregado'], 'bodega': ['entregado'], 'admin': ['entregado', 'pendiente_preparar']},
+    'entregado':          {'admin': ['listo']},
+}
+
+# Etiqueta legible y color de badge para cada estado de despacho.
+ETIQUETAS_DESPACHO = {
+    'pendiente_preparar': ('\u23f3 Pendiente en Bodega', 'warning text-dark'),
+    'listo':              ('\U0001f6f5 Listo para Entrega', 'primary'),
+    'entregado':          ('\u2705 Entregado', 'success'),
+}
 
 # Estados del flujo de pedidos.
 ESTADOS_PEDIDO = ('pendiente', 'alistando', 'listo', 'en_camino', 'entregado', 'cancelado')

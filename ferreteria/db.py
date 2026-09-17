@@ -389,6 +389,11 @@ def _aplicar_migraciones(cursor):
         ('ventas', 'tipo_entrega', "TEXT NOT NULL DEFAULT 'entrega_inmediata'"),
         ('ventas', 'numero_pedido', 'INTEGER'),
         ('ventas', 'estado_despacho', "TEXT DEFAULT 'pendiente_preparar'"),
+        # Trazabilidad del despacho: quién y cuándo preparó y entregó el pedido.
+        ('ventas', 'despacho_preparado_por', 'TEXT'),
+        ('ventas', 'despacho_preparado_fecha', 'TEXT'),
+        ('ventas', 'despacho_entregado_por', 'TEXT'),
+        ('ventas', 'despacho_entregado_fecha', 'TEXT'),
         ('usuarios', 'nombre_completo', 'TEXT'),
         # ── Facturación electrónica opcional (Siigo) ────────────────────────
         # Estado: 'no_solicitada' (venta normal) | 'pendiente' (solicitada, sin
