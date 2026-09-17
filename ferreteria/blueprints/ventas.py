@@ -537,7 +537,8 @@ def get_factura_detalle(id_venta):
 
     detalles = conn.execute(
         """
-        SELECT p.nombre, p.dimensiones, dv.cantidad, dv.precio_unitario, dv.subtotal
+        SELECT p.nombre, p.dimensiones, dv.cantidad, dv.precio_unitario, dv.subtotal,
+               dv.id_producto
         FROM detalle_ventas dv JOIN productos p ON dv.id_producto = p.id
         WHERE dv.id_venta = ?
         """, (id_venta,)
@@ -578,7 +579,7 @@ def get_factura_detalle(id_venta):
         },
         "items": [{
             "nombre": d[0] + (f" ({d[1]})" if d[1] else ""), "cantidad": d[2],
-            "precio_unitario": d[3], "subtotal": d[4],
+            "precio_unitario": d[3], "subtotal": d[4], "id_producto": d[5],
         } for d in detalles],
     })
 
@@ -652,6 +653,115 @@ def editar_cliente_factura(id_venta):
     conn.commit()
     conn.close()
     return jsonify({"mensaje": "Datos del cliente y dirección actualizados correctamente"}), 200
+@bp.route('/api/ventas/<int:id_venta>/detalle', methods=['PUT'])
+@admin_required
+def editar_detalle_factura(id_venta):
+    """Edita los precios y cantidades de una venta ya registrada.
+
+    Solo el administrador puede hacerlo. Recalcula el total con el IVA vigente y
+    ajusta el inventario cuando cambia una cantidad (devuelve lo anterior y
+    descuenta lo nuevo, para no descuadrar el stock). Deja rastro en auditoria.
+
+    Cuerpo esperado:
+        { "items": [ {"id_producto": 12, "cantidad": 3, "precio_unitario": 5000}, ... ] }
+    """
+    data = request.json or {}
+    items = data.get('items') or []
+    if not items:
+        return jsonify({"error": "Debe enviar al menos un producto"}), 400
+    conn = get_db()
+    cursor = conn.cursor()
+    venta = cursor.execute(
+        "SELECT COALESCE(anulada, 0), COALESCE(total_venta, 0) FROM ventas WHERE id = ?", (id_venta,)
+    ).fetchone()
+    if not venta:
+        conn.close()
+        return jsonify({"error": "Venta no encontrada"}), 404
+    if venta[0]:
+        conn.close()
+        return jsonify({"error": "No se puede editar una venta anulada"}), 400
+    # Detalle anterior (para ajustar stock y detectar cambios).
+    anteriores = {
+        r[0]: r[1] for r in cursor.execute(
+            "SELECT id_producto, cantidad FROM detalle_ventas WHERE id_venta = ?", (id_venta,)
+        ).fetchall()
+    }
+
+    # Reemplaza el detalle por el enviado, validando cada linea.
+    subtotal_venta = 0.0
+    nuevas_cantidades = {}
+    filas = []
+    for item in items:
+        try:
+            id_prod = int(item.get('id_producto'))
+            cantidad = int(item.get('cantidad'))
+            precio = float(item.get('precio_unitario'))
+        except (TypeError, ValueError):
+            conn.close()
+            return jsonify({"error": "Cantidad o precio inválidos en una línea"}), 400
+        if cantidad <= 0 or precio < 0:
+            conn.close()
+            return jsonify({"error": "La cantidad debe ser mayor que cero y el precio no puede ser negativo"}), 400
+        if not cursor.execute("SELECT 1 FROM productos WHERE id = ?", (id_prod,)).fetchone():
+            conn.close()
+            return jsonify({"error": f"Producto ID {id_prod} no encontrado"}), 400
+        subtotal_venta += cantidad * precio
+        nuevas_cantidades[id_prod] = nuevas_cantidades.get(id_prod, 0) + cantidad
+        filas.append((id_prod, cantidad, precio))
+
+    # Ajuste de inventario: se devuelve lo que tenia la venta antes y se
+    # descuenta lo nuevo, por producto (evita descuadres si solo cambio el precio).
+    for id_prod in set(list(anteriores.keys()) + list(nuevas_cantidades.keys())):
+        delta = nuevas_cantidades.get(id_prod, 0) - anteriores.get(id_prod, 0)
+        if delta:
+            cursor.execute(
+                "UPDATE productos SET stock_actual = COALESCE(stock_actual, 0) - ? WHERE id = ?",
+                (delta, id_prod),
+            )
+            cursor.execute(
+                "INSERT INTO movimientos_inventario (id_producto, tipo, cantidad, motivo, usuario, fecha) "
+                "VALUES (:id, :tipo, :cantidad, :motivo, :usuario, :fecha)",
+                {'id': id_prod, 'tipo': 'salida' if delta > 0 else 'entrada',
+                 'cantidad': abs(delta), 'motivo': f'Ajuste por edición de venta #{id_venta}',
+                 'usuario': session['usuario'], 'fecha': _ahora()},
+            )
+
+    cursor.execute("DELETE FROM detalle_ventas WHERE id_venta = ?", (id_venta,))
+    for id_prod, cantidad, precio in filas:
+        cursor.execute(
+            "INSERT INTO detalle_ventas (id_venta, id_producto, cantidad, precio_unitario, subtotal) "
+            "VALUES (?, ?, ?, ?, ?)",
+            (id_venta, id_prod, cantidad, precio, cantidad * precio),
+        )
+
+    # Recalcula total con el IVA vigente del negocio.
+    iva_porcentaje, iva_activo = _leer_config_iva(cursor)
+    iva_valor = round(subtotal_venta * iva_porcentaje / 100) if (iva_activo and iva_porcentaje > 0) else 0
+    total_venta = subtotal_venta + iva_valor
+    # Si era a credito, el saldo sigue al nuevo total (menos los abonos hechos).
+    tipo_pago = cursor.execute("SELECT tipo_pago FROM ventas WHERE id = ?", (id_venta,)).fetchone()[0]
+    if tipo_pago == 'credito':
+        abonado = cursor.execute(
+            "SELECT COALESCE(SUM(monto), 0) FROM abonos WHERE id_venta = ?", (id_venta,)
+        ).fetchone()[0]
+        saldo_pendiente = max(0.0, total_venta - abonado)
+    else:
+        saldo_pendiente = 0.0
+    cursor.execute(
+        "UPDATE ventas SET total_venta = ?, subtotal_venta = ?, iva_valor = ?, "
+        "iva_porcentaje = ?, saldo_pendiente = ? WHERE id = ?",
+        (total_venta, subtotal_venta, iva_valor, iva_porcentaje, saldo_pendiente, id_venta),
+    )
+    registrar_auditoria(conn, 'editar_detalle', 'venta', id_venta,
+                        f'Factura editada. Nuevo total: {total_venta}')
+    conn.commit()
+    conn.close()
+    return jsonify({
+        "mensaje": "Factura actualizada correctamente",
+        "subtotal_venta": subtotal_venta, "iva_valor": iva_valor,
+        "iva_porcentaje": iva_porcentaje, "total_venta": total_venta,
+        "saldo_pendiente": saldo_pendiente,
+    }), 200
 
 
 # ── Créditos y abonos ─────────────────────────

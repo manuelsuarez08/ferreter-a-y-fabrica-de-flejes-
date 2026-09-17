@@ -1838,6 +1838,26 @@
             </div>
           </div>
 
+          <!-- Edición del detalle (precios y cantidades) - solo admin -->
+          <div class="card mt-3 p-3 border-warning bg-light" id="panel-editar-items" style="display:none;">
+            <h6 class="fw-bold mb-2">✏️ Editar precios y cantidades de esta factura</h6>
+            <div class="table-responsive">
+              <table class="table table-sm align-middle mb-2">
+                <thead>
+                  <tr><th style="width:110px;">Cantidad</th><th>Producto</th><th style="width:150px;">Precio (IVA incl.)</th><th style="width:130px;">Subtotal</th><th style="width:60px;"></th></tr>
+                </thead>
+                <tbody id="edit-items-body"></tbody>
+              </table>
+            </div>
+            <div class="d-flex justify-content-between align-items-center">
+              <div class="small text-muted" id="edit-items-preview"></div>
+              <button class="btn btn-warning fw-bold" onclick="guardarEdicionItemsFactura()">💾 Guardar cambios en la factura</button>
+            </div>
+            <div class="alert alert-info py-2 mt-2 mb-0 small">
+              El IVA y el total se recalculan solos. Si cambias una cantidad, el inventario se ajusta automáticamente.
+            </div>
+          </div>
+
           <!-- Formulario de Edición de Datos de Cliente en la Factura -->
           <div class="card mt-3 p-3 bg-light border">
             <h6 class="fw-bold mb-2">✏️ Editar Datos del Cliente para esta Factura:</h6>
@@ -1878,6 +1898,8 @@
                   onclick="alternarAutoImprimir()">🖨️ Impresión automática: NO</button>
           <div>
             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
+            <button type="button" class="btn btn-warning fw-bold" id="btn-editar-items"
+                    onclick="alternarEdicionItemsFactura()" style="display:none;">✏️ Editar precios</button>
             <button type="button" class="btn btn-primary fw-bold" onclick="imprimirRecibo('area-factura-pdf', 'factura')">🖨️ Imprimir recibo</button>
                        <button type="button" class="btn btn-success fw-bold" onclick="descargarPDF()">📥 Descargar PDF</button>
                        <button type="button" class="btn fw-bold text-white" style="background:#25D366;" onclick="whatsappFactura()">📱 WhatsApp</button>
@@ -4343,10 +4365,21 @@
 				document.getElementById('edit-fac-email').value = factura.email || '';
 				document.getElementById('edit-fac-tipo-doc').value = factura.tipo_documento || 'CC';
 
-			       // Detalle compacto: Cantidad | Producto | Valor.
+			        // Detalle compacto: Cantidad | Producto | Valor.
 			       document.getElementById('fac-items-body').innerHTML = factura.items.map(i =>
 			         `<tr><td class="text-center">${i.cantidad}</td><td>${escapeHtml(i.nombre)}</td><td class="text-end">${monedaCOP(i.subtotal)}</td></tr>`
 			       ).join('');
+
+			       // Guarda el detalle actual para la edicion y prepara el panel. Solo el
+			       // admin puede editar precios, y solo si la venta no esta anulada.
+			       facturaItemsActuales = factura.items.map(i => ({ ...i }));
+			       const btnEditar = document.getElementById('btn-editar-items');
+			       if (btnEditar) {
+			         const puede = (ROL_ACTUAL === 'admin') && !factura.anulada;
+			         btnEditar.style.display = puede ? '' : 'none';
+			       }
+			       const panelEdit = document.getElementById('panel-editar-items');
+			       if (panelEdit) panelEdit.style.display = 'none';
 
 			       // Totales: subtotal, descuento, IVA, total, metodo de pago y saldo.
 			         // Si la venta es nueva trae el desglose (subtotal_venta / iva_valor);
@@ -4416,13 +4449,94 @@
 			email: document.getElementById('edit-fac-email').value.trim(),
 				tipo_documento: document.getElementById('edit-fac-tipo-doc').value
 			};
-			const res = await fetch(`/api/ventas/${facturaActualId}/cliente`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+				const res = await fetch(`/api/ventas/${facturaActualId}/cliente`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
 			const data = await res.json();
 			alert(res.ok ? data.mensaje : `Error: ${data.error}`);
 			if (res.ok) verFactura(facturaActualId);
-		}
+			}
 
-				function descargarPDF() {
+			// ── Edición de precios/cantidades de una factura (solo admin) ─────────────
+			// Copia de trabajo del detalle para no tocar la original hasta guardar.
+			let facturaItemsActuales = [];
+
+			// Muestra u oculta el panel de edición de renglones.
+			function alternarEdicionItemsFactura() {
+			const panel = document.getElementById('panel-editar-items');
+			if (!panel) return;
+			const visible = panel.style.display !== 'none';
+			if (visible) { panel.style.display = 'none'; return; }
+			pintarEditorItems();
+			panel.style.display = '';
+			}
+
+			// Pinta una fila editable por producto (cantidad y precio modificables).
+			function pintarEditorItems() {
+			const tbody = document.getElementById('edit-items-body');
+			if (!tbody) return;
+				tbody.innerHTML = facturaItemsActuales.map((it, idx) => `
+			<tr>
+			<td><input type="number" min="1" step="1" class="form-control form-control-sm"
+			value="${it.cantidad}" oninput="actualizarItemFactura(${idx}, 'cantidad', this.value)"></td>
+			<td class="small">${escapeHtml(it.nombre)}</td>
+			<td><input type="number" min="0" step="0.01" class="form-control form-control-sm"
+			value="${Number(it.precio_unitario).toFixed(2)}" oninput="actualizarItemFactura(${idx}, 'precio_unitario', this.value)"></td>
+			<td class="text-end fw-bold" id="edit-sub-${idx}">${monedaCOP(it.subtotal)}</td>
+			</tr>
+			`).join('');
+			previsualizarTotalEditado();
+			}
+
+			// Actualiza un valor del renglón y recalcula su subtotal.
+			function actualizarItemFactura(idx, campo, valor) {
+			if (!facturaItemsActuales[idx]) return;
+			if (campo === 'cantidad') {
+			facturaItemsActuales[idx].cantidad = Math.max(1, parseInt(valor, 10) || 1);
+			} else {
+			facturaItemsActuales[idx].precio_unitario = Math.max(0, Number(valor) || 0);
+			}
+			const it = facturaItemsActuales[idx];
+			it.subtotal = it.cantidad * it.precio_unitario;
+				setTexto(`edit-sub-${idx}`, monedaCOP(it.subtotal));
+			previsualizarTotalEditado();
+			}
+
+			// Muestra en vivo subtotal + IVA + total de la factura editada.
+			function previsualizarTotalEditado() {
+			const subtotal = facturaItemsActuales.reduce((s, it) => s + (it.cantidad * it.precio_unitario), 0);
+			const iva = ivaActivo ? Math.round(subtotal * ivaPorcentaje / 100) : 0;
+			const el = document.getElementById('edit-items-preview');
+			if (el) {
+			el.innerHTML = `Subtotal: <b>${monedaCOP(subtotal)}</b> &nbsp;|&nbsp; IVA (${ivaPorcentaje}%): ` +
+			`<b>${monedaCOP(iva)}</b> &nbsp;|&nbsp; <span class="text-primary fw-bold">Total: ${monedaCOP(subtotal + iva)}</span>`;
+			}
+			}
+
+			// Envia el detalle editado al servidor; el backend recalcula y ajusta stock.
+			async function guardarEdicionItemsFactura() {
+			if (!facturaItemsActuales.length) return;
+			const items = facturaItemsActuales.map(it => ({
+			id_producto: it.id_producto,
+			cantidad: it.cantidad,
+			precio_unitario: it.precio_unitario,
+			}));
+				try {
+			const res = await fetch(`/api/ventas/${facturaActualId}/detalle`, {
+			method: 'PUT', headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ items })
+			});
+			const data = await res.json();
+			if (!res.ok) { alert('Error: ' + data.error); return; }
+			mostrarAvisoProducto(data.mensaje);
+			// Recarga la factura para reflejar los nuevos totales y oculta el panel.
+			await verFactura(facturaActualId);
+			const panel = document.getElementById('panel-editar-items');
+			if (panel) panel.style.display = 'none';
+			} catch (e) {
+			alert('No se pudo guardar la edición: ' + e.message);
+			}
+			}
+
+			function descargarPDF() {
 			generarPDFRecibo(document.getElementById('area-factura-pdf'), `factura-${facturaActualId}.pdf`);
 			}
 
