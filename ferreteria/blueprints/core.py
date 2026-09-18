@@ -638,6 +638,44 @@ def get_notificaciones():
     return jsonify({"total": len(notificaciones), "alertas": notificaciones})
 
 
+# ── Diagnostico temporal del despliegue ────────────────────
+# Permite ver, desde el navegador, que base y rutas usa el servidor cuando
+# algo no cuadra en produccion (sin acceso a la Shell de Render). Quitar
+# cuando ya no se necesite.
+@bp.route('/api/_diag', methods=['GET'])
+def _diag_despliegue():
+    """Devuelve el estado de las rutas y de la base para diagnostico."""
+    import os as _os
+    from ..config import DB_NAME, DB_SEMILLA
+    carpeta = _os.path.dirname(DB_NAME) or '.'
+    datos = {
+        'db_name': DB_NAME,
+        'db_semilla': DB_SEMILLA,
+        'db_existe': _os.path.exists(DB_NAME),
+        'semilla_existe': _os.path.exists(DB_SEMILLA),
+        'db_tamano': _os.path.getsize(DB_NAME) if _os.path.exists(DB_NAME) else None,
+        'semilla_tamano': _os.path.getsize(DB_SEMILLA) if _os.path.exists(DB_SEMILLA) else None,
+        'archivos': sorted(f for f in _os.listdir(carpeta) if f.startswith('ferreteria'))
+                    if _os.path.isdir(carpeta) else [],
+    }
+    try:
+        conn = get_db()
+        datos['db_productos'] = conn.execute('SELECT COUNT(*) FROM productos').fetchone()[0]
+        datos['db_clientes'] = conn.execute('SELECT COUNT(*) FROM clientes').fetchone()[0]
+        datos['db_integridad'] = conn.execute('PRAGMA integrity_check').fetchone()[0]
+        conn.close()
+    except Exception as e:
+        datos['db_error'] = str(e)
+    try:
+        import sqlite3 as _sq
+        _c = _sq.connect(DB_SEMILLA)
+        datos['semilla_productos'] = _c.execute('SELECT COUNT(*) FROM productos').fetchone()[0]
+        datos['semilla_clientes'] = _c.execute('SELECT COUNT(*) FROM clientes').fetchone()[0]
+        _c.close()
+    except Exception as e:
+        datos['semilla_error'] = str(e)
+    return jsonify(datos)
+
 def registrar(app):
     """Conecta este blueprint a la aplicación."""
     app.register_blueprint(bp)
