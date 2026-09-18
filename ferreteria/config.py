@@ -35,6 +35,24 @@ _cargar_env()
 # Sirve como origen para poblar por primera vez un disco persistente vacío.
 DB_SEMILLA = os.path.join(BASE_DIR, 'ferreteria.db')
 
+# ── Versión de la semilla ───────────────────
+# Un número entero en el archivo `ferreteria-semilla.version`. Cada vez que se
+# cambia el catálogo de la semilla a mano (p. ej. borrar productos que no son
+# productos), se sube este número. Al arrancar, si la versión del repositorio es
+# MAYOR que la que quedó aplicada en el disco, la app adopta la semilla nueva.
+# Sin esto, un disco que ya tenía datos NUNCA recibía los cambios del catálogo:
+# la heurística de "1.5x productos" no se dispara con limpiezas (que reducen el
+# número de productos).
+SEMILLA_VERSION_FILE = os.path.join(BASE_DIR, 'ferreteria-semilla.version')
+
+def _leer_version_semilla():
+    try:
+        with open(SEMILLA_VERSION_FILE, encoding='utf-8') as f:
+            return int((f.read() or '0').strip())
+    except (OSError, ValueError):
+        return 0
+SEMILLA_VERSION = _leer_version_semilla()
+
 # Ruta efectiva de la base de datos. Si se define FERRETERIA_DB (p. ej. un
 # disco persistente en Render: /var/data/ferreteria.db) se usa esa; si no, la
 # semilla junto al código.

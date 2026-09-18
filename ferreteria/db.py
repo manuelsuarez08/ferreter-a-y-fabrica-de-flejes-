@@ -17,6 +17,7 @@ from .config import (
     DB_BUSY_TIMEOUT_MS,
     DB_CACHE_SIZE_KB,
     INDICES,
+    SEMILLA_VERSION,
 )
 
 
@@ -563,6 +564,27 @@ def _contar_productos(ruta):
     except sqlite3.Error:
         return None
 
+def _ruta_version_disco(ruta_db):
+    """Ruta del archivo que guarda la version de semilla aplicada al disco."""
+    return ruta_db + '.version'
+
+
+def _leer_version_disco(ruta_db):
+    """Version de semilla ya aplicada en la base del disco (0 si no hay marca)."""
+    try:
+        with open(_ruta_version_disco(ruta_db), encoding='utf-8') as f:
+            return int((f.read() or '0').strip())
+    except (OSError, ValueError):
+        return 0
+
+def _escribir_version_disco(ruta_db, version):
+    """Registra que la base del disco ya tiene aplicada la version dada."""
+    try:
+        with open(_ruta_version_disco(ruta_db), 'w', encoding='utf-8') as f:
+            f.write(str(int(version)))
+    except OSError:
+        pass
+
 def _semilla_es_mejor(actual, semilla):
     """True si la semilla tiene un catalogo claramente mas completo que actual.
 
@@ -645,11 +667,16 @@ def asegurar_base_de_datos():
         # reemplaza por la semilla del repositorio para que la app vuelva a
         # arrancar sola.
         if _base_legible(DB_NAME):
-            # La base es legible, pero puede ser una version ANTIGUA e incompleta
-            # (p. ej. una sembrada antes de cargar el catalogo completo). Si la
-            # semilla del repositorio tiene un catalogo claramente mayor, se
-            # adopta la semilla, que es la fuente de verdad del proyecto.
-            if _semilla_es_mejor(DB_NAME, DB_SEMILLA):
+            # La base es legible, pero puede estar DESACTUALIZADA respecto al
+            # repositorio. Se adopta la semilla en dos casos:
+            #   1) La version de semilla del repo es MAYOR que la aplicada en el
+            #      disco. Esto cubre cambios manuales del catalogo (p. ej. borrar
+            #      productos que no son productos), que REDUCEN el numero de
+            #      productos y por eso la heuristica de "1.5x" no detecta.
+            #   2) La semilla tiene un catalogo claramente mayor (caso historico).
+            version_repo = SEMILLA_VERSION
+            version_disco = _leer_version_disco(DB_NAME)
+            if version_repo > version_disco or _semilla_es_mejor(DB_NAME, DB_SEMILLA):
                 # Se borran la base vieja y sus -wal/-shm ANTES de copiar. OJO:
                 # no se puede volver a llamar a _limpiar_archivos_sqlite DESPUES
                 # del copy2, porque borraria la semilla recien copiada y dejaria
@@ -657,17 +684,20 @@ def asegurar_base_de_datos():
                 # 500 en /api/productos tras sembrar en Render).
                 _limpiar_archivos_sqlite(DB_NAME)
                 shutil.copy2(DB_SEMILLA, DB_NAME)
+                _escribir_version_disco(DB_NAME, version_repo)
                 return True
             return False
         _limpiar_archivos_sqlite(DB_NAME)
         if not os.path.exists(DB_SEMILLA):
             return False
         shutil.copy2(DB_SEMILLA, DB_NAME)
+        _escribir_version_disco(DB_NAME, SEMILLA_VERSION)
         return True
     if os.path.exists(DB_SEMILLA):
         shutil.copy2(DB_SEMILLA, DB_NAME)
         # SQLite en modo WAL puede acompañarse de -wal/-shm; no se copian a
         # propósito para empezar con una base consistente.
+        _escribir_version_disco(DB_NAME, SEMILLA_VERSION)
         return True
 
     return False
