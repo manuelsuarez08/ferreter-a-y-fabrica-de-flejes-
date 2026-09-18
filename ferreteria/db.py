@@ -650,16 +650,19 @@ def asegurar_base_de_datos():
             # semilla del repositorio tiene un catalogo claramente mayor, se
             # adopta la semilla, que es la fuente de verdad del proyecto.
             if _semilla_es_mejor(DB_NAME, DB_SEMILLA):
+                # Se borran la base vieja y sus -wal/-shm ANTES de copiar. OJO:
+                # no se puede volver a llamar a _limpiar_archivos_sqlite DESPUES
+                # del copy2, porque borraria la semilla recien copiada y dejaria
+                # la base en 0 bytes (era el bug: productos/clientes vacios y
+                # 500 en /api/productos tras sembrar en Render).
                 _limpiar_archivos_sqlite(DB_NAME)
                 shutil.copy2(DB_SEMILLA, DB_NAME)
-                _limpiar_archivos_sqlite(DB_NAME)
                 return True
             return False
         _limpiar_archivos_sqlite(DB_NAME)
         if not os.path.exists(DB_SEMILLA):
             return False
         shutil.copy2(DB_SEMILLA, DB_NAME)
-        _limpiar_archivos_sqlite(DB_NAME)
         return True
     if os.path.exists(DB_SEMILLA):
         shutil.copy2(DB_SEMILLA, DB_NAME)

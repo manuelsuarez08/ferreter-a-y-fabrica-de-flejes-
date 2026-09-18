@@ -875,7 +875,7 @@
       <div class="tab-pane fade" id="historial">
         <h4 class="mb-3">Historial de Ventas por Fecha</h4>
 
-        <div class="row align-items-center mb-4 g-2">
+        <div class="row align-items-center mb-3 g-2">
           <div class="col-auto">
             <label class="form-label fw-bold mb-0">Seleccionar Día:</label>
           </div>
@@ -884,6 +884,21 @@
           </div>
           <div class="col-auto">
             <button class="btn btn-secondary fw-bold" onclick="setHoyHistorial()">Ver Hoy</button>
+          </div>
+        </div>
+
+        <!-- Filtro por texto, igual que el buscador del inventario de productos:
+             acota la lista de ventas ya cargada por cliente, # de venta, producto
+             o tipo de pago, sin volver a consultar el servidor. -->
+        <div class="row align-items-center mb-2 g-2">
+          <div class="col-md-5">
+            <input type="text" id="filtro-tabla-ventas" class="form-control"
+                   placeholder="🔍 Buscar en el historial (cliente, # venta, producto o tipo de pago)..."
+                   spellcheck="false"
+                   oninput="filtrarHistorialVentas(this.value)">
+          </div>
+          <div class="col-md-7 text-muted small">
+            Use el buscador para acotar las ventas del día seleccionado.
           </div>
         </div>
 
@@ -4261,17 +4276,39 @@
 			cargarHistorialVentas();
 		}
 
+			// Guarda la última lista cargada del historial para poder filtrarla en el
+		// navegador (igual que el inventario de productos).
+		let historialVentasLista = [];
+
 		async function cargarHistorialVentas() {
-			const fecha = document.getElementById('filtro-fecha-historial').value;
-			const res = await fetch(`/api/ventas${fecha ? `?fecha=${encodeURIComponent(fecha)}` : ''}`);
-			const ventas = await res.json();
-			const tbody = document.getElementById('tabla-historial-body');
+		const fecha = document.getElementById('filtro-fecha-historial').value;
+		const res = await fetch(`/api/ventas${fecha ? `?fecha=${encodeURIComponent(fecha)}` : ''}`);
+			historialVentasLista = await res.json();
+		pintarHistorialVentas(historialVentasLista);
+		}
+
+		// Pinta las filas del historial. Reutilizada por la carga y por el filtro.
+		function pintarHistorialVentas(ventas) {
+		const tbody = document.getElementById('tabla-historial-body');
 			tbody.innerHTML = '';
-				ventas.forEach(v => {
-			  tbody.innerHTML += `<tr><td>${v.id}</td><td>${escapeHtml(v.fecha_dia)} ${escapeHtml(v.hora)}</td><td>${escapeHtml(v.cliente)}</td><td>${escapeHtml(v.direccion)}</td><td>${escapeHtml(v.productos_detalle || '')}</td><td>${escapeHtml(v.tipo_pago)}</td><td>${monedaCOP(v.total_venta)}</td><td>${badgeFacturacion(v)}</td></tr>`;
-			});
-			if (ventas.length === 0) tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">No hay ventas para esta fecha.</td></tr>';
-			}
+		ventas.forEach(v => {
+		  tbody.innerHTML += `<tr><td>${v.id}</td><td>${escapeHtml(v.fecha_dia)} ${escapeHtml(v.hora)}</td><td>${escapeHtml(v.cliente)}</td><td>${escapeHtml(v.direccion)}</td><td>${escapeHtml(v.productos_detalle || '')}</td><td>${escapeHtml(v.tipo_pago)}</td><td>${monedaCOP(v.total_venta)}</td><td>${badgeFacturacion(v)}</td></tr>`;
+		});
+		if (ventas.length === 0) tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">No hay ventas que coincidan con la búsqueda.</td></tr>';
+		}
+
+		// Filtro por texto del historial: acota la lista ya cargada por # venta,
+		// cliente, productos, dirección o tipo de pago. Con debounce, como el
+		// buscador del inventario, para no repintar en cada tecla.
+		const filtrarHistorialVentas = debounce(function(texto) {
+		const q = (texto || '').trim().toLowerCase();
+		if (!q) { pintarHistorialVentas(historialVentasLista); return; }
+		const filtradas = historialVentasLista.filter(v => {
+		const campos = [v.id, v.cliente, v.direccion, v.productos_detalle, v.tipo_pago, v.fecha_dia, v.hora];
+		return campos.some(c => String(c || '').toLowerCase().includes(q));
+		});
+		pintarHistorialVentas(filtradas);
+		}, 250);
 
 			// Badge visual que distingue una Factura Electrónica Siigo de una venta normal.
 			function badgeFacturacion(v) {
