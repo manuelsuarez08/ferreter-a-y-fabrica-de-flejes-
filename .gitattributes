@@ -1,0 +1,19 @@
+# La base de datos es BINARIA: git debe guardarla byte a byte, sin convertir
+# fines de linea. Sin esto, core.autocrlf (activo en Windows) reescribia los \n
+# del archivo y lo dejaba corrupto ("file is not a database"), por lo que Render
+# arrancaba con una semilla invalida y sin el catalogo. Tambien aplica a los
+# respaldos y a cualquier otro .db del repositorio.
+*.db binary
+*.db3 binary
+*.sqlite binary
+*.sqlite3 binary
+
+# Los archivos de texto si se normalizan a LF.
+*.py text eol=lf
+*.html text eol=lf
+*.js text eol=lf
+*.mjs text eol=lf
+*.md text eol=lf
+*.txt text eol=lf
+*.yaml text eol=lf
+*.cmd text eol=crlf
