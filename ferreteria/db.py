@@ -552,6 +552,33 @@ def respaldar_base_de_datos():
     except OSError:
         return None
 
+def _contar_productos(ruta):
+    """Numero de productos de una base, o None si no se puede leer."""
+    try:
+        conn = sqlite3.connect(ruta, timeout=10)
+        try:
+            return conn.execute('SELECT COUNT(*) FROM productos').fetchone()[0]
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return None
+
+def _semilla_es_mejor(actual, semilla):
+    """True si la semilla tiene un catalogo claramente mas completo que actual.
+
+    Se exige una diferencia amplia (1.5x) para no pisar el trabajo del usuario:
+    si ya uso la base del disco y solo le falta un producto, se respeta. El caso
+    tipico que SI reemplaza: el disco quedo con una base de 661 productos y la
+    semilla trae 1637.
+    """
+    if not os.path.exists(semilla):
+        return False
+    n_actual = _contar_productos(actual)
+    n_semilla = _contar_productos(semilla)
+    if not n_actual or not n_semilla:
+        return False
+    return n_semilla > n_actual * 1.5
+
 def _archivos_sqlite(ruta):
     """Devuelve las rutas de una base y sus companeros -wal / -shm."""
     return [ruta, ruta + '-wal', ruta + '-shm']
@@ -612,6 +639,15 @@ def asegurar_base_de_datos():
         # reemplaza por la semilla del repositorio para que la app vuelva a
         # arrancar sola.
         if _base_legible(DB_NAME):
+            # La base es legible, pero puede ser una version ANTIGUA e incompleta
+            # (p. ej. una sembrada antes de cargar el catalogo completo). Si la
+            # semilla del repositorio tiene un catalogo claramente mayor, se
+            # adopta la semilla, que es la fuente de verdad del proyecto.
+            if _semilla_es_mejor(DB_NAME, DB_SEMILLA):
+                _limpiar_archivos_sqlite(DB_NAME)
+                shutil.copy2(DB_SEMILLA, DB_NAME)
+                _limpiar_archivos_sqlite(DB_NAME)
+                return True
             return False
         _limpiar_archivos_sqlite(DB_NAME)
         if not os.path.exists(DB_SEMILLA):
