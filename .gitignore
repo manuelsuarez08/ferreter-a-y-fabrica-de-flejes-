@@ -7,11 +7,12 @@ ferreteria-respaldo-*.db
 ferreteria-respaldo-*.db-journal
 *.db-wal
 *.db-shm
-# La base de datos en si: contiene datos de operacion (ventas, clientes,
-# usuarios). No debe versionarse, para que un commit no borre informacion real
-# de otros y las credenciales/datos no viajen al repositorio. La app la crea y
-# siembra sola al arrancar (ferreteria/db.py: asegurar_base_de_datos).
-ferreteria.db
+# OJO: ferreteria.db SI se versiona a proposito. Se usa como SEMILLA para
+# entornos sin disco persistente (p. ej. Render en plan gratuito): al arrancar,
+# asegurar_base_de_datos() copia este archivo al disco/DIR de trabajo si no
+# existe base. Si se ignora, Render arranca sin catalogo y los modulos fallan
+# con error 500. (En plan de pago con disco persistente la semilla no se usa.)
+# ferreteria.db
 
 # Entornos virtuales
 venv/
