@@ -518,19 +518,35 @@ def init_db():
 def respaldar_base_de_datos():
     '''Guarda una copia de seguridad de la base antes de tocarla.
 
-    Se ejecuta en cada arranque: si la base ya existe, deja una copia
-    ferreteria-respaldo-arranque-FECHA.db junto a ella. Sirve de red de
-    seguridad ante cualquier migracion o restauracion accidental.
+    Se ejecuta en cada arranque, PERO solo si la base cambio desde el ultimo
+    respaldo, y conserva solo el mas reciente. Antes creaba una copia nueva en
+    CADA arranque sin borrar las anteriores: en un host con reinicios frecuentes
+    (p. ej. Render, que duerme y despierta el servicio) los .db se acumulaban y
+    terminaban llenando el disco, tras lo cual SQLite no podia escribir y todas
+    las consultas devolvian 500 ("funciona un momento y deja de funcionar").
 
     Devuelve la ruta del respaldo, o None si no habia nada que respaldar.
     '''
     if not os.path.exists(DB_NAME):
         return None
+    carpeta = os.path.dirname(DB_NAME) or '.'
     try:
+        # Si ya existe un respaldo con el mismo tamano y fecha, la base no
+        # cambio: no se genera otro (evita llenar el disco con reinicios).
+        import glob
+        previos = sorted(glob.glob(os.path.join(carpeta, 'ferreteria-respaldo-arranque-*.db')))
+        if previos:
+            ultimo = previos[-1]
+            try:
+                if os.path.getsize(ultimo) == os.path.getsize(DB_NAME) and \
+                        os.path.getmtime(ultimo) >= os.path.getmtime(DB_NAME):
+                    return None
+                # La base si cambio: se reemplaza el respaldo anterior por el nuevo.
+                os.remove(ultimo)
+            except OSError:
+                pass
         marca = datetime.now().strftime('%Y%m%d-%H%M%S')
-        destino = os.path.join(
-            os.path.dirname(DB_NAME) or '.', f'ferreteria-respaldo-arranque-{marca}.db'
-        )
+        destino = os.path.join(carpeta, f'ferreteria-respaldo-arranque-{marca}.db')
         shutil.copy2(DB_NAME, destino)
         return destino
     except OSError:
