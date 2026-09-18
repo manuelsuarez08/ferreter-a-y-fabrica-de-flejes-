@@ -6,6 +6,7 @@ transversales de baja cohesión entre sí pero alto acoplamiento al usuario.
 import os
 import shutil
 import sqlite3
+import tempfile
 from datetime import datetime
 from flask import (
     Blueprint, jsonify, redirect, render_template, request,
@@ -86,8 +87,30 @@ def logout():
 @bp.route('/api/backup', methods=['GET'])
 @admin_required
 def descargar_respaldo():
+    """Descarga una copia CONSISTENTE de la base (no el archivo vivo).
+
+    Enviar DB_NAME tal cual podia devolver una copia incompleta si habia datos
+    en el WAL, y reventar con un 500 mudo si la base no existia o estaba
+    bloqueada (el sintoma "el respaldo no guarda nada"). Aqui se usa la API de
+    respaldo de SQLite, que toma una foto coherente aunque la app este
+    escribiendo, y si algo falla se explica el motivo en vez de un 500.
+    """
     nombre = f"ferreteria-respaldo-{datetime.now().strftime('%Y%m%d-%H%M%S')}.db"
-    return send_file(DB_NAME, as_attachment=True, download_name=nombre)
+    if not os.path.exists(DB_NAME):
+        return jsonify({"error": "No existe la base de datos para respaldar."}), 404
+    try:
+        destino = os.path.join(tempfile.gettempdir(), nombre)
+        origen = sqlite3.connect(DB_NAME)
+        copia = sqlite3.connect(destino)
+        try:
+            with copia:
+                origen.backup(copia)
+        finally:
+            copia.close()
+            origen.close()
+    except sqlite3.Error as e:
+        return jsonify({"error": f"No se pudo generar el respaldo: {e}"}), 500
+    return send_file(destino, as_attachment=True, download_name=nombre)
 
 @bp.route('/api/restaurar', methods=['POST'])
 @admin_required
