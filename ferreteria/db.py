@@ -552,6 +552,40 @@ def respaldar_base_de_datos():
     except OSError:
         return None
 
+def _archivos_sqlite(ruta):
+    """Devuelve las rutas de una base y sus companeros -wal / -shm."""
+    return [ruta, ruta + '-wal', ruta + '-shm']
+
+
+def _limpiar_archivos_sqlite(ruta):
+    """Borra la base y sus -wal / -shm (se usan solo antes de re-sembrar)."""
+    for objetivo in _archivos_sqlite(ruta):
+        try:
+            if os.path.exists(objetivo):
+                os.remove(objetivo)
+        except OSError:
+            pass
+
+def _base_legible(ruta):
+    """True si la base SQLite abre, pasa integrity_check y trae las tablas minimas.
+
+    Se usa como red de seguridad al arrancar: una base ilegible o a medio
+    escribir hace fallar TODAS las consultas (500), asi que conviene detectarla
+    aqui y regenerarla en vez de servir una app rota.
+    """
+    try:
+        conn = sqlite3.connect(ruta, timeout=10)
+        try:
+            if conn.execute('PRAGMA integrity_check').fetchone()[0] != 'ok':
+                return False
+            tablas = {r[0] for r in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'")}
+            return {'productos', 'clientes', 'ventas', 'configuracion'} <= tablas
+        finally:
+            conn.close()
+    except sqlite3.Error:
+        return False
+
 def asegurar_base_de_datos():
     """Prepara la base de datos efectiva, sembrándola si es necesario.
 
@@ -566,15 +600,25 @@ def asegurar_base_de_datos():
     # Camino normal (misma ruta que la semilla): no hay nada que sembrar.
     if os.path.abspath(DB_NAME) == os.path.abspath(DB_SEMILLA):
         return False
-
-    if os.path.exists(DB_NAME):
-        return False
-
-    # El destino (disco persistente) está vacío: intentamos sembrarlo.
     carpeta = os.path.dirname(DB_NAME)
     if carpeta:
         os.makedirs(carpeta, exist_ok=True)
 
+    if os.path.exists(DB_NAME):
+        # La base ya existe: se comprueba que sea LEGIBLE y consistente. Si esta
+        # danada (p. ej. quedo un -wal viejo de otra base tras una restauracion
+        # interrumpida), NO sirve dejarla: todas las consultas devolverian 500 y
+        # la app quedaria inservible hasta limpiarla a mano. En ese caso se
+        # reemplaza por la semilla del repositorio para que la app vuelva a
+        # arrancar sola.
+        if _base_legible(DB_NAME):
+            return False
+        _limpiar_archivos_sqlite(DB_NAME)
+        if not os.path.exists(DB_SEMILLA):
+            return False
+        shutil.copy2(DB_SEMILLA, DB_NAME)
+        _limpiar_archivos_sqlite(DB_NAME)
+        return True
     if os.path.exists(DB_SEMILLA):
         shutil.copy2(DB_SEMILLA, DB_NAME)
         # SQLite en modo WAL puede acompañarse de -wal/-shm; no se copian a
