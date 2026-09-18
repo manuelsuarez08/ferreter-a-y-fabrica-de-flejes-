@@ -80,11 +80,16 @@ cp /var/data/ferreteria-respaldo-antes-restaurar-FECHA.db /var/data/ferreteria.d
 ---
 
 ## Método alternativo: subir el código con la semilla nueva
+> OJO: `ferreteria.db` YA NO se versiona (está en `.gitignore`) para que un commit
+> no borre datos de operación ni suba información de clientes al repositorio. El
+> comando `git add ferreteria.db` de abajo ya no funciona tal cual; si de verdad
+> necesitas subir una semilla nueva, fuerza el alta con `git add -f ferreteria.db`
+> y ten presente que quedará en el historial del repositorio.
 
 Solo funciona si **NO hay disco persistente** (la base se recrea en cada deploy):
 
 ```powershell
-git add ferreteria.db
+git add -f ferreteria.db
 git commit -m "Datos actualizados"
 git push
 ```

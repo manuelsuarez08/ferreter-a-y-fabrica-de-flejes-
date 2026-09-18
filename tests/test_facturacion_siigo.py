@@ -29,9 +29,16 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, RAIZ)
 
 # Base de datos temporal para no ensuciar la real (debe fijarse ANTES de crear la app).
+# OJO: ferreteria.db ya NO se versiona (contiene datos de operación), así que en
+# un clon limpio del repositorio NO existe. Antes este test hacía shutil.copy() y
+# reventaba con FileNotFoundError. Ahora: si la base semilla existe se usa como
+# plantilla (datos reales), y si no, se deja que la app cree una vacía y el
+# propio test siembra el cliente y el producto mínimos que necesita.
 tmpdir = tempfile.mkdtemp(prefix="fe_test_")
 db_tmp = os.path.join(tmpdir, "ferreteria.db")
-shutil.copy(os.path.join(RAIZ, "ferreteria.db"), db_tmp)
+semilla = os.path.join(RAIZ, "ferreteria.db")
+if os.path.exists(semilla):
+    shutil.copy(semilla, db_tmp)
 os.environ["FERRETERIA_DB"] = db_tmp
 
 from ferreteria.app_factory import create_app  # noqa: E402
@@ -39,8 +46,26 @@ from ferreteria.app_factory import create_app  # noqa: E402
 app = create_app()
 
 
+def _sembrar_minimo():
+    """Crea cliente y producto si la base vino vacia (clon sin semilla)."""
+    conn = sqlite3.connect(db_tmp)
+    if conn.execute("SELECT id FROM clientes ORDER BY id LIMIT 1").fetchone() is None:
+        conn.execute(
+            "INSERT INTO clientes (nombre, cedula_nit, telefono, direccion) "
+            "VALUES ('Cliente Test', '123456', '3000000', 'Calle 1')"
+        )
+    if conn.execute("SELECT id FROM productos WHERE activo = 1 LIMIT 1").fetchone() is None:
+        conn.execute(
+            "INSERT INTO productos (nombre, precio_venta, stock_actual, activo, precio_base) "
+            "VALUES ('Producto Test', 10000, 100, 1, 10000)"
+        )
+    conn.commit()
+    conn.close()
+
+
 def _preparar_datos():
     """Asegura un cliente con datos fiscales y un producto activo para vender."""
+    _sembrar_minimo()
     conn = sqlite3.connect(db_tmp)
     cliente = conn.execute("SELECT id FROM clientes ORDER BY id LIMIT 1").fetchone()[0]
     cedula_original = conn.execute(
