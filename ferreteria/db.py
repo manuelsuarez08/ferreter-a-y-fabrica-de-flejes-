@@ -575,8 +575,14 @@ def _semilla_es_mejor(actual, semilla):
         return False
     n_actual = _contar_productos(actual)
     n_semilla = _contar_productos(semilla)
-    if not n_actual or not n_semilla:
+    # Si la semilla no se puede leer (o esta vacia), no hay nada mejor que ofrecer.
+    if not n_semilla:
         return False
+    # Base del disco vacia o ilegible: la semilla es claramente mejor. OJO: aqui
+    # no se puede usar `if not n_actual: return False`, porque el caso 0 -> 1637
+    # es justo el que hay que resolver (una base vacia dejo la app inservible).
+    if not n_actual:
+        return True
     return n_semilla > n_actual * 1.5
 
 def _archivos_sqlite(ruta):
