@@ -303,48 +303,129 @@ def editar_producto(id_producto):
     return _actualizar_producto(conn, id_producto)
 
 
+def _borrar_producto(cursor, id_producto):
+    """Elimina un producto y devuelve (resultado, nombre).
+
+    NO hace commit ni cierra la conexion: eso lo decide quien llama, para poder
+    reutilizar esta funcion tanto en el borrado individual como en el masivo. 
+
+    El borrado es siempre FISICO: la fila desaparece de la tabla `productos`
+    para siempre. Ya NO se marca activo = 0, porque eso dejaba el producto
+    escondido pero todavía presente en la base de datos.
+
+    Casos:
+      * 'fisico'  -> la fila del producto se borra definitivamente de la base.
+
+    Antes de borrar se limpian las filas que apuntan al producto y que NO son
+    facturas: movimientos de inventario, lineas de pedidos y de cotizaciones.
+    Las facturas (detalle_ventas) NO se tocan: si el producto ya se vendio, su
+    linea queda tal como estaba, para no dejar documentos ya emitidos sin su
+    nombre ni su precio.
+
+    Devuelve ('fisico', nombre) o ('no_encontrado', None) si el id no existe.
+    """
+    producto = cursor.execute(
+        "SELECT nombre FROM productos WHERE id = ?", (id_producto,)
+    ).fetchone()
+    if not producto:
+        return 'no_encontrado', None
+    nombre = producto[0]
+
+    # Se borran las referencias que no son historial de ventas. Si alguna tabla
+    # no existiera en esta version de la base, no se interrumpe el borrado.
+    limpiezas = (
+        "DELETE FROM movimientos_inventario WHERE id_producto = ?",
+        "DELETE FROM detalle_pedidos WHERE id_producto = ?",
+        "DELETE FROM detalle_cotizaciones WHERE id_producto = ?",
+    )
+    for sentencia in limpiezas:
+        try:
+            cursor.execute(sentencia, (id_producto,))
+        except sqlite3.Error:
+            pass
+    cursor.execute("DELETE FROM productos WHERE id = ?", (id_producto,))
+    registrar_auditoria(cursor, 'eliminar', 'producto', id_producto,
+                        f'Producto eliminado definitivamente: {nombre}')
+    return 'fisico', nombre
+
 def _eliminar_producto(conn, id_producto):
     if session.get('rol') != 'admin':
         conn.close()
         return jsonify({"error": "Solo el administrador puede eliminar productos"}), 403
-
-    producto = conn.execute(
-        "SELECT nombre FROM productos WHERE id = ?", (id_producto,)
-    ).fetchone()
-    if not producto:
+    resultado, nombre = _borrar_producto(conn, id_producto)
+    if resultado == 'no_encontrado':
         conn.close()
         return jsonify({"error": "Producto no encontrado"}), 404
-
-    en_ventas = conn.execute(
-        "SELECT 1 FROM detalle_ventas WHERE id_producto = ? LIMIT 1", (id_producto,)
-    ).fetchone()
-    en_pedidos = conn.execute(
-        "SELECT 1 FROM detalle_pedidos WHERE id_producto = ? LIMIT 1", (id_producto,)
-    ).fetchone()
-
-    if not en_ventas and not en_pedidos:
-        try:
-            conn.execute("DELETE FROM movimientos_inventario WHERE id_producto = ?", (id_producto,))
-        except sqlite3.Error:
-            pass
-        conn.execute("DELETE FROM productos WHERE id = ?", (id_producto,))
-        registrar_auditoria(conn, 'eliminar', 'producto', id_producto,
-                            f'Producto eliminado de la base de datos: {producto[0]}')
-        conn.commit()
-        conn.close()
-        return jsonify({"mensaje": "Producto eliminado de la base de datos", "tipo": "fisico"})
-
-    conn.execute(
-        "UPDATE productos SET activo = 0, stock_actual = 0, stock_minimo = 0 WHERE id = ?",
-        (id_producto,),
-    )
-    registrar_auditoria(conn, 'eliminar', 'producto', id_producto,
-                        f'Producto con historial de ventas retirado: {producto[0]}')
     conn.commit()
     conn.close()
     return jsonify({
-        "mensaje": "Producto con ventas asociadas: se retiró del inventario y del buscador conservando las facturas",
-        "tipo": "logico",
+        "mensaje": "Producto eliminado definitivamente de la base de datos",
+        "tipo": "fisico",
+    })
+
+# Tope de ids por peticion: evita que una peticion gigante bloquee el servidor
+# y da un limite claro al mensaje de error del frontend.
+# Se deja holgado a proposito: el catalogo ronda los 1500 productos y conviene
+# poder vaciar una busqueda entera de una sola vez.
+LOTE_ELIMINAR_MAXIMO = 3000
+@bp.route('/api/productos/eliminar-lote', methods=['POST'])
+@login_required
+def eliminar_productos_lote():
+    """Elimina VARIOS productos de una sola vez (seleccion multiple del inventario).
+
+    Se borra uno por uno con la misma logica del borrado individual, dentro de
+    UNA sola transaccion. Si algo falla a mitad de camino se deshace todo el
+    lote (rollback), para no dejar el inventario a medias.
+
+    Recibe: {"ids": [1, 2, 3]}
+    Responde el conteo y los nombres, que es lo que el frontend necesita para
+    avisar con precision de lo que paso.
+    """
+    if session.get('rol') != 'admin':
+        return jsonify({"error": "Solo el administrador puede eliminar productos"}), 403
+    data = request.json or {}
+    ids_crudos = data.get('ids')
+    if not isinstance(ids_crudos, list) or not ids_crudos:
+        return jsonify({"error": "Debe seleccionar al menos un producto"}), 400
+    if len(ids_crudos) > LOTE_ELIMINAR_MAXIMO:
+        return jsonify({
+            "error": f"Máximo {LOTE_ELIMINAR_MAXIMO} productos por vez. "
+                     f"Seleccionó {len(ids_crudos)}."
+        }), 400
+    # Se normalizan y deduplican los ids: el frontend puede mandar numeros o
+    # texto, y no tiene sentido procesar el mismo id dos veces.
+    ids = []
+    for valor in ids_crudos:
+        try:
+            numero = int(valor)
+        except (TypeError, ValueError):
+            continue
+        if numero not in ids:
+            ids.append(numero)
+    if not ids:
+        return jsonify({"error": "Los ids enviados no son válidos"}), 400
+    conn = get_db()
+    eliminados = []
+    no_encontrados = []
+    try:
+        for id_producto in ids:
+            resultado, nombre = _borrar_producto(conn, id_producto)
+            if resultado == 'fisico':
+                eliminados.append({'id': id_producto, 'nombre': nombre})
+            else:
+                no_encontrados.append(id_producto)
+        conn.commit()
+    except sqlite3.Error as error:
+        conn.rollback()
+        conn.close()
+        return jsonify({"error": f"No se pudo eliminar el lote: {error}"}), 500
+    conn.close()
+    total = len(eliminados)
+    return jsonify({
+        "mensaje": f"Se eliminaron {total} producto(s) definitivamente.",
+        "eliminados": total,
+        "no_encontrados": no_encontrados,
+        "ids_afectados": [p['id'] for p in eliminados],
     })
 
 

@@ -573,8 +573,12 @@
                cliente, con IVA incluido). Segun la factura del proveedor, el
                usuario elige en que casilla escribe el numero y el sistema
                calcula el resto en vivo. -->
-          <div class="card p-3 mt-3 border-primary">
+          <div class="card p-3 mt-3 border-primary" id="card-precio-producto">
             <h6 class="fw-bold mb-3">💰 Precio e IVA</h6>
+            <div class="alert alert-warning py-2 mb-3" id="precio-obligatorio-aviso" role="alert">
+              ⚠️ Falta el precio: escríbalo aquí abajo en <strong id="texto-precio-obligatorio">Precio Base (sin IVA)</strong>
+              para poder guardar o reabastecer.
+            </div>
             <div class="row g-3">
               <div class="col-md-3">
                 <label class="form-label fw-bold" id="label-precio-entrada">Precio Base (sin IVA)</label>
@@ -692,6 +696,21 @@
           </div>
           <div class="col-md-7 text-muted small">
             Se muestra el catálogo completo, paginado. Usa el buscador para acotar por nombre, código o categoría.
+            Marca las casillas de la izquierda para eliminar varios productos a la vez (el borrado es definitivo).
+          </div>
+        </div>
+
+        <!-- ── Barra de eliminación masiva ──────────────────
+             Aparece solo cuando hay al menos un producto marcado. -->
+        <div id="barra-eliminar-lote" class="alert alert-danger d-none d-flex flex-wrap align-items-center gap-2 mb-2">
+          <strong id="texto-seleccionados">0 productos seleccionados</strong>
+          <div class="ms-auto d-flex flex-wrap gap-2">
+            <button type="button" class="btn btn-sm btn-outline-secondary fw-bold"
+                    onclick="limpiarSeleccionProductos()">Quitar selección</button>
+            <button type="button" class="btn btn-sm btn-outline-danger fw-bold"
+                    onclick="seleccionarProductosFiltrados()">Seleccionar toda la búsqueda</button>
+            <button type="button" class="btn btn-sm btn-danger fw-bold" id="btn-eliminar-lote"
+                    onclick="eliminarProductosSeleccionados()">🗑️ Eliminar seleccionados</button>
           </div>
         </div>
 
@@ -699,6 +718,11 @@
           <table class="table table-striped table-hover align-middle border">
             <thead class="table-light">
               <tr>
+                <th style="width:36px;">
+                  <input class="form-check-input" type="checkbox" id="check-todos-productos"
+                         title="Seleccionar los productos de esta página"
+                         onclick="alternarSeleccionPagina(this.checked)">
+                </th>
                 <th>ID</th>
                 <th>Código</th>
                 <th>Nombre</th>
@@ -712,7 +736,7 @@
               </tr>
             </thead>
             <tbody id="tabla-productos-body">
-              <tr><td colspan="11" class="text-center text-muted">Cargando productos...</td></tr>
+              <tr><td colspan="12" class="text-center text-muted">Cargando productos...</td></tr>
             </tbody>
           </table>
         </div>
@@ -3406,8 +3430,15 @@
       const badgeAuditado = p.auditado
         ? `<span class="badge bg-success" title="${escapeHtml(p.fecha_auditoria || '')}">Auditado</span>`
         : '<span class="badge bg-secondary">Sin auditar</span>';
+      const marcado = seleccionProductos.has(String(p.id)) ? ' checked' : '';
       return `
         <tr>
+          <td>
+            <input class="form-check-input check-producto" type="checkbox"
+                   value="${p.id}"${marcado}
+                   aria-label="Seleccionar ${escapeHtml(p.nombre)}"
+                   onchange="alternarSeleccionProducto(${p.id}, this.checked)">
+          </td>
           <td>${p.id}</td>
           <td>${escapeHtml(p.codigo_barras || '')}</td>
           <td><strong>${escapeHtml(p.nombre)}</strong></td>
@@ -3439,8 +3470,9 @@
       const total = productosParaPaginar.length;
 
       if (!total) {
-        tbody.innerHTML = '<tr><td colspan="10" class="text-center text-muted">Sin productos que coincidan.</td></tr>';
+        tbody.innerHTML = '<tr><td colspan="12" class="text-center text-muted">Sin productos que coincidan.</td></tr>';
         actualizarControlesPaginacion(0, 0);
+        actualizarBarraSeleccion();
         return;
       }
 
@@ -3453,6 +3485,9 @@
 
       tbody.innerHTML = visibles.map(renderFilaProducto).join('');
       actualizarControlesPaginacion(total, totalPaginas);
+      // Al cambiar de pagina o filtrar hay filas nuevas: la barra de seleccion
+      // (contador y casilla de la cabecera) se sincroniza con lo que se ve.
+      actualizarBarraSeleccion();
     }
 
     function actualizarControlesPaginacion(total, totalPaginas) {
@@ -3500,8 +3535,15 @@
     // (productosLista), sin volver a pedir el catálogo al servidor. Se usa tras
     // crear/editar/eliminar un producto: devuelve la sensación de instantáneo
     // porque no vuelve a descargar los ~380 KB del catálogo ni rearma todo.
+    // OJO: el `value` se normaliza a TEXTO. Tom Select compara el valor que le
+    // llega (que siempre es string) contra el `value` de cada opcion; si aqui se
+    // deja el id como numero, la comparacion falla, el onChange NO se dispara y
+    // el formulario queda vacio al elegir el producto (no aparece el precio).
     function opcionesProducto() {
-      return productosLista.map(p => ({ value: p.id, text: `${p.nombre}${p.dimensiones ? ` [${p.dimensiones}]` : ''}` }));
+      return productosLista.map(p => ({
+        value: String(p.id),
+        text: `${p.nombre}${p.dimensiones ? ` [${p.dimensiones}]` : ''}`,
+      }));
     }
 
     function refrescarVistasProductos() {
@@ -3562,7 +3604,9 @@
       const etiquetaStock = document.getElementById('label-stock-ingreso');
       const campoStock = document.getElementById('prod-stock');
 
+      const avisoPrecio = document.getElementById('precio-obligatorio-aviso');
       if (!producto) {
+        if (avisoPrecio) avisoPrecio.style.display = 'none';
         document.getElementById('prod-categoria').value = '';
         document.getElementById('prod-dimensiones').value = '';
         document.getElementById('prod-codigo-barras').value = '';
@@ -3574,6 +3618,7 @@
         return;
       }
 
+      if (avisoPrecio) avisoPrecio.style.display = 'none';
       document.getElementById('prod-categoria').value = producto.categoria || '';
       document.getElementById('prod-dimensiones').value = producto.dimensiones || '';
       document.getElementById('prod-codigo-barras').value = producto.codigo_barras || '';
@@ -3587,9 +3632,34 @@
         ? producto.precio_base : producto.precio_venta;
       document.getElementById('prod-precio-entrada').value = baseProd;
       document.getElementById('prod-minimo').value = producto.stock_minimo;
-      etiquetaStock.innerText = `Cantidad a Ingresar (stock actual: ${producto.stock_actual})`;
+      etiquetaStock.innerText = 'Cantidad a Ingresar (unidades nuevas que llegan)';
       campoStock.value = 0;
       recalcularPrecioProducto();
+      // El formulario baja hasta el bloque de precio/IVA para que el campo del
+      // precio quede a la vista al reabastecer (antes quedaba fuera de pantalla).
+      mostrarBloquePrecioProducto();
+      // Se deja el cursor en la cantidad para escribirla y bajar con Enter/Tab
+      // hasta el precio sin usar el raton.
+      campoStock.focus();
+      campoStock.select();
+    }
+
+    // Lleva el bloque "Precio e IVA" a la vista y resalta suavemente el campo del
+    // precio. Se usa al elegir un producto para reabastecer o al hacer clic en el
+    // aviso de que falta el precio.
+    function mostrarBloquePrecioProducto(resaltar) {
+      const bloque = document.getElementById('prod-precio-entrada');
+      if (!bloque) return;
+      bloque.scrollIntoView({ behavior: 'smooth', block: 'center' });
+      const tarjeta = document.getElementById('card-precio-producto');
+      if (!tarjeta) return;
+      clearTimeout(tarjeta._t);
+      tarjeta.classList.add('border-warning', 'shadow');
+      tarjeta._t = setTimeout(() => tarjeta.classList.remove('border-warning', 'shadow'), 2200);
+      if (resaltar) {
+        bloque.focus();
+        bloque.select();
+      }
     }
 
     // Lee los campos de precio/IVA y devuelve SIEMPRE el precio FINAL (lo que
@@ -3626,6 +3696,8 @@
       if (etiqueta) {
         etiqueta.innerText = p.facturaConIva ? 'Precio Total (IVA incluido)' : 'Precio Base (sin IVA)';
       }
+      // El rotulo del aviso de "falta el precio" sigue al modo elegido (base o total).
+      setTexto('texto-precio-obligatorio', etiqueta ? etiqueta.innerText : 'Precio Base (sin IVA)');
       const ayuda = document.getElementById('preview-ayuda');
       if (ayuda) {
         ayuda.innerText = p.facturaConIva
@@ -3639,6 +3711,15 @@
       e.preventDefault();
       const nombreSeleccionado = document.getElementById('prod-nombre').value;
       const productoSeleccionado = productosLista.find(p => String(p.id) === String(nombreSeleccionado));
+      // Si el precio esta vacio se avisa y se lleva la vista al bloque de
+      // precio: el campo visible queda abajo y es facil no verlo.
+      const campoPrecio = document.getElementById('prod-precio-entrada');
+      const textoPrecio = (campoPrecio.value || '').trim();
+      if (textoPrecio === '' || Number(textoPrecio) <= 0) {
+        mostrarAvisoProducto('Falta el precio: escribalo en el bloque "💰 Precio e IVA".', true);
+        mostrarBloquePrecioProducto(true);
+        return;
+      }
       // El servidor recibe el precio FINAL y la tasa; el desglose lo calcula el
       // backend (fuente de verdad) con la misma formula.
       const precio = leerPrecioEIVA();
@@ -3773,11 +3854,17 @@
       }
     }
 
-    // ── ELIMINACIÓN DIRECTA (reemplaza "Desactivar") ─────────────────────────
+    // ── ELIMINACIÓN DEFINITIVA ──────────────────────────────────────────────
+    // Borra el producto de verdad de la base de datos (reemplaza al antiguo
+    // "Desactivar", que solo lo ocultaba).
     async function eliminarProducto(id) {
       const producto = productosLista.find(p => p.id === id);
       const nombre = producto ? producto.nombre : `#${id}`;
-      if (!confirm(`¿ELIMINAR el producto "${nombre}"?\n\nEsta acción no se puede deshacer.`)) return;
+      if (!confirm(
+        `¿ELIMINAR DEFINITIVAMENTE el producto "${nombre}"?\n\n` +
+        'Se borra para siempre de la base de datos: no se puede recuperar.\n\n' +
+        'Esta acción NO se puede deshacer.'
+      )) return;
       const res = await fetch(`/api/productos/${id}`, { method: 'DELETE' });
       const data = await res.json();
       if (!res.ok) {
@@ -3786,9 +3873,129 @@
       }
       // Quita el producto de la lista en memoria y refresca solo las vistas.
       productosLista = productosLista.filter(p => p.id !== id);
+      desmarcarProductos([id]);
       mostrarAvisoProducto(data.mensaje);
       refrescarVistasProductos();
       cargarFormularioVentas();
+    }
+
+    // ── ELIMINACIÓN MÚLTIPLE ────────────────────────────────
+    // La selección se guarda como Texto ("15") porque los ids llegan de la base
+    // como número pero el DOM los devuelve como texto; comparar siempre como
+    // texto evita el clasico bug de 15 !== "15".
+    const seleccionProductos = new Set();
+
+    // Marca o desmarca un producto y refresca la barra de acciones.
+    function alternarSeleccionProducto(id, marcado) {
+      const clave = String(id);
+      if (marcado) seleccionProductos.add(clave);
+      else seleccionProductos.delete(clave);
+      actualizarBarraSeleccion();
+    }
+
+    // Quita ids de la selección (tras eliminarlos, para no dejar ids fantasma).
+    function desmarcarProductos(ids) {
+      ids.forEach(id => seleccionProductos.delete(String(id)));
+      actualizarBarraSeleccion();
+    }
+
+    function limpiarSeleccionProductos() {
+      seleccionProductos.clear();
+      actualizarBarraSeleccion();
+      renderPaginaProductos();
+    }
+
+    // Marca TODOS los productos que devolvió el buscador (no solo la pagina
+    // visible), que es lo que se espera al decir "seleccionar toda la búsqueda".
+    function seleccionarProductosFiltrados() {
+      productosParaPaginar.forEach(p => seleccionProductos.add(String(p.id)));
+      actualizarBarraSeleccion();
+      renderPaginaProductos();
+    }
+
+    // Marca o desmarca las casillas de la pagina que se esta viendo.
+    function alternarSeleccionPagina(marcado) {
+      document.querySelectorAll('#tabla-productos-body .check-producto').forEach(casilla => {
+        casilla.checked = marcado;
+        const clave = String(casilla.value);
+        if (marcado) seleccionProductos.add(clave);
+        else seleccionProductos.delete(clave);
+      });
+      actualizarBarraSeleccion();
+    }
+
+    // Muestra u oculta la barra roja y sincroniza el contador y las casillas.
+    function actualizarBarraSeleccion() {
+      const total = seleccionProductos.size;
+      const barra = document.getElementById('barra-eliminar-lote');
+      if (barra) barra.classList.toggle('d-none', total === 0);
+      setTexto('texto-seleccionados',
+        total === 0 ? '0 productos seleccionados'
+                    : `${total} producto(s) seleccionado(s)`);
+
+      // La casilla de la cabecera solo se marca si TODA la pagina esta marcada
+      // (indeterminada si hay una seleccion parcial).
+      const casillas = [...document.querySelectorAll('#tabla-productos-body .check-producto')];
+      const maestra = document.getElementById('check-todos-productos');
+      if (maestra && casillas.length) {
+        const marcadas = casillas.filter(c => c.checked).length;
+        maestra.checked = marcadas === casillas.length;
+        maestra.indeterminate = marcadas > 0 && marcadas < casillas.length;
+      } else if (maestra) {
+        maestra.checked = false;
+        maestra.indeterminate = false;
+      }
+    }
+
+    // Elimina de una sola vez todos los productos marcados.
+    async function eliminarProductosSeleccionados() {
+      const ids = [...seleccionProductos];
+      if (!ids.length) return;
+      if (!confirm(
+        `¿ELIMINAR DEFINITIVAMENTE ${ids.length} producto(s)?\n\n` +
+        'Se borran para siempre de la base de datos: no se pueden recuperar.\n' +
+        'Las facturas ya emitidas que los mencionen conservan su texto.\n\n' +
+        'Esta acción NO se puede deshacer.'
+      )) return;
+
+      const boton = document.getElementById('btn-eliminar-lote');
+      const textoBoton = boton ? boton.innerHTML : '';
+      if (boton) {
+        boton.disabled = true;
+        boton.innerHTML = 'Eliminando...';
+      }
+      try {
+        const res = await fetch('/api/productos/eliminar-lote', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ ids })
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert('Error: ' + data.error);
+          return;
+        }
+        // Se quitan de la lista en memoria solo los que el servidor confirmo.
+        const afectados = (data.ids_afectados || []).map(String);
+        productosLista = productosLista.filter(p => !afectados.includes(String(p.id)));
+        desmarcarProductos(afectados);
+        seleccionProductos.clear();
+
+        let mensaje = data.mensaje;
+        if (data.no_encontrados && data.no_encontrados.length) {
+          mensaje += ` (${data.no_encontrados.length} ya no existían.)`;
+        }
+        mostrarAvisoProducto(mensaje);
+        refrescarVistasProductos();
+        cargarFormularioVentas();
+      } catch (err) {
+        alert('No se pudo eliminar: ' + err.message);
+      } finally {
+        if (boton) {
+          boton.disabled = false;
+          boton.innerHTML = textoBoton;
+        }
+      }
     }
 
     async function cargarClientesTabla() {

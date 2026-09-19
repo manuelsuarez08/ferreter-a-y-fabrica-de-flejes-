@@ -36,7 +36,29 @@ _render_tmp.html
 node_modules/
 # Pruebas de QA con navegador (locales, requieren Playwright)
 _qa_*.mjs
+_qa_*.py
+_qa_*.png
 # Scripts de un solo uso ya aplicados
 _borrar_*.py
 _fix_*.py
 _validar_js.mjs
+# Logs y salidas de pruebas locales
+_srv_*.log
+*.log
+# Archivos de trabajo del despliegue (se suben desde la web, no por git)
+SUBIR_A_RENDER.db
+ferreteria-ACTUALIZADA-*.db
+# Hojas de calculo de trabajo del negocio
+*.xlsx
+# Binarios de herramientas locales (cloudflared pesa ~52 MB: no va al repo)
+herramientas/*.exe
+herramientas/*.tgz
+# Archivos de inventario y conteos de trabajo local
+_inventario_*.csv
+*_1234.csv
+# Scripts locales de verificacion y conteo
+_check_*.mjs
+_conteo_*.mjs
+_verif_*.mjs
+# Precios pendientes de cargar (datos de trabajo, no parte de la app)
+precios_pendientes/
