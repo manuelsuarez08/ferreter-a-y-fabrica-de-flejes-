@@ -4467,7 +4467,27 @@
       // imprimir; si tarda demasiado, se imprime de todos modos (la tirilla ya
       // es autosuficiente sin Bootstrap).
       const dispararImpresion = () => {
-        try { ventana.print(); } finally { setTimeout(() => ventana.close(), 300); }
+        // NO cerrar la ventana con un temporizador ciego tras print(): en el
+        // navegador real el diálogo de impresión se abre de forma asíncrona y
+        // cerrar la pestaña a los 300 ms lo cancelaba (el usuario veía que el
+        // recibo "no se imprimía"). Se espera al evento afterprint, que se
+        // dispara cuando el usuario termina (imprime o cancela), y solo
+        // entonces se cierra. Se deja una pequeña ventana de gracia tras
+        // afterprint porque algunos motores lo emiten en cuanto arranca el
+        // diálogo; cerrar en ese mismo instante lo abortaría. El setTimeout
+        // largo es respaldo por si el navegador nunca emite afterprint.
+        let cerrada = false;
+        const cerrar = () => { if (cerrada) return; cerrada = true; try { ventana.close(); } catch (e) { } };
+        const cerrarConGracia = () => setTimeout(cerrar, 800);
+        try { ventana.addEventListener('afterprint', cerrarConGracia); } catch (e) { }
+        try {
+          ventana.print();
+        } catch (e) {
+          // Si print() ni siquiera arranca, no se cierra: se deja la ventana
+          // visible para que el usuario pueda imprimir manualmente (Ctrl+P).
+          return;
+        }
+        setTimeout(cerrar, 60000);
       };
       const link = ventana.document.querySelector('link[rel="stylesheet"]');
       if (!link) { setTimeout(dispararImpresion, 250); return; }
