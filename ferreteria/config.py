@@ -147,20 +147,27 @@ ESTADOS_ORDEN_FLEJE = ('En Cola', 'En Figurado', 'Completado')
 #   pendiente_preparar -> La ve BODEGA (badge naranja). Debe alistar el pedido.
 #   listo              -> La ve el MOTOCARGUERO (badge azul). Debe entregar.
 #   entregado          -> Historial (badge verde).
-ESTADOS_DESPACHO = ('pendiente_preparar', 'listo', 'entregado')
+ESTADOS_DESPACHO = ('pendiente_preparar', 'listo', 'entrega_parcial', 'entregado')
 
 # Transiciones permitidas por rol en el despacho de ventas "para llevar".
 # Bodega prepara; el motocarguero entrega. Admin puede hacer todo (rescate).
+# 'entrega_parcial' cubre al cliente que paga todo y retira en varias salidas.
 TRANSICIONES_DESPACHO = {
-    'pendiente_preparar': {'bodega': ['listo'], 'admin': ['listo', 'entregado']},
-    'listo':              {'motocarguero': ['entregado'], 'bodega': ['entregado'], 'admin': ['entregado', 'pendiente_preparar']},
-    'entregado':          {'admin': ['listo']},
+    'pendiente_preparar': {'bodega': ['listo'], 'admin': ['listo', 'entregado', 'entrega_parcial']},
+    'listo':              {'motocarguero': ['entregado', 'entrega_parcial'],
+                           'bodega': ['entregado', 'entrega_parcial'],
+                           'admin': ['entregado', 'entrega_parcial', 'pendiente_preparar']},
+    'entrega_parcial':    {'motocarguero': ['entregado', 'entrega_parcial'],
+                           'bodega': ['entregado', 'entrega_parcial', 'listo'],
+                           'admin': ['entregado', 'entrega_parcial', 'listo', 'pendiente_preparar']},
+    'entregado':          {'admin': ['listo', 'entrega_parcial']},
 }
 
 # Etiqueta legible y color de badge para cada estado de despacho.
 ETIQUETAS_DESPACHO = {
     'pendiente_preparar': ('\u23f3 Pendiente en Bodega', 'warning text-dark'),
     'listo':              ('\U0001f6f5 Listo para Entrega', 'primary'),
+    'entrega_parcial':    ('\U0001f4e6 Entrega Parcial', 'info text-dark'),
     'entregado':          ('\u2705 Entregado', 'success'),
 }
 

@@ -452,15 +452,37 @@ def get_despachos():
         WHERE v.tipo_entrega = 'para_llevar' AND v.anulada = 0
     """
     params = []
-    # El motocarguero solo ve lo que esta listo para entregar.
+    # El motocarguero solo ve lo que esta listo o parcialmente entregado.
     if rol == 'motocarguero':
-        query += " AND COALESCE(v.estado_despacho, 'pendiente_preparar') IN ('listo', 'entregado')"
+        query += " AND COALESCE(v.estado_despacho, 'pendiente_preparar') IN ('listo', 'entrega_parcial', 'entregado')"
     if estado_filtro:
         query += " AND COALESCE(v.estado_despacho, 'pendiente_preparar') = ?"
         params.append(estado_filtro)
     query += " GROUP BY v.id ORDER BY v.numero_pedido ASC"
 
     rows = conn.execute(query, params).fetchall()
+
+    # Detalle de items con lo entregado hasta ahora, para poder mostrar "lleva X
+    # de Y" y habilitar la entrega por partes. Se hace en una sola consulta en
+    # lote para no disparar N+1.
+    ids = [r[0] for r in rows]
+    items_por_venta = {}
+    if ids:
+        marcadores = ','.join('?' * len(ids))
+        det = conn.execute(
+            "SELECT dv.id_venta, dv.id_producto, p.nombre, dv.cantidad, "
+            "       COALESCE(dv.cantidad_entregada, 0) "
+            "FROM detalle_ventas dv JOIN productos p ON p.id = dv.id_producto "
+            f"WHERE dv.id_venta IN ({marcadores}) ORDER BY dv.id",
+            ids,
+        ).fetchall()
+        for id_venta, id_prod, nombre, cantidad, entregada in det:
+            items_por_venta.setdefault(id_venta, []).append({
+                "id_producto": id_prod, "nombre": nombre, "cantidad": cantidad,
+                "cantidad_entregada": entregada,
+                "pendiente": max(0, cantidad - entregada),
+            })
+
     conn.close()
     return jsonify([{
         "id_venta": r[0], "numero_pedido": r[1], "fecha_dia": r[2], "hora": r[3],
@@ -471,6 +493,7 @@ def get_despachos():
         "preparado_por": r[14], "preparado_fecha": r[15],
         "entregado_por": r[16], "entregado_fecha": r[17],
         "cobrar_contra_entrega": round(float(r[13] or 0), 2),
+        "items": items_por_venta.get(r[0], []),
     } for r in rows])
 
 
@@ -522,6 +545,116 @@ def cambiar_estado_despacho(id_venta):
     conn.commit()
     conn.close()
     return jsonify({"mensaje": f"Estado actualizado a '{nuevo}'", "estado_despacho": nuevo})
+
+
+@bp.route('/api/ventas/<int:id_venta>/entrega', methods=['POST'])
+@login_required
+def registrar_entrega_parcial(id_venta):
+    """Registra una entrega (parcial o total) de una venta 'para_llevar'.
+
+    Cubre el caso del cliente que PAGA todo y se lleva la mercancía por partes:
+    el pago ya está completo en caja y aquí solo se lleva la cuenta de cuánto se
+    ha entregado de cada producto. Cuando ya no falta nada, la venta pasa sola a
+    'entregado'; mientras falte mercancía queda en 'entrega_parcial'.
+
+    Cuerpo esperado:
+        { "items": [ {"id_producto": 12, "cantidad": 3}, ... ] }
+    """
+    from ..config import TRANSICIONES_DESPACHO
+    rol = session.get('rol')
+    usuario = session.get('usuario')
+    data = request.json or {}
+    items = data.get('items') or []
+    if not items:
+        return jsonify({"error": "Debe indicar qué productos se están entregando"}), 400
+
+    conn = get_db()
+    cursor = conn.cursor()
+    venta = cursor.execute(
+        "SELECT tipo_entrega, COALESCE(estado_despacho, 'pendiente_preparar'), COALESCE(anulada, 0) "
+        "FROM ventas WHERE id = ?", (id_venta,)
+    ).fetchone()
+    if not venta:
+        conn.close()
+        return jsonify({"error": "Venta no encontrada"}), 404
+    if venta[0] != 'para_llevar':
+        conn.close()
+        return jsonify({"error": "Esta venta no es de tipo para_llevar"}), 400
+    if venta[2]:
+        conn.close()
+        return jsonify({"error": "No se puede entregar una venta anulada"}), 400
+
+    estado_actual = venta[1]
+    # El rol debe poder registrar una entrega desde el estado actual.
+    permitidos = TRANSICIONES_DESPACHO.get(estado_actual, {})
+    destinos_rol = permitidos.get(rol, [])
+    if not ({'entregado', 'entrega_parcial'} & set(destinos_rol)):
+        conn.close()
+        return jsonify({
+            "error": f"El rol '{rol}' no puede registrar entregas de un pedido en '{estado_actual}'"
+        }), 403
+
+    ahora = _ahora()
+    entragados_ahora = 0
+    for item in items:
+        try:
+            id_prod = int(item.get('id_producto'))
+            cantidad = int(item.get('cantidad'))
+        except (TypeError, ValueError):
+            conn.close()
+            return jsonify({"error": "Cantidad inválida en una línea"}), 400
+        if cantidad <= 0:
+            continue  # 0 unidades: nada que registrar en esta línea.
+        linea = cursor.execute(
+            "SELECT cantidad, COALESCE(cantidad_entregada, 0) FROM detalle_ventas "
+            "WHERE id_venta = ? AND id_producto = ?", (id_venta, id_prod)
+        ).fetchone()
+        if not linea:
+            conn.close()
+            return jsonify({"error": f"El producto {id_prod} no está en esta venta"}), 400
+        pedida, ya_entregada = linea[0], linea[1]
+        pendiente = pedida - ya_entregada
+        if cantidad > pendiente:
+            conn.close()
+            return jsonify({
+                "error": f"No puede entregar más de lo pendiente (producto {id_prod}: "
+                         f"falta {pendiente})"
+            }), 400
+        cursor.execute(
+            "UPDATE detalle_ventas SET cantidad_entregada = COALESCE(cantidad_entregada, 0) + ? "
+            "WHERE id_venta = ? AND id_producto = ?", (cantidad, id_venta, id_prod)
+        )
+        cursor.execute(
+            "INSERT INTO entregas_venta (id_venta, id_producto, cantidad, usuario, fecha) "
+            "VALUES (?, ?, ?, ?, ?)", (id_venta, id_prod, cantidad, usuario, ahora)
+        )
+        entragados_ahora += cantidad
+
+    # ¿Falta algo por entregar? Se recalcula el estado global de la venta.
+    faltantes = cursor.execute(
+        "SELECT COALESCE(SUM(cantidad - COALESCE(cantidad_entregada, 0)), 0) "
+        "FROM detalle_ventas WHERE id_venta = ?", (id_venta,)
+    ).fetchone()[0] or 0
+    if faltantes <= 0:
+        nuevo_estado = 'entregado'
+        cursor.execute(
+            "UPDATE ventas SET estado_despacho = 'entregado', despacho_entregado_por = ?, "
+            "despacho_entregado_fecha = ? WHERE id = ?", (usuario, ahora, id_venta)
+        )
+    else:
+        nuevo_estado = 'entrega_parcial'
+        cursor.execute("UPDATE ventas SET estado_despacho = 'entrega_parcial' WHERE id = ?", (id_venta,))
+
+    registrar_auditoria(conn, 'entrega_parcial', 'venta', id_venta,
+                        f'{estado_actual} -> {nuevo_estado}: {entragados_ahora} unidad(es) por {usuario}')
+    conn.commit()
+    conn.close()
+    return jsonify({
+        "mensaje": ("Entrega completa. Pedido cerrado." if nuevo_estado == 'entregado'
+                    else f"Entrega registrada. Faltan {faltantes} unidad(es) por retirar."),
+        "estado_despacho": nuevo_estado,
+        "faltantes": faltantes,
+    })
 
 
 @bp.route('/api/ventas/<int:id_venta>', methods=['GET'])

@@ -370,6 +370,21 @@ def _crear_tablas_pedidos(cursor):
             FOREIGN KEY (id_producto) REFERENCES productos (id)
         )
     ''')
+    # Entregas por partes de una venta "para llevar": el cliente puede pagar
+    # todo y retirar la mercancia en varias salidas. Cada fila es una salida
+    # (que producto, cuanto y quien/cuando) y queda como historial.
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS entregas_venta (
+            id           INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_venta     INTEGER NOT NULL,
+            id_producto  INTEGER NOT NULL,
+            cantidad     INTEGER NOT NULL,
+            usuario      TEXT,
+            fecha        TEXT NOT NULL,
+            FOREIGN KEY (id_venta)    REFERENCES ventas (id),
+            FOREIGN KEY (id_producto) REFERENCES productos (id)
+        )
+    ''')
 
 
 def _aplicar_migraciones(cursor):
@@ -407,6 +422,9 @@ def _aplicar_migraciones(cursor):
         ('ventas', 'siigo_error', 'TEXT'),
         ('ventas', 'siigo_fecha_emision', 'TEXT'),
         ('ventas', 'siigo_intentos', 'INTEGER NOT NULL DEFAULT 0'),
+        # Acumulador de entregas por linea (para "para llevar" entregado por
+        # partes). 0 = nada entregado todavia.
+        ('detalle_ventas', 'cantidad_entregada', 'INTEGER NOT NULL DEFAULT 0'),
     ):
         migrar_columna(cursor, tabla, columna, definicion)
 
@@ -460,6 +478,9 @@ def _aplicar_migraciones(cursor):
     cursor.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_productos_codigo_barras ON productos (codigo_barras)")
     cursor.execute(
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_ventas_numero_pedido ON ventas (numero_pedido) WHERE numero_pedido IS NOT NULL"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_entregas_venta ON entregas_venta (id_venta)"
     )
 
 

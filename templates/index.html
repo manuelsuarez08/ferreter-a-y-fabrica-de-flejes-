@@ -1335,6 +1335,7 @@
                 <option value="">Todos los estados</option>
                 <option value="pendiente_preparar">🟠 Pendiente en Bodega</option>
                 <option value="listo">🔵 Listo para Entrega</option>
+                <option value="entrega_parcial">📦 Entrega Parcial</option>
                 <option value="entregado">🟢 Entregado</option>
               </select>
               <button class="btn btn-outline-secondary btn-sm" onclick="cargarDespachos()" title="Actualizar">🔄</button>
@@ -1359,6 +1360,49 @@
                 <tr><td colspan="8" class="text-center text-muted py-4">Haz clic en "Cola de Despacho" para cargar.</td></tr>
               </tbody>
             </table>
+          </div>
+        </div>
+
+        <!-- ── MODAL: ENTREGA PARCIAL (el cliente paga todo y retira por partes) ── -->
+        <div class="modal fade" id="modalEntregaParcial" tabindex="-1">
+          <div class="modal-dialog modal-lg">
+            <div class="modal-content">
+              <div class="modal-header bg-info-subtle">
+                <h5 class="modal-title fw-bold">📦 Registrar Entrega — Pedido <span id="entrega-pedido-num"></span></h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+              </div>
+              <div class="modal-body">
+                <div class="alert alert-info py-2 small mb-3">
+                  El cliente ya pagó esta cuenta. Marque <strong>cuánto se lleva ahora</strong> de cada
+                  producto; lo que quede en 0 sigue pendiente. Cuando no falte nada, el pedido se
+                  cierra como <strong>Entregado</strong>; si falta mercancía queda en
+                  <strong>Entrega Parcial</strong>.
+                </div>
+                <div class="table-responsive">
+                  <table class="table table-sm align-middle">
+                    <thead class="table-light">
+                      <tr>
+                        <th>Producto</th>
+                        <th class="text-center" style="width:90px">Pedido</th>
+                        <th class="text-center" style="width:110px">Ya llevó</th>
+                        <th class="text-center" style="width:110px">Falta</th>
+                        <th class="text-center" style="width:160px">Lleva ahora</th>
+                      </tr>
+                    </thead>
+                    <tbody id="entrega-items-body"></tbody>
+                  </table>
+                </div>
+                <div class="d-flex gap-2 mb-0">
+                  <button type="button" class="btn btn-sm btn-outline-info" onclick="entregaMarcarTodo()">✅ Lleva todo (completar)</button>
+                  <button type="button" class="btn btn-sm btn-outline-secondary" onclick="entregaMarcarNada()">Limpiar</button>
+                </div>
+              </div>
+              <div class="modal-footer">
+                <span class="me-auto small text-muted" id="entrega-resumen"></span>
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
+                <button type="button" class="btn btn-info fw-bold text-dark" onclick="guardarEntrega()">💾 Registrar entrega</button>
+              </div>
+            </div>
           </div>
         </div>
 
@@ -5652,6 +5696,7 @@
     const ESTADOS_DESPACHO_INFO = {
       pendiente_preparar: ['🟠 Pendiente en Bodega', 'warning text-dark'],
       listo:              ['🔵 Listo para Entrega', 'primary'],
+      entrega_parcial:    ['📦 Entrega Parcial', 'info text-dark'],
       entregado:          ['🟢 Entregado', 'success'],
     };
 
@@ -5680,15 +5725,19 @@
           const cobro = p.cobrar_contra_entrega > 0
             ? `<br><small class="text-danger fw-bold">💰 Cobrar: ${monedaCOP(p.cobrar_contra_entrega)}</small>`
             : '';
+          const faltantes = (p.items || []).reduce((s, it) => s + Math.max(0, it.pendiente || 0), 0);
+          const resumenFalta = faltantes > 0
+            ? `<br><small class="text-info fw-bold">Faltan ${faltantes} und.</small>`
+            : '';
           const accion = p.estado_despacho === 'pendiente_preparar'
             ? `<button class="btn btn-sm btn-warning fw-bold" onclick="marcarPedidoListo(${p.id_venta}, ${p.numero_pedido})">✅ Pedido Listo</button>`
-            : (p.estado_despacho === 'listo'
-                ? '<span class="text-muted small">En reparto</span>'
-                : `<span class="text-muted small">Entregado por ${escapeHtml(p.entregado_por || '—')}</span>`);
+            : (p.estado_despacho === 'entregado'
+                ? `<span class="text-muted small">Entregado por ${escapeHtml(p.entregado_por || '—')}</span>`
+                : `<button class="btn btn-sm btn-info fw-bold text-dark" onclick="abrirEntrega(${p.id_venta})">📦 Entregar</button>`);
           return `<tr>
             <td class="fw-bold">#${p.numero_pedido}</td>
             <td>${escapeHtml(p.cliente)}<br><small class="text-muted">${escapeHtml(p.telefono || '')}</small></td>
-            <td class="small">${escapeHtml(p.productos)}</td>
+            <td class="small">${escapeHtml(p.productos)}${resumenFalta}</td>
             <td class="small">${escapeHtml(p.direccion || '—')}</td>
             <td class="fw-bold text-primary">${monedaCOP(p.total_venta)}${cobro}</td>
             <td><span class="badge bg-${info[1]}">${info[0]}</span></td>
@@ -5696,6 +5745,7 @@
             <td>${accion}</td>
           </tr>`;
         }).join('');
+        despachosActuales = despachos;
       } catch (err) {
         contenedor.innerHTML = `<tr><td colspan="8" class="text-danger text-center">${escapeHtml(err.message || 'No se pudo cargar la cola de despacho.')}</td></tr>`;
       }
@@ -5715,7 +5765,7 @@
         const despachos = await res.json();
         if (!res.ok) throw new Error(despachos.error || `Error ${res.status}`);
 
-        const pendientes = despachos.filter(p => p.estado_despacho === 'listo');
+        const pendientes = despachos.filter(p => p.estado_despacho === 'listo' || p.estado_despacho === 'entrega_parcial');
         const entregados = despachos.filter(p => p.estado_despacho === 'entregado');
 
         if (!despachos.length) {
@@ -5729,11 +5779,13 @@
             efectivo: '💵 Efectivo', credito: '💳 Crédito', nequi_daviplata: '📱 Nequi/Daviplata',
             tarjeta: '💳 Tarjeta', transferencia: '🏦 Transferencia'
           })[p.tipo_pago] || escapeHtml(p.tipo_pago || '—');
-          const boton = p.estado_despacho === 'listo'
-            ? `<button class="btn btn-success fw-bold w-100 mt-2" onclick="marcarPedidoEntregado(${p.id_venta}, ${p.numero_pedido}, ${p.cobrar_contra_entrega})">✅ Marcar como Entregado</button>`
-            : `<div class="alert alert-success py-2 mt-2 mb-0 small">✅ Entregado el ${escapeHtml(p.entregado_fecha || '')}</div>`;
+          const faltantes = (p.items || []).reduce((s, it) => s + Math.max(0, it.pendiente || 0), 0);
+          const esParcial = p.estado_despacho === 'entrega_parcial';
+          const boton = p.estado_despacho === 'entregado'
+            ? `<div class="alert alert-success py-2 mt-2 mb-0 small">✅ Entregado el ${escapeHtml(p.entregado_fecha || '')}</div>`
+            : `<button class="btn btn-info fw-bold w-100 mt-2 text-dark" onclick="abrirEntrega(${p.id_venta})">📦 Registrar entrega</button>`;
           return `
-            <div class="card mb-3 shadow-sm border-${p.estado_despacho === 'listo' ? 'primary' : 'success'}">
+            <div class="card mb-3 shadow-sm border-${p.estado_despacho === 'entregado' ? 'success' : (esParcial ? 'info' : 'primary')}">
               <div class="card-body">
                 <div class="d-flex justify-content-between align-items-start mb-2">
                   <h5 class="mb-0 fw-bold">#${p.numero_pedido} · ${escapeHtml(p.cliente)}</h5>
@@ -5742,6 +5794,7 @@
                 <div class="mb-2"><a href="tel:${escapeHtml(p.telefono || '')}" class="text-decoration-none fw-semibold">📞 ${escapeHtml(p.telefono || 'Sin teléfono')}</a></div>
                 <div class="mb-2"><a href="https://maps.google.com/?q=${encodeURIComponent(p.direccion || '')}" target="_blank" class="text-decoration-none">📍 ${escapeHtml(p.direccion || 'Sin dirección')}</a></div>
                 <div class="small text-muted mb-1">🛒 ${escapeHtml(p.productos)}</div>
+                ${faltantes > 0 && p.estado_despacho !== 'entregado' ? `<div class="small text-info fw-bold mb-1">⏳ Faltan ${faltantes} unidad(es) por entregar</div>` : ''}
                 <div class="small mb-1">Pago: ${metodo} · Total: <strong>${monedaCOP(p.total_venta)}</strong></div>
                 ${cobro ? `<div class="alert alert-danger py-2 my-2 fw-bold text-center">💰 COBRAR AL ENTREGAR: ${monedaCOP(p.cobrar_contra_entrega)}</div>` : ''}
                 ${p.preparado_por ? `<div class="small text-muted">Alistado por ${escapeHtml(p.preparado_por)} ${escapeHtml(p.preparado_fecha || '')}</div>` : ''}
@@ -5761,6 +5814,7 @@
         }
         if (thead) thead.classList.add('d-none');
         cont.innerHTML = html;
+        despachosActuales = despachos;
       } catch (err) {
         cont.innerHTML = `<tr><td class="text-danger text-center">${escapeHtml(err.message || 'No se pudieron cargar tus entregas.')}</td></tr>`;
       }
@@ -5769,6 +5823,102 @@
     function marcarPedidoListo(idVenta, numeroPedido) {
       if (!confirm(`¿Confirmar que el pedido #${numeroPedido} está listo para entrega?\n\nPasará a la pantalla del motocarguero.`)) return;
       actualizarEstadoDespacho(idVenta, 'listo');
+    }
+
+    // ── Entrega por partes (el cliente paga todo y retira en varias salidas) ──
+    // Último conjunto de despachos cargado, para que el modal sepa qué falta.
+    let despachosActuales = [];
+    let entregaActualId = null;
+
+    function abrirEntrega(idVenta) {
+      const p = despachosActuales.find(d => d.id_venta === idVenta);
+      if (!p) { alert('No se encontró el pedido. Actualice la lista e intente de nuevo.'); return; }
+      entregaActualId = idVenta;
+      document.getElementById('entrega-pedido-num').textContent = `#${p.numero_pedido} · ${p.cliente}`;
+      const tbody = document.getElementById('entrega-items-body');
+      const items = p.items || [];
+      if (!items.length) {
+        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Este pedido no tiene detalle disponible.</td></tr>';
+      } else {
+        tbody.innerHTML = items.map((it, idx) => {
+          const entregada = Number(it.cantidad_entregada || 0);
+          const pendiente = Math.max(0, it.cantidad - entregada);
+          return `<tr>
+            <td class="small">${escapeHtml(it.nombre)}</td>
+            <td class="text-center">${it.cantidad}</td>
+            <td class="text-center">${entregada}</td>
+            <td class="text-center fw-bold ${pendiente > 0 ? 'text-info' : 'text-muted'}">${pendiente}</td>
+            <td class="text-center">
+              <input type="number" min="0" max="${pendiente}" step="1" class="form-control form-control-sm text-center"
+                     data-idx="${idx}" value="0" ${pendiente <= 0 ? 'disabled' : ''}
+                     oninput="actualizarResumenEntrega()">
+            </td>
+          </tr>`;
+        }).join('');
+      }
+      actualizarResumenEntrega();
+      new bootstrap.Modal(document.getElementById('modalEntregaParcial')).show();
+    }
+
+    function entregaMarcarTodo() {
+      document.querySelectorAll('#entrega-items-body input[type="number"]').forEach(inp => {
+        if (!inp.disabled) inp.value = inp.max;
+      });
+      actualizarResumenEntrega();
+    }
+
+    function entregaMarcarNada() {
+      document.querySelectorAll('#entrega-items-body input[type="number"]').forEach(inp => { inp.value = '0'; });
+      actualizarResumenEntrega();
+    }
+
+    function actualizarResumenEntrega() {
+      const p = despachosActuales.find(d => d.id_venta === entregaActualId);
+      if (!p) return;
+      const inputs = document.querySelectorAll('#entrega-items-body input[type="number"]');
+      let totalAhora = 0, totalPendiente = 0;
+      (p.items || []).forEach((it, idx) => {
+        const pendiente = Math.max(0, it.cantidad - Number(it.cantidad_entregada || 0));
+        totalPendiente += pendiente;
+        const inp = inputs[idx];
+        totalAhora += inp ? Math.min(pendiente, Math.max(0, parseInt(inp.value, 10) || 0)) : 0;
+      });
+      const el = document.getElementById('entrega-resumen');
+      if (el) {
+        const restante = totalPendiente - totalAhora;
+        el.innerHTML = `Lleva ahora: <b>${totalAhora}</b> · Quedaría pendiente: ` +
+          `<b class="${restante > 0 ? 'text-info' : 'text-success'}">${restante}</b>`;
+      }
+    }
+
+    async function guardarEntrega() {
+      const p = despachosActuales.find(d => d.id_venta === entregaActualId);
+      if (!p) return;
+      const inputs = document.querySelectorAll('#entrega-items-body input[type="number"]');
+      const items = [];
+      (p.items || []).forEach((it, idx) => {
+        const pendiente = Math.max(0, it.cantidad - Number(it.cantidad_entregada || 0));
+        const inp = inputs[idx];
+        const cant = inp ? Math.min(pendiente, Math.max(0, parseInt(inp.value, 10) || 0)) : 0;
+        if (cant > 0) items.push({ id_producto: it.id_producto, cantidad: cant });
+      });
+      if (!items.length) {
+        alert('Indique cuánto se está llevando el cliente (al menos 1 unidad).');
+        return;
+      }
+      try {
+        const res = await fetch(`/api/ventas/${entregaActualId}/entrega`, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ items }),
+        });
+        const data = await res.json();
+        if (!res.ok) { alert('Error: ' + data.error); return; }
+        bootstrap.Modal.getInstance(document.getElementById('modalEntregaParcial')).hide();
+        alert(data.mensaje || 'Entrega registrada.');
+        cargarDespachos();
+      } catch (e) {
+        alert('No se pudo registrar la entrega: ' + e.message);
+      }
     }
 
     function marcarPedidoEntregado(idVenta, numeroPedido, cobrar) {
