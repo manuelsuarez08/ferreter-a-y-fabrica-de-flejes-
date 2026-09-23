@@ -502,7 +502,7 @@
             <thead class="table-light">
               <tr>
                 <th>Producto</th>
-                <th>Precio Unitario</th>
+                <th>Precio Unitario <span class="text-muted small">(editable)</span></th>
                 <th>Cantidad</th>
                 <th>Subtotal</th>
                 <th style="width: 80px;">Acción</th>
@@ -1695,7 +1695,7 @@
               <thead class="table-light">
                 <tr>
                   <th>Producto</th>
-                  <th>Precio Unit.</th>
+                  <th>Precio Unit. <span class="text-muted small">(editable)</span></th>
                   <th>Cantidad</th>
                   <th>Subtotal</th>
                   <th style="width:50px"></th>
@@ -3160,8 +3160,9 @@
       // aunque el stock sea 0 o quede en negativo (0 - 2 = -2).
       const existe = carrito.find(item => item.id_producto == prodId);
       if (existe) {
+        // Se conserva el precio ya editado del renglón (si el cajero lo cambió).
         existe.cantidad += cant;
-        existe.subtotal = existe.cantidad * prod.precio_venta;
+        existe.subtotal = existe.cantidad * existe.precio;
       } else {
         carrito.push({
           id_producto: prod.id,
@@ -3185,15 +3186,18 @@
         return;
       }
 
-      let subtotal = 0;
       carrito.forEach((item, index) => {
-        subtotal += item.subtotal;
         tbody.innerHTML += `
           <tr>
               <td>${escapeHtml(item.nombre)}</td>
-            <td>${monedaCOP(item.precio)}</td>
+            <td>
+              <input type="number" min="0" step="0.01" class="form-control form-control-sm"
+                     style="min-width:110px;" value="${Number(item.precio).toFixed(2)}"
+                     oninput="actualizarPrecioCarrito(${index}, this.value)"
+                     title="Puede editar el precio de venta aquí">
+            </td>
             <td>${item.cantidad}</td>
-            <td class="fw-bold">${monedaCOP(item.subtotal)}</td>
+            <td class="fw-bold">${monedaCOP(item.cantidad * item.precio)}</td>
             <td><button class="btn btn-sm btn-danger" onclick="eliminarDelCarrito(${index})">❌</button></td>
           </tr>
         `;
@@ -3201,6 +3205,31 @@
 
       // IVA en vivo: mismo calculo redondeado que hace el servidor, para que el
       // total que ve el cajero sea exactamente el que se guarda.
+      actualizarTotalesCarrito();
+    }
+
+    function eliminarDelCarrito(index) {
+      carrito.splice(index, 1);
+      actualizarTablaCarrito();
+    }
+
+    // Permite al cajero cambiar el precio de venta de un renglón mientras arma
+    // el pedido, sin tener que tocar el precio del catálogo del producto.
+    function actualizarPrecioCarrito(index, valor) {
+      const item = carrito[index];
+      if (!item) return;
+      item.precio = Math.max(0, Number(valor) || 0);
+      item.subtotal = item.cantidad * item.precio;
+      // Se refresca el subtotal de la fila y los totales generales sin redibujar
+      // los inputs (para no perder el foco mientras escribe).
+      const fila = document.querySelectorAll('#tabla-carrito-body tr')[index];
+      if (fila && fila.children[3]) fila.children[3].innerText = monedaCOP(item.subtotal);
+      actualizarTotalesCarrito();
+    }
+
+    // Recalcula subtotal, IVA y total del carrito (sin redibujar la tabla).
+    function actualizarTotalesCarrito() {
+      const subtotal = carrito.reduce((s, i) => s + (i.cantidad * i.precio), 0);
       const ivaValor = ivaActivo ? Math.round(subtotal * ivaPorcentaje / 100) : 0;
       const filaIvaPos = document.getElementById('fila-iva-pos');
       if (ivaValor > 0) {
@@ -3212,11 +3241,6 @@
         filaIvaPos.style.display = 'none';
       }
       document.getElementById('total-venta-texto').innerText = monedaCOP(subtotal + ivaValor);
-    }
-
-    function eliminarDelCarrito(index) {
-      carrito.splice(index, 1);
-      actualizarTablaCarrito();
     }
 
     function limpiarFormularioVenta() {
@@ -3294,7 +3318,7 @@
         direccion:     direccion,
         tipo_entrega:  tipoEntrega,
         factura_electronica: facturaElectronica,
-        items: carrito.map(i => ({ id_producto: i.id_producto, cantidad: i.cantidad }))
+        items: carrito.map(i => ({ id_producto: i.id_producto, cantidad: i.cantidad, precio_unitario: i.precio }))
       };
 
       const res = await fetch('/api/ventas', {
@@ -5840,8 +5864,7 @@
       const existe = itemsPedidoActual.find(i => i.id_producto == idProd);
       if (existe) { existe.cantidad += cantidad; }
       else { itemsPedidoActual.push({ id_producto: prod.id, nombre: prod.nombre, dimensiones: prod.dimensiones||'', precio: prod.precio_venta, cantidad }); }
-      renderItemsPedido();
-      if (tsPedidoProducto) tsPedidoProducto.clear();
+      renderItemsPedido();      if (tsPedidoProducto) tsPedidoProducto.clear();
       document.getElementById('pedido-cantidad').value = 1;
     }
 
@@ -5865,7 +5888,9 @@
         tbody.innerHTML += `
           <tr>
             <td>${escapeHtml(item.nombre)}${item.dimensiones ? ' <small class="text-muted">[' + escapeHtml(item.dimensiones) + ']</small>' : ''}</td>
-            <td>${monedaCOP(item.precio)}</td>
+            <td><input type="number" min="0" step="0.01" class="form-control form-control-sm" style="width:110px"
+                  value="${Number(item.precio).toFixed(2)}" title="Puede editar el precio"
+                  onchange="itemsPedidoActual[${idx}].precio=Math.max(0, Number(this.value)||0);renderItemsPedido()"></td>
             <td><input type="number" class="form-control form-control-sm" style="width:80px" value="${item.cantidad}" min="1"
                   onchange="itemsPedidoActual[${idx}].cantidad=parseInt(this.value)||1;renderItemsPedido()"></td>
             <td>${monedaCOP(sub)}</td>
@@ -5883,7 +5908,7 @@
         id_cliente: parseInt(idCliente),
         direccion_entrega: document.getElementById('pedido-direccion').value.trim(),
         observaciones: document.getElementById('pedido-observaciones').value.trim(),
-        items: itemsPedidoActual.map(i => ({ id_producto: i.id_producto, cantidad: i.cantidad }))
+        items: itemsPedidoActual.map(i => ({ id_producto: i.id_producto, cantidad: i.cantidad, precio_unitario: i.precio }))
       };
       const res = await fetch('/api/pedidos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json();

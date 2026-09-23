@@ -101,6 +101,18 @@ def _construir_detalles(cursor, conn, items):
         if cantidad <= 0:
             return None, (jsonify({"error": "La cantidad debe ser mayor que cero"}), 400)
 
+        # El cajero puede editar el precio mientras arma el pedido: si llega un
+        # precio_unitario valido se usa ese; si no, se toma el precio del catalogo.
+        precio_item = item.get('precio_unitario')
+        if precio_item is not None and str(precio_item).strip() != '':
+            try:
+                precio_item = float(precio_item)
+            except (TypeError, ValueError):
+                return None, (jsonify({"error": "Precio inválido en una línea"}), 400)
+            if precio_item < 0:
+                return None, (jsonify({"error": "El precio no puede ser negativo"}), 400)
+            precio_venta = precio_item
+
         # VENTAS PERMISIVAS: no se valida stock ni precio de costo.
         subtotal = cantidad * precio_venta
         subtotal_venta += subtotal

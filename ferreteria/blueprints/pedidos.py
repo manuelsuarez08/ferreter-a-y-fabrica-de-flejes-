@@ -122,7 +122,22 @@ def _crear_pedido(conn, rol, usuario):
             conn.close()
             return jsonify({"error": f"Producto ID {item['id_producto']} no encontrado"}), 404
         cantidad = int(item['cantidad'])
+        # El vendedor puede ajustar el precio al armar el pedido: si llega un
+        # precio_unitario valido se respeta; si no, se usa el del catalogo.
         precio = float(prod[0])
+        precio_item = item.get('precio_unitario')
+        if precio_item is not None and str(precio_item).strip() != '':
+            try:
+                precio_item = float(precio_item)
+            except (TypeError, ValueError):
+                conn.rollback()
+                conn.close()
+                return jsonify({"error": "Precio inválido en una línea"}), 400
+            if precio_item < 0:
+                conn.rollback()
+                conn.close()
+                return jsonify({"error": "El precio no puede ser negativo"}), 400
+            precio = precio_item
         subtotal = round(cantidad * precio, 2)
         total += subtotal
         cursor.execute(
