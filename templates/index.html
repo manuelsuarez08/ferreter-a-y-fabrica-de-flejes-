@@ -4668,7 +4668,7 @@
                  if (v.anulada) {
                    anular = '';
                  } else if (emitida) {
-                   anular = '<span class="badge bg-info text-dark" title="Ya fue emitida a la DIAN: solo se puede anular con Nota Credito Electronica">Emitida</span>';
+                   anular = `<button class="btn btn-sm btn-outline-warning" onclick="abrirNotaCredito(${v.id})" title="La venta ya fue emitida: se corrige con una Nota Crédito Electrónica">Nota crédito</button>`;
                  } else {
                    anular = `<button class="btn btn-sm btn-outline-danger" onclick="anularVenta(${v.id})">Anular</button>`;
                  }
@@ -4686,11 +4686,71 @@
         alert(data.mensaje);
         cargarFacturasTabla(); cargarProductosTabla();
       } else if (res.status === 409 && data.requiere_nota_credito) {
-        // Bloqueo fiscal: la venta ya tiene documento electronico.
-        alert('No se puede anular.\n\n' + data.error);
+        // Bloqueo fiscal: la venta ya tiene documento electronico. La unica
+        // salida legal es la Nota Credito Electronica.
+        if (confirm(data.error + '\n\n¿Abrir el formulario de Nota Crédito?')) {
+          abrirNotaCredito(id, data);
+        }
       } else {
         alert(`Error: ${data.error}`);
       }
+    }
+
+    /* Emite la Nota Crédito Electrónica de una venta ya emitida.
+     *
+     * Es el camino que sustituye a "anular" cuando el documento ya fue
+     * transmitido: la DIAN no permite borrar el documento, solo corregirlo
+     * con una nota referencia. La venta se revierte (y el stock vuelve)
+     * únicamente cuando la DIAN ACEPTA la nota.
+     */
+    async function abrirNotaCredito(idVenta, contexto) {
+      // Motivos del catálogo de la DIAN.
+      let motivos = [];
+      try {
+        const r = await fetch('/api/dian/nota-credito/motivos');
+        if (r.ok) motivos = (await r.json()).motivos || [];
+      } catch (e) { /* se muestran los básicos */ }
+
+      const opciones = motivos.length
+        ? motivos.map(m => `${m.codigo}) ${m.descripcion}`).join('\n')
+        : '1) Devolución total\n2) Devolución parcial\n6) Anulación de la operación';
+
+      const entrada = prompt(
+        'NOTA CRÉDITO ELECTRÓNICA\n\n' +
+        (contexto && contexto.error ? contexto.error + '\n\n' : '') +
+        'Motivos del catálogo de la DIAN:\n' + opciones + '\n\n' +
+        'Escriba el NÚMERO del motivo y luego la descripción (ej. "2, cliente devolvió 1 bulto"):',
+        '1, Anulación de la venta'
+      );
+      if (!entrada) return;
+
+      const [codigo, ...resto] = entrada.split(',');
+      const motivo_codigo = (codigo || '').trim();
+      const motivo_descripcion = resto.join(',').trim();
+      if (!/^\d$/.test(motivo_codigo)) {
+        alert('El motivo debe ser el NÚMERO de una de las opciones listadas.');
+        return;
+      }
+
+      if (!confirm(
+        `¿Emitir la Nota Crédito de la venta #${idVenta}?\n\n` +
+        'La venta se revertirá y el stock volverá al inventario SOLO si la ' +
+        'DIAN acepta la nota.')) return;
+
+      const res = await fetch(`/api/dian/nota-credito/${idVenta}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ motivo_codigo, motivo_descripcion }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        alert('No se pudo emitir la nota crédito:\n\n' + (data.error || 'Error desconocido'));
+        return;
+      }
+      alert(data.mensaje);
+      cargarFacturasTabla();
+      cargarProductosTabla();
+      if (facturaActualId === idVenta) verFactura(idVenta);
     }
 
 			async function verFactura(id, autoPrint) {

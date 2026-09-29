@@ -326,7 +326,8 @@ def _leer_items(cursor, id_venta, iva_porcentaje_venta):
         """
         SELECT dv.cantidad, dv.precio_unitario, p.nombre, p.dimensiones,
                COALESCE(p.unidad_medida, '94'), COALESCE(p.codigo_dian, ''),
-               COALESCE(p.iva_tasa, 0), COALESCE(p.iva_naturaleza, 'excluido')
+               COALESCE(p.iva_tasa, 0), COALESCE(p.iva_naturaleza, 'excluido'),
+               COALESCE(p.iva_tipo_tarifa, '00')
         FROM detalle_ventas dv
         JOIN productos p ON dv.id_producto = p.id
         WHERE dv.id_venta = ?
@@ -341,19 +342,25 @@ def _leer_items(cursor, id_venta, iva_porcentaje_venta):
 
     items = []
     for cantidad, precio_final, nombre, dimensiones, unidad, codigo_dian, \
-            iva_tasa, naturaleza in filas:
+            iva_tasa, naturaleza, tipo_tarifa in filas:
         cantidad = float(cantidad or 0)
         precio_final = float(precio_final or 0)
         iva_tasa = float(iva_tasa or 0)
         naturaleza = str(naturaleza or 'excluido').strip().lower()
 
-        # ── Producto EXENTO ──────────────────────────────────────────────────
-        # Un producto marcado como exento NO lleva IVA aunque el negocio tenga
-        # el IVA global activo. Antes se descartaba la columna `iva_naturaleza`
-        # (`_naturaleza`) y un exento con tasa 0 caia en el "usa la tasa del
-        # negocio": la DIAN rechaza el documento porque declara un impuesto
-        # sobre una operación exenta, y además el cliente pagaria de más.
-        if naturaleza in ('exento', 'excluido_iva', 'no_sujeto'):
+        # ── Producto de tarifa 0 (art. 424 / 422 ET) ────────────────────────
+        # Los materiales de construcción de extracción directa (arena, balastro)
+        # están EXCLUIDOS a tasa 0; los exentos (art. 422) también a tasa 0 pero
+        # se declaran con otro código. En ambos casos el producto NO lleva IVA
+        # aunque el negocio tenga el IVA global activo: declarar impuesto sobre
+        # una operación de tarifa 0 es rechazo garantizado.
+        #
+        # OJO: se distingue por `iva_tipo_tarifa` y NO por el texto 'excluido',
+        # porque `iva_naturaleza` vale 'excluido' por defecto para TODOS los
+        # productos (allí significa "gravado", no "excluido del impuesto"). Usar
+        # ese texto como criterio dejaría a tasa 0 los 1.461 productos.
+        if (naturaleza in ('exento', 'excluido_iva', 'no_sujeto')
+                or tipo_tarifa in ('01', '02', '03')):
             iva_tasa = 0.0
         elif not iva_tasa and iva_porcentaje_venta:
             # Producto sin tasa propia: se usa la del negocio (comportamiento del

@@ -1,0 +1,522 @@
+"""Nota Crédito Electrónica (UBL 2.1) y Documento Soporte a No Obligados.
+
+Este módulo concentra las reglas fiscales de los dos documentos que la DIAN
+exige para respaldar las operaciones del POS que NO son una factura de venta
+electrónica:
+
+  1. NOTA CRÉDITO ELECTRÓNICA (tipo 'NC')
+     Corrige un Documento Equivalente POS ya emitido. Es la ÚNICA forma legal
+     de revertir una venta transmitida: anular la venta en el POS dejaría un
+     documento válido en el catálogo de la DIAN por el total completo.
+     La nota va REFERENCIADA al documento original: lleva su CUIDE, su número y
+     el motivo del ajuste (`cac:AdditionalDocumentReference` +
+     `cbc:LineID` + `cbc:Note`).
+
+  2. DOCUMENTO SOPORTE A NO OBLIGADOS A FACTURAR (tipo 'DS')
+     Respalda una compra hecha a un proveedor informal que no entrega factura
+     electrónica (compra de arena, balastro y materiales de construcción de
+     extracción directa a un pequeño miningo o transportador). El documento
+     registra lo que el proveedor informal no puede facturar pero la ferretería
+     sí necesita soportar para justificar la entrada al inventario y la
+     deducción de costos.
+     NO lleva a un emesor propio registrado ni sustituye una factura: su función
+     es dar soporte documental a la compra.
+
+DECISIÓN DE DISEÑO: por qué está en un archivo aparte de `dian_xml.py`
+`dian_xml.py` construye el POS, que es un documento de VENTA. La nota crédito
+tiene una estructura distinta (referencia al documento original, InvoiceTypeCode
+'01' de corrección, importes en negativo) y el documento soporte es un tipo
+distinto con emisor y receptor invertidos respecto al POS. Mezclarlos en un solo
+generador haría ese archivo más difícil de mantener y más fácil de romper por un
+cambio de uno. Aquí se reaprovechan las piezas puras: `dian_pos` (constantes y
+formato), `dian_firma` (XAdES-EPES) y `dian_soap` (transporte).
+
+NO valida contra el XSD oficial de la DIAN: el anexo del Documento Soporte no
+está publicado con esa estructura. La forma del documento sigue las reglas del
+documento electrónico estándar (UBL 2.1) y los campos que el anexo del DS
+declara, pero conviene confirmar los nombres de elemento contra la resolución
+vigente antes de operar en producción.
+"""
+from __future__ import annotations
+
+import xml.etree.ElementTree as ET
+
+from .dian_pos import (
+    DEPARTAMENTO_POR_DEFECTO,
+    DV_CONSUMIDOR_FINAL,
+    MUNICIPIO_POR_DEFECTO,
+    NIT_CONSUMIDOR_FINAL,
+    NOMBRE_CONSUMIDOR_FINAL,
+    NOMBRES_IMPUESTO,
+    PAIS_POR_DEFECTO,
+    TIPO_DOCUMENTO_NOTA_CREDITO,
+    TIPO_IMPUESTO_INC,
+    TIPO_IMPUESTO_IVA,
+    UNIDAD_POR_DEFECTO,
+    formatear_cantidad,
+    formatear_monto,
+    normalizar_fecha,
+    normalizar_hora,
+    redondear,
+    solo_digitos,
+    tipo_documento_identidad,
+)
+
+# Namespaces: los mismos que usa el POS (UBL 2.1).
+NS_INVOICE = 'urn:oasis:names:specification:ubl:schema:xsd:Invoice-2'
+NS_CAC = 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2'
+NS_CBC = 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2'
+NS_STS = 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2'
+NS_XSI = 'http://www.w3.org/2001/XMLSchema-instance'
+NS_EXT = 'urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2'
+
+for _prefijo, _uri in (('ext', NS_EXT), ('xsi', NS_XSI), ('xades', None)):
+    if _uri:
+        ET.register_namespace(_prefijo, _uri)
+
+# ── Constantes fiscales ─────────────────────────────────────────────────────
+# CustomizationID del documento: la DIAN lo valida contra su catálogo, así que
+# no se acentúa ni se traduce.
+CUSTOMIZATION_ID_NC = (
+    'Nota Credito Electronica: Anexo Tecnico 1.0'
+)
+CUSTOMIZATION_ID_DS = (
+    'Documento Soporte a No Obligados a Facturar: Anexo Tecnico 1.0'
+)
+PROFILE_ID_NC = 'DIAN 2.1: Nota Credito Electronica'
+PROFILE_ID_DS = 'DIAN 2.1: Documento Soporte a No Obligados'
+
+# Tipo de operación del documento soporte: '20' compra de bienes/servicios.
+TIPO_OPERACION_COMPRA = '20'
+
+# Motivos de la nota crédito. El código es el que viaja al XML y la DIAN exige
+# que sea uno del catálogo.
+MOTIVOS_NOTA_CREDITO = (
+    ('1', 'Devolución total de la venta'),
+    ('2', 'Devolución parcial de la venta'),
+    ('3', 'Devolución por cambio de mercadería'),
+    ('4', 'Devolución por cambio de precio o errata en la cantidad'),
+    ('5', 'Descuento o bonificación posterior'),
+    ('6', 'Anulación de la operación'),
+    ('7', 'Ajuste por error en el RUNT o en la operación previa'),
+)
+
+# ── Helpers de construcción (mismo estilo que `dian_xml`) ────────────────────
+def _cbc(tag, texto, **atributos):
+    nodo = ET.Element(f'{{{NS_CBC}}}{tag}')
+    for clave, valor in atributos.items():
+        nodo.set(clave, str(valor))
+    if texto is not None:
+        nodo.text = str(texto)
+    return nodo
+
+
+def _cac(tag):
+    return ET.Element(f'{{{NS_CAC}}}{tag}')
+
+
+def _agregar(padre, *hijos):
+    for hijo in hijos:
+        padre.append(hijo)
+    return padre
+
+
+def _monto(valor):
+    return formatear_monto(valor)
+
+
+# ═════════════════════════════════════════════════════
+# Nota Crédito Electrónica
+# ═════════════════════════════════════════════════════
+def construir_nota_credito(documento, emisor, adquirente, items, totales,
+                           extras=None):
+    """Arma el árbol XML de la Nota Crédito Electrónica.
+
+    Args:
+        documento: dict con numero, fecha, hora, cuide, tipo_ambiente, moneda,
+            tipo_operacion, valor_total, Y los datos de la referencia:
+                documento_referido (id_venta), numero_referido, cuide_referido,
+                fecha_referido, motivo_codigo, motivo_descripcion.
+        emisor / adquirente / items / totales: igual que en el POS.
+        extras: software_id, software_security_code, nombre/version/empresa del
+            software.
+
+    Returns:
+        ElementTree.Element raíz (Invoice), SIN firma.
+
+    Raises:
+        ValueError: si falta el número de la nota o la REFERENCIA al documento
+            original. Una nota crédito sin referencia no es válida: sin ella la
+            DIAN no sabe a qué documento corrige.
+    """
+    numero = str(documento.get('numero') or '').strip()
+    if not numero:
+        raise ValueError('La nota crédito necesita un número (prefijo + consecutivo)')
+
+    cuide_ref = str(documento.get('cuide_referido') or '').strip()
+    if not cuide_ref:
+        raise ValueError(
+            'La nota crédito debe referenciar el CUIDE del documento que corrige. '
+            'Sin esa referencia la DIAN no sabe a qué documento se aplica la nota.'
+        )
+
+    extras = extras or {}
+    adquirente = adquirente or {}
+
+    invoice = ET.Element(f'{{{NS_INVOICE}}}Invoice')
+    invoice.set(f'{{{NS_XSI}}}schemaLocation', f'{NS_INVOICE} UBL-Invoice-2.1.xsd')
+
+    # ── Encabezado ───────────────────────────────────────────────────────────
+    _agregar(
+        invoice,
+        _cbc('UBLVersionID', 'UBL 2.1'),
+        _cbc('CustomizationID', CUSTOMIZATION_ID_NC),
+        _cbc('ProfileID', PROFILE_ID_NC),
+        _cbc('ID', numero),
+        _cbc('IssueDate', normalizar_fecha(documento.get('fecha'))),
+        _cbc('IssueTime', normalizar_hora(documento.get('hora'))),
+        # InvoiceTypeCode '01' = nota crédito (corrige un documento previo).
+        # '02' sería la nota débito.
+        _cbc('InvoiceTypeCode', '01'),
+        _cbc('DocumentCurrencyCode', documento.get('moneda') or 'COP'),
+        _cbc('LineCountNumeric', str(len(items))),
+    )
+
+    # ── Referencia al documento que se corrige ───────────────────────────────
+    # Es lo que hace que la nota sea una CORRECCIÓN y no una venta negativa
+    # suelta. La DIAN la usa para validar que el documento existe y para
+    # update su saldo.
+    invoice.append(_construir_referencia_ajuste(documento))
+
+    # ── Partes ───────────────────────────────────────────────────────────────
+    invoice.append(_construir_emisor(emisor))
+    invoice.append(_construir_adquirente(adquirente))
+
+    # ── Impuestos y totales ──────────────────────────────────────────────────
+    invoice.append(_construir_impuestos(totales))
+
+    monetary = _cac('LegalMonetaryTotal')
+    _agregar(
+        monetary,
+        _cbc('LineExtensionAmount', _monto(totales.get('line_extension_amount')),
+             currencyID='COP'),
+        _cbc('TaxExclusiveAmount', _monto(totales.get('tax_exclusive_amount')),
+             currencyID='COP'),
+        _cbc('TaxInclusiveAmount', _monto(totales.get('tax_inclusive_amount')),
+             currencyID='COP'),
+        # NegativeValue=true: la nota RESTA del valor del documento original.
+        _cbc('PayableAmount', _monto(totales.get('payable_amount')),
+             currencyID='COP', NegativeValue='true'),
+    )
+    invoice.append(monetary)
+
+    # ── Líneas ───────────────────────────────────────────────────────────────
+    for indice, item in enumerate(items, start=1):
+        invoice.append(_construir_linea(indice, item))
+
+    return invoice
+
+
+def _construir_referencia_ajuste(documento):
+    """`<cac:AdditionalDocumentReference>` que apunta al documento original.
+
+    Lleva el CUIDE (que es como la DIAN identifica un documento equivalente),
+    el número, la fecha y el motivo de la corrección.
+    """
+    ref = _cac('AdditionalDocumentReference')
+    _agregar(
+        ref,
+        _cbc('ID', documento.get('cuide_referido')),
+        _cbc('DocumentTypeCode', documento.get('tipo_documento_referido') or 'POS'),
+        _cbc('IssueDate', normalizar_fecha(documento.get('fecha_referido'))),
+    )
+
+    # Motivo: el anexo exige el código del catálogo, y la descripción es texto
+    # libre para que el auditor entienda por qué se corrigió.
+    if documento.get('motivo_codigo'):
+        ref.append(_cbc('LineID', str(documento['motivo_codigo'])))
+    if documento.get('motivo_descripcion'):
+        nota = _cac('Description')
+        nota.append(_cbc('Description', str(documento['motivo_descripcion'])))
+        ref.append(nota)
+    return ref
+
+
+def _construir_emisor(emisor):
+    """`<cac:AccountingSupplierParty>`: en una nota crédito el emisor es el
+    MISMO que en la venta original (quien devuelve el dinero)."""
+    parte = _cac('AccountingSupplierParty')
+    party = _cac('Party')
+    if emisor.get('nombre_comercial'):
+        party.append(_cbc('Name', str(emisor['nombre_comercial'])))
+
+    identificacion = _cac('PartyIdentification')
+    identificacion.append(_cbc('ID', solo_digitos(emisor.get('nit')),
+                               schemeID='31', schemeName='31',
+                               schemeAgencyID='195'))
+    party.append(identificacion)
+    party.append(_construir_direccion(emisor))
+    party.append(_construir_responsabilidades(emisor))
+    parte.append(party)
+    return parte
+
+
+def _construir_adquirente(adquirente):
+    """`<cac:AccountingCustomerParty>`: quien devolvió la mercancía."""
+    numero = solo_digitos(adquirente.get('numero_documento'))
+    if not numero:
+        adquirente = {
+            'tipo_documento': 'NIT',
+            'numero_documento': NIT_CONSUMIDOR_FINAL,
+            'digito_verificacion': DV_CONSUMIDOR_FINAL,
+            'nombre': NOMBRE_CONSUMIDOR_FINAL,
+            'direccion': '',
+            'municipio': MUNICIPIO_POR_DEFECTO,
+            'departamento': DEPARTAMENTO_POR_DEFECTO,
+            'pais': PAIS_POR_DEFECTO,
+            'regimen_fiscal': 'No Responsable de IVA',
+            'responsabilidades': ['R-99-PN'],
+        }
+
+    parte = _cac('AccountingCustomerParty')
+    party = _cac('Party')
+    party.append(_construir_direccion(adquirente))
+
+    identificacion = _cac('PartyIdentification')
+    codigo = tipo_documento_identidad(adquirente.get('tipo_documento'))
+    identificacion.append(_cbc('ID', solo_digitos(adquirente.get('numero_documento')),
+                               schemeID=codigo, schemeName=codigo,
+                               schemeAgencyID='195'))
+    party.append(identificacion)
+    party.append(_construir_responsabilidades(adquirente))
+    parte.append(party)
+    return parte
+
+
+def _construir_direccion(datos):
+    ubicacion = _cac('PhysicalLocation')
+    direccion = _cac('Address')
+    direccion.append(_cbc('StreetName', str(datos.get('direccion') or 'Sin dirección')))
+    direccion.append(_cbc('CityName', str(datos.get('municipio') or MUNICIPIO_POR_DEFECTO)))
+    direccion.append(_cbc('CountrySubentity',
+                          str(datos.get('departamento') or DEPARTAMENTO_POR_DEFECTO)))
+    pais = _cac('Country')
+    pais.append(_cbc('IdentificationCode', str(datos.get('pais') or PAIS_POR_DEFECTO)))
+    direccion.append(pais)
+    ubicacion.append(direccion)
+    return ubicacion
+
+
+def _construir_responsabilidades(datos):
+    esquema = _cac('PartyTaxScheme')
+    responsabilidades = datos.get('responsabilidades') or []
+    if isinstance(responsabilidades, str):
+        responsabilidades = [r.strip() for r in responsabilidades.split(',')
+                             if r.strip()]
+    if not responsabilidades:
+        responsable = 'Responsable de IVA' in str(datos.get('regimen_fiscal') or '')
+        responsabilidades = ['O-48'] if responsable else ['R-99-PN']
+    esquema.append(_cbc('TaxLevelCode', ';'.join(responsabilidades),
+                        listAgencyID='195', listID='05'))
+    tributario = _cac('TaxScheme')
+    tributario.append(_cbc('ID', 'ZZ', schemeID='195', schemeName='01'))
+    tributario.append(_cbc('Name', 'No aplica'))
+    esquema.append(tributario)
+    return esquema
+
+
+def _construir_impuestos(totales):
+    """`<cac:TaxTotal>` con un subtotal POR TARIFA (igual que el POS)."""
+    nodo = _cac('TaxTotal')
+    iva = float(totales.get('iva_valor') or 0)
+    inc = float(totales.get('inc_valor') or 0)
+    nodo.append(_cbc('TaxAmount', _monto(iva + inc), currencyID='COP'))
+
+    for grupo in (totales.get('impuestos_iva') or []):
+        nodo.append(_subtotal_impuesto(
+            TIPO_IMPUESTO_IVA, NOMBRES_IMPUESTO[TIPO_IMPUESTO_IVA],
+            grupo['base'], grupo['valor'], grupo['tasa']))
+    for grupo in (totales.get('impuestos_inc') or []):
+        nodo.append(_subtotal_impuesto(
+            TIPO_IMPUESTO_INC, NOMBRES_IMPUESTO[TIPO_IMPUESTO_INC],
+            grupo['base'], grupo['valor'], grupo['tasa']))
+    return nodo
+
+
+def _subtotal_impuesto(tipo, nombre, base, valor, tarifa):
+    subtotal = _cac('TaxSubtotal')
+    subtotal.append(_cbc('TaxableAmount', _monto(base), currencyID='COP'))
+    subtotal.append(_cbc('TaxAmount', _monto(valor), currencyID='COP'))
+    categoria = _cac('TaxCategory')
+    categoria.append(_cbc('Percent', _monto(tarifa)))
+    esquema = _cac('TaxScheme')
+    esquema.append(_cbc('ID', tipo, schemeID='195', schemeName='01'))
+    esquema.append(_cbc('Name', nombre))
+    categoria.append(esquema)
+    subtotal.append(categoria)
+    return subtotal
+
+
+def _construir_linea(indice, item):
+    """`<cac:InvoiceLine>` de la nota. El importe va POSITIVO; lo que lo hace
+    resta es el `NegativeValue` del total y el tipo de documento '01'."""
+    cantidad = float(item.get('cantidad') or 0)
+    precio = float(item.get('precio_unitario') or 0)
+    base = float(item.get('base') or 0) or (redondear(cantidad * precio))
+    iva_tasa = float(item.get('iva_tasa') or 0)
+
+    linea = _cac('InvoiceLine')
+    _agregar(
+        linea,
+        _cbc('ID', str(indice)),
+        _cbc('InvoicedQuantity', formatear_cantidad(cantidad),
+             unitCode=str(item.get('unidad') or UNIDAD_POR_DEFECTO)),
+        _cbc('LineExtensionAmount', _monto(base), currencyID='COP'),
+    )
+
+    impuestos = _cac('TaxTotal')
+    iva_valor = redondear(base * iva_tasa / 100)
+    impuestos.append(_cbc('TaxAmount', _monto(iva_valor), currencyID='COP'))
+    if iva_tasa:
+        impuestos.append(_subtotal_impuesto(
+            TIPO_IMPUESTO_IVA, NOMBRES_IMPUESTO[TIPO_IMPUESTO_IVA],
+            base, iva_valor, iva_tasa))
+    linea.append(impuestos)
+
+    precio_nodo = _cac('Price')
+    precio_nodo.append(_cbc('PriceAmount', _monto(precio), currencyID='COP'))
+    linea.append(precio_nodo)
+
+    articulo = _cac('Item')
+    articulo.append(_cbc('Description', str(item.get('descripcion') or 'Producto')))
+    if item.get('codigo'):
+        identificacion = _cac('SellersItemIdentification')
+        identificacion.append(_cbc('ID', str(item['codigo'])))
+        articulo.append(identificacion)
+    linea.append(articulo)
+    return linea
+
+
+# ═════════════════════════════════════════════════════
+# Documento Soporte a No Obligados a Facturar
+# ═════════════════════════════════════════════════════
+def construir_documento_soporte(documento, emisor, proveedor, items, totales,
+                                 extras=None):
+    """Arma el árbol XML del Documento Soporte a No Obligados a Facturar.
+
+    A diferencia de la nota crédito, aquí las partes están INVERTIDAS respecto
+    al POS: el emisor es quien vende (la ferretería) y el receptor es el
+    proveedor informal que no está obligado a facturar.
+
+    Args:
+        documento: dict con numero, fecha, hora, cuide, tipo_ambiente, moneda,
+            valor_total, documento_proveedor (el número de la factura de papel
+            que entrega el proveedor, o un número interno de soporte).
+        emisor: datos de la ferretería (quien compra y emite el soporte).
+        proveedor: datos del proveedor informal. Claves: tipo_documento,
+            numero_documento, nombre, direccion, municipio, departamento, pais,
+            regimen_fiscal, responsabilidades. `no_obligado` marca que no está
+            obligado a facturar (por eso este documento existe).
+        items / totales: las líneas compradas y sus impuestos.
+    """
+    numero = str(documento.get('numero') or '').strip()
+    if not numero:
+        raise ValueError('El documento soporte necesita un número (prefijo + consecutivo)')
+
+    extras = extras or {}
+
+    invoice = ET.Element(f'{{{NS_INVOICE}}}Invoice')
+    invoice.set(f'{{{NS_XSI}}}schemaLocation', f'{NS_INVOICE} UBL-Invoice-2.1.xsd')
+
+    _agregar(
+        invoice,
+        _cbc('UBLVersionID', 'UBL 2.1'),
+        _cbc('CustomizationID', CUSTOMIZATION_ID_DS),
+        _cbc('ProfileID', PROFILE_ID_DS),
+        _cbc('ID', numero),
+        _cbc('IssueDate', normalizar_fecha(documento.get('fecha'))),
+        _cbc('IssueTime', normalizar_hora(documento.get('hora'))),
+        _cbc('InvoiceTypeCode', '01'),
+        _cbc('DocumentCurrencyCode', documento.get('moneda') or 'COP'),
+        _cbc('LineCountNumeric', str(len(items))),
+    )
+
+    # Referencia al papel que trae el proveedor. No es un documento electrónico
+    # validado por la DIAN, es el soporte físico que justifica la compra.
+    if documento.get('documento_proveedor'):
+        ref = _cac('AdditionalDocumentReference')
+        _agregar(ref,
+                 _cbc('ID', str(documento['documento_proveedor'])),
+                 _cbc('DocumentTypeCode', '01'))
+        invoice.append(ref)
+
+    invoice.append(_construir_emisor(emisor))
+    invoice.append(_construir_receptor_proveedor(proveedor))
+    invoice.append(_construir_impuestos(totales))
+
+    monetary = _cac('LegalMonetaryTotal')
+    _agregar(
+        monetary,
+        _cbc('LineExtensionAmount', _monto(totales.get('line_extension_amount')),
+             currencyID='COP'),
+        _cbc('TaxExclusiveAmount', _monto(totales.get('tax_exclusive_amount')),
+             currencyID='COP'),
+        _cbc('TaxInclusiveAmount', _monto(totales.get('tax_inclusive_amount')),
+             currencyID='COP'),
+        _cbc('PayableAmount', _monto(totales.get('payable_amount')), currencyID='COP'),
+    )
+    invoice.append(monetary)
+
+    for indice, item in enumerate(items, start=1):
+        invoice.append(_construir_linea(indice, item))
+
+    return invoice
+
+
+def _construir_receptor_proveedor(proveedor):
+    """`<cac:AccountingCustomerParty>` con el proveedor informal.
+
+    Se marca como 'No Obligado a Facturar' en el nombre del TaxScheme, que
+    es lo que distingue este documento de una factura normal: el receptor no
+    estaba obligado a emitir factura electrónica.
+    """
+    parte = _cac('AccountingCustomerParty')
+    party = _cac('Party')
+    party.append(_cbc('Name', str(proveedor.get('nombre') or 'Proveedor')))
+
+    identificacion = _cac('PartyIdentification')
+    codigo = tipo_documento_identidad(proveedor.get('tipo_documento'))
+    identificacion.append(_cbc('ID', solo_digitos(proveedor.get('numero_documento')),
+                               schemeID=codigo, schemeName=codigo,
+                               schemeAgencyID='195'))
+    party.append(identificacion)
+    party.append(_construir_direccion(proveedor))
+
+    # PartyTaxScheme con el nombre que declara que NO está obligado a facturar.
+    esquema = _cac('PartyTaxScheme')
+    responsabilidades = proveedor.get('responsabilidades') or ['R-99-PN']
+    if isinstance(responsabilidades, str):
+        responsabilidades = [r.strip() for r in responsabilidades.split(',')
+                             if r.strip()]
+    esquema.append(_cbc('TaxLevelCode', ';'.join(responsabilidades),
+                        listAgencyID='195', listID='05'))
+    tributario = _cac('TaxScheme')
+    tributario.append(_cbc('ID', 'ZZ', schemeID='195', schemeName='01'))
+    tributario.append(_cbc('Name', 'No Obligado a Facturar'))
+    esquema.append(tributario)
+    party.append(esquema)
+
+    parte.append(party)
+    return parte
+
+
+# ═════════════════════════════════════════════════════
+# Serialización
+# ═════════════════════════════════════════════════════
+def a_bytes(raiz, declaracion=True):
+    return ET.tostring(raiz, encoding='utf-8', xml_declaration=declaracion)
+
+
+def a_texto(raiz):
+    """Serializa a texto (lo que se guarda en la base para descarga)."""
+    return a_bytes(raiz, declaracion=False).decode('utf-8')

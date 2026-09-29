@@ -438,7 +438,14 @@ def _aplicar_migraciones(cursor):
         # codigo_dian: código homologado de producto/servicio que viaja al XML.
         ('productos', 'codigo_dian', 'TEXT'),
         # Naturaleza del IVA a tasa 0: 'exento' vs 'excluido' (se declaran distinto).
+        # 'excluido' es la tasa 0 del artículo 424 ET (materiales de construcción de
+        # extracción directa como arena y balastro); 'exento' es el artículo 422.
         ('productos', 'iva_naturaleza', "TEXT DEFAULT 'excluido'"),
+        # El código de la tarifa a cero que la DIAN pide declarar (art. 424 ET):
+        # '01' excluido, '02' exento, '03' no sujeto. '00' = tarifa normal
+        # (gravada). Es ESTA columna la que decide si el producto lleva IVA, no
+        # `iva_naturaleza`: ver la nota en `dian_emision._leer_items`.
+        ('productos', 'iva_tipo_tarifa', "TEXT NOT NULL DEFAULT '00'"),
         # ── Retenciones, plazo y tipo de operación en ventas ────────────────
         ('ventas', 'retencion_fuente', 'REAL NOT NULL DEFAULT 0'),
         ('ventas', 'retencion_ica', 'REAL NOT NULL DEFAULT 0'),
@@ -953,5 +960,90 @@ def _crear_tablas_dian(cursor):
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_doc_track ON documentos_electronicos (track_id)")
     # Red de seguridad para bases creadas por una versión anterior del módulo.
     migrar_columna(cursor, 'documentos_electronicos', 'zip_key', 'TEXT')
+    # ── Notas crédito y documentos soporte ───────────────────────────────────
+    # `documento_referido` guarda el CUIDE del documento que la nota corrige:
+    # es el vínculo que exige la DIAN para que una corrección no sea una venta
+    # negativa suelta. `motivo` guarda el texto libre del ajuste.
+    migrar_columna(cursor, 'documentos_electronicos', 'documento_referido', 'TEXT')
+    migrar_columna(cursor, 'documentos_electronicos', 'motivo', 'TEXT')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_doc_ref ON documentos_electronicos (documento_referido)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_cola_estado ON cola_dian (estado, proximo_intento)")
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_cola_documento ON cola_dian (id_documento)")
+    _asegurar_migracion_documento_soporte(cursor)
+
+
+def _asegurar_migracion_documento_soporte(cursor):
+    """Tablas del Documento Soporte a No Obligados a Facturar.
+
+    `proveedores_informales`
+        Persona natural que vende a la ferretería sin estar obligada a emitir
+        factura electrónica (miningo del balastro, transportador, alerts de
+        material). Se guardan aparte de `clientes` porque fiscalmente es otra
+        cosa: el cliente COMPRA, el proveedor VENDE.
+
+    `documentos_soporte`
+        Un registro por documento soporte emitido: CUIDE, número, XML firmado,
+        estado frente a la DIAN y la compra que respalda. Igual que
+        `documentos_electronicos`, se guarda ANTES de enviar para poder
+        reintentar sin volver a firmar.
+    """
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS proveedores_informales (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre            TEXT NOT NULL,
+            tipo_documento    TEXT NOT NULL DEFAULT 'CC',
+            numero_documento  TEXT,
+            telefono          TEXT DEFAULT '',
+            direccion         TEXT DEFAULT '',
+            municipio         TEXT DEFAULT '',
+            departamento      TEXT DEFAULT '',
+            -- Qué se le compró: 'materiales' (arena, balastro), 'servicios'
+            -- (transporte, maquinaria), 'alquiler' (equipos).
+            tipo_suministro   TEXT NOT NULL DEFAULT 'materiales',
+            activo            INTEGER NOT NULL DEFAULT 1,
+            notas             TEXT DEFAULT '',
+            creado            TEXT NOT NULL,
+            actualizado       TEXT
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS documentos_soporte (
+            id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_proveedor        INTEGER,
+            id_compra           INTEGER,
+            prefijo             TEXT NOT NULL DEFAULT 'DS',
+            numero              TEXT NOT NULL,
+            cuide               TEXT NOT NULL DEFAULT '',
+            fecha_generacion    TEXT NOT NULL,
+            hora_generacion     TEXT NOT NULL,
+            -- Número de la factura de papel que trae el proveedor. No es un
+            -- documento electrónico validado por la DIAN: es el soporte físico
+            -- que justifica la compra.
+            documento_proveedor TEXT,
+            valor_total         REAL NOT NULL DEFAULT 0,
+            valor_iva           REAL NOT NULL DEFAULT 0,
+            valor_inc           REAL NOT NULL DEFAULT 0,
+            xml                 TEXT,
+            xml_firmado         TEXT,
+            qr_url              TEXT,
+            modo                TEXT NOT NULL DEFAULT 'habilitacion',
+            estado              TEXT NOT NULL DEFAULT 'pendiente',
+            contingencia        INTEGER NOT NULL DEFAULT 0,
+            respuesta_dian      TEXT,
+            codigo_dian         TEXT,
+            descripcion_dian    TEXT,
+            track_id            TEXT,
+            intentos            INTEGER NOT NULL DEFAULT 0,
+            ultimo_error        TEXT,
+            fecha_envio         TEXT,
+            fecha_respuesta     TEXT,
+            UNIQUE (prefijo, numero),
+            FOREIGN KEY (id_proveedor) REFERENCES proveedores_informales (id)
+        )
+    ''')
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_prov_activo ON proveedores_informales (activo)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_docsop_estado ON documentos_soporte (estado)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_docsop_prov ON documentos_soporte (id_proveedor)")
