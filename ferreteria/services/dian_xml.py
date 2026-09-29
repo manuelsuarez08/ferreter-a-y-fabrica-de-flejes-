@@ -302,6 +302,27 @@ def _construir_extensiones(documento, extras):
             total=documento.get('valor_total'),
         )
 
+    # Leyenda del software: el anexo tecnico exige identificar el software
+    # propio que generó el documento (nombre, versión y empresa). Sin esto la
+    # DIAN no puede trazar el documento hasta su emisor de software.
+    #
+    # Se declara en `ext:UBLExtension` como bloque propio, que es donde el
+    # anexo ubica los metadatos del software de facturación.
+    if documento.get('nombre_software') or extras.get('software_id'):
+        ext_legenda = ET.SubElement(extensiones, f'{{{NS_EXT}}}UBLExtension')
+        contenido_legenda = ET.SubElement(ext_legenda,
+                                          f'{{{NS_EXT}}}ExtensionContent')
+        software_ext = ET.SubElement(contenido_legenda, f'{{{NS_STS}}}SoftwareInfo')
+        if documento.get('nombre_software'):
+            nombre = ET.SubElement(software_ext, f'{{{NS_STS}}}SoftwareName')
+            nombre.text = str(documento['nombre_software'])
+        if documento.get('version_software'):
+            version = ET.SubElement(software_ext, f'{{{NS_STS}}}SoftwareVersion')
+            version.text = str(documento['version_software'])
+        if documento.get('empresa_software'):
+            empresa = ET.SubElement(software_ext, f'{{{NS_STS}}}SoftwareProvider')
+            empresa.text = str(documento['empresa_software'])
+
     return extensiones
 
 
@@ -489,22 +510,30 @@ def _construir_responsabilidades(datos):
 
 
 def _construir_impuestos_totales(totales):
-    """Crea `<cac:TaxTotal>` con el resumen de IVA e INC del documento."""
+    """Crea `<cac:TaxTotal>` con el resumen de IVA e INC del documento.
+
+    Declara UN `cac:TaxSubtotal` POR TARIFA. La DIAN no acepta un unico
+    subtotal con la tasa mas alta cuando la venta mezcla tarifas (19% y 5%) o
+    tiene productos exentos: cada subtotal lleva su base y su valor.
+    """
     nodo = _cac('TaxTotal')
     iva = float(totales.get('iva_valor') or 0)
     inc = float(totales.get('inc_valor') or 0)
     total_impuestos = iva + inc
     nodo.append(_cbc('TaxAmount', _monto(total_impuestos), currencyID='COP'))
 
-    # Subtotal de IVA (siempre se declara, aunque sea 0: el anexo lo exige).
-    nodo.append(_subtotal_impuesto(
-        TIPO_IMPUESTO_IVA, NOMBRES_IMPUESTO[TIPO_IMPUESTO_IVA],
-        totales.get('line_extension_amount'), iva, totales.get('iva_tasa') or 0,
-    ))
-    if inc:
+    # Resumen de IVA: un subtotal por cada tarifa aplicada.
+    for grupo in (totales.get('impuestos_iva') or []):
+        nodo.append(_subtotal_impuesto(
+            TIPO_IMPUESTO_IVA, NOMBRES_IMPUESTO[TIPO_IMPUESTO_IVA],
+            grupo['base'], grupo['valor'], grupo['tasa'],
+        ))
+
+    # Resumen de INC (bolsas): también uno por tarifa.
+    for grupo in (totales.get('impuestos_inc') or []):
         nodo.append(_subtotal_impuesto(
             TIPO_IMPUESTO_INC, NOMBRES_IMPUESTO[TIPO_IMPUESTO_INC],
-            totales.get('line_extension_amount'), inc, totales.get('inc_tasa') or 0,
+            grupo['base'], grupo['valor'], grupo['tasa'],
         ))
     return nodo
 

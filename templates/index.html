@@ -2011,6 +2011,7 @@
               <div id="fac-dian-cuide" class="recibo-cuide"></div>
               <div class="small text-center">Consulte su documento en<br>catalogo-vpfe.dian.gov.co</div>
               <div id="fac-dian-resolucion" class="small"></div>
+              <div id="fac-dian-software" class="small"></div>
             </div>
 
             <div class="recibo-pie">
@@ -4658,7 +4659,19 @@
 			tbody.innerHTML = '';
                ventas.forEach(v => {
                  const estado = v.anulada ? '<span class="badge bg-danger">Anulada</span>' : '<span class="badge bg-success">Vigente</span>';
-                 const anular = v.anulada ? '' : `<button class="btn btn-sm btn-outline-danger" onclick="anularVenta(${v.id})">Anular</button>`;
+                 // Una venta ya emitida a la DIAN NO se puede anular marcando
+                 // `anulada`: el documento sigue siendo valido en el catalogo
+                 // de la DIAN. La unica salida es la Nota Credito Electronica.
+                 // El servidor lo bloquea con HTTP 409; aqui se oculta el boton.
+                 const emitida = v.dian_estado && v.dian_estado !== 'sin_emitir';
+                 let anular;
+                 if (v.anulada) {
+                   anular = '';
+                 } else if (emitida) {
+                   anular = '<span class="badge bg-info text-dark" title="Ya fue emitida a la DIAN: solo se puede anular con Nota Credito Electronica">Emitida</span>';
+                 } else {
+                   anular = `<button class="btn btn-sm btn-outline-danger" onclick="anularVenta(${v.id})">Anular</button>`;
+                 }
             tbody.innerHTML += `<tr><td>${v.id}</td><td>${escapeHtml(v.fecha_dia)} ${escapeHtml(v.hora)}</td><td>${escapeHtml(v.cliente)}</td><td>${escapeHtml(v.tipo_pago)}</td><td>${monedaCOP(v.total_venta)}</td><td>${estado} <button class="btn btn-sm btn-primary" onclick="verFactura(${v.id})">Ver</button> ${anular}</td></tr>`;
         });
         if (ventas.length === 0) tbody.innerHTML = `<tr><td colspan="7" class="text-center text-muted">${filtroCliente ? 'No hay facturas para ese cliente.' : 'No hay facturas registradas.'}</td></tr>`;
@@ -4669,8 +4682,15 @@
       if (!motivo) return;
       const res = await fetch(`/api/ventas/${id}/anular`, { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ motivo }) });
       const data = await res.json();
-      alert(res.ok ? data.mensaje : `Error: ${data.error}`);
-      if (res.ok) { cargarFacturasTabla(); cargarProductosTabla(); }
+      if (res.ok) {
+        alert(data.mensaje);
+        cargarFacturasTabla(); cargarProductosTabla();
+      } else if (res.status === 409 && data.requiere_nota_credito) {
+        // Bloqueo fiscal: la venta ya tiene documento electronico.
+        alert('No se puede anular.\n\n' + data.error);
+      } else {
+        alert(`Error: ${data.error}`);
+      }
     }
 
 			async function verFactura(id, autoPrint) {
@@ -4705,12 +4725,17 @@
 			       ).join('');
 
 			       // Guarda el detalle actual para la edicion y prepara el panel. Solo el
-			       // admin puede editar precios, y solo si la venta no esta anulada.
+			       // admin puede editar precios, y solo si la venta no esta anulada NI
+			       // haya sido emitida a la DIAN (en ese caso hace falta una Nota
+			       // Credito, no editar la venta).
 			       facturaItemsActuales = factura.items.map(i => ({ ...i }));
 			       const btnEditar = document.getElementById('btn-editar-items');
 			       if (btnEditar) {
-			         const puede = (ROL_ACTUAL === 'admin') && !factura.anulada;
+			         const emitida = window.DianPos && window.DianPos.estaEmitida(factura);
+			         const puede = (ROL_ACTUAL === 'admin') && !factura.anulada && !emitida;
 			         btnEditar.style.display = puede ? '' : 'none';
+			         if (emitida) btnEditar.title =
+			           'La venta ya fue emitida a la DIAN: no se puede editar.';
 			       }
 			       const panelEdit = document.getElementById('panel-editar-items');
 			       if (panelEdit) panelEdit.style.display = 'none';

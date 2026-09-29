@@ -114,7 +114,31 @@
       nodoRes.textContent = partes.join(' | ');
     }
 
+    // Leyenda del software de facturacion: el anexo tecnico exige identificar
+    // el software propio que genero el documento electronico.
+    var nodoSoft = document.getElementById('fac-dian-software');
+    if (nodoSoft) {
+      var soft = [];
+      if (dato.nombre_software) soft.push(dato.nombre_software);
+      if (dato.version_software) soft.push('v' + dato.version_software);
+      if (dato.empresa_software) soft.push(dato.empresa_software);
+      nodoSoft.textContent = soft.length
+        ? 'Software de facturación: ' + soft.join(' - ')
+        : '';
+    }
+
     pintarQr(qrUrl);
+  }
+
+  /* ¿La venta ya fue emitida a la DIAN? Si lo esta, no se puede editar ni
+   * anular: el documento firmado dejaria de coincidir con la venta. El servidor
+   * tambien lo bloquea (HTTP 409), esto solo oculta el boton para que el usuario
+   * no se encuentre con un error. */
+  function estaEmitida(factura) {
+    if (!factura) return false;
+    if (factura.anulada) return true;
+    var estado = (factura.dian && factura.dian.estado) || 'sin_emitir';
+    return estado !== 'sin_emitir';
   }
 
   /* Pide el QR al SERVIDOR y lo deja en un <img>.

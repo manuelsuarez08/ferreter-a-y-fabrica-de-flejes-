@@ -63,9 +63,58 @@ from .dian_pos import (
 # Con el backoff de abajo, 8 intentos cubren ~1 día de reintentos.
 MAX_INTENTOS_DEFECTO = 8
 
+# ── Leyenda del software de facturación ─────────────────────────────────────
+# El anexo técnico exige identificar el software propio que generó el
+# documento electrónico. Se imprime tambien en la tirilla para que el cliente
+# pueda identificar el software emisor del documento.
+NOMBRE_SOFTWARE = 'POS Ferreteria DIAN'
+VERSION_SOFTWARE = '1.0'
+EMPRESA_SOFTWARE = 'Ferreteria y Fabrica de Flejes'
+
 
 class ErrorEmision(Exception):
     """No se pudo emitir el documento (configuración, datos o certificado)."""
+
+
+# ═════════════════════════════════════════════════════
+# Estado fiscal de una venta (usado para BLOQUEAR operaciones)
+# ═════════════════════════════════════════════════════
+def estado_fiscal_venta(conn, id_venta):
+    """Estado del documento electrónico de una venta, para decidir si se puede
+    tocar.
+
+    Returns:
+        (estado, numero, cuide). `estado` es 'sin_emitir' si la venta todavía no
+        tiene documento, o el estado del documento en la DIAN
+        ('aceptado', 'contingencia', 'rechazado', ...).
+
+    Se usa en el POS para impedir editar o anular una venta ya emitida: una vez
+    que el documento electrónico existe y fue entregado al cliente, cambiar el
+    detalle o anular la venta deja el documento mintiendo. La única salida
+    lícita es la Nota Crédito Electrónica.
+    """
+    fila = conn.execute(
+        """
+        SELECT COALESCE(v.dian_estado, 'sin_emitir'),
+               COALESCE(v.numero_dian, ''),
+               COALESCE(v.dian_cuide, '')
+        FROM ventas v WHERE v.id = ?
+        """,
+        (id_venta,),
+    ).fetchone()
+    if not fila:
+        return ('sin_emitir', '', '')
+    return (fila[0] or 'sin_emitir', fila[1] or '', fila[2] or '')
+
+
+def venta_emitida(estado):
+    """True si la venta ya generó un documento electrónico.
+
+    Incluye los estados no definitivos (contingencia, rechazado, firmado): si
+    el documento se generó y se entregó al cliente con su CUIDE, la venta ya no
+    se puede tocar. Solo 'sin_emitir' deja la venta editable.
+    """
+    return str(estado or 'sin_emitir') != 'sin_emitir'
 
 
 # ═════════════════════════════════════════════════════
@@ -240,6 +289,29 @@ def _leer_adquirente(cursor, id_cliente):
     }
 
 
+def _resumen_impuestos(items, clave_tasa):
+    """Agrupa las líneas por tasa de impuesto para el resumen del documento.
+
+    La DIAN exige un `cac:TaxSubtotal` por cada tarifa aplicada, con su propia
+    base gravable y su propio valor. Sin esto, una venta que mezcle 19% y 5% (o
+    que tenga un producto exento) declara una sola tarifa y el documento no
+    cuadra.
+
+    Returns:
+        Lista de dicts: {'tasa': float, 'base': float, 'valor': float}.
+    """
+    grupos = {}
+    for item in items:
+        tasa = float(item.get(clave_tasa) or 0)
+        if tasa <= 0:
+            continue  # exento: no lleva subtotal de impuesto
+        base = redondear(item.get('base') or 0)
+        g = grupos.setdefault(tasa, {'tasa': tasa, 'base': 0.0, 'valor': 0.0})
+        g['base'] = g['base'] + base
+        g['valor'] = g['valor'] + redondear(base * tasa / 100)
+    return [grupos[t] for t in sorted(grupos)]
+
+
 def _leer_items(cursor, id_venta, iva_porcentaje_venta):
     """Líneas del documento a partir del detalle de la venta.
 
@@ -269,11 +341,21 @@ def _leer_items(cursor, id_venta, iva_porcentaje_venta):
 
     items = []
     for cantidad, precio_final, nombre, dimensiones, unidad, codigo_dian, \
-            iva_tasa, _naturaleza in filas:
+            iva_tasa, naturaleza in filas:
         cantidad = float(cantidad or 0)
         precio_final = float(precio_final or 0)
         iva_tasa = float(iva_tasa or 0)
-        if not iva_tasa and iva_porcentaje_venta:
+        naturaleza = str(naturaleza or 'excluido').strip().lower()
+
+        # ── Producto EXENTO ──────────────────────────────────────────────────
+        # Un producto marcado como exento NO lleva IVA aunque el negocio tenga
+        # el IVA global activo. Antes se descartaba la columna `iva_naturaleza`
+        # (`_naturaleza`) y un exento con tasa 0 caia en el "usa la tasa del
+        # negocio": la DIAN rechaza el documento porque declara un impuesto
+        # sobre una operación exenta, y además el cliente pagaria de más.
+        if naturaleza in ('exento', 'excluido_iva', 'no_sujeto'):
+            iva_tasa = 0.0
+        elif not iva_tasa and iva_porcentaje_venta:
             # Producto sin tasa propia: se usa la del negocio (comportamiento del
             # POS, donde el IVA se configura globalmente).
             iva_tasa = float(iva_porcentaje_venta or 0)
@@ -529,9 +611,19 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
     # ── Totales del documento ────────────────────────────────────────────────
     # Se recalculan desde las líneas (base sin IVA) para que el XML cuadre
     # consigo mismo: es la comprobación que hace la DIAN.
+    #
+    # El IVA se redondea POR LÍNEA y luego se suma. Sumar primero y redondear
+    # despues (o calcular sobre floats sin redondear) acumula los decimales de
+    # cada línea y el total se va del valor que la DIAN recalcula: con 7 líneas
+    # de $1.000,33 al 19% la suma en float da $1.330,44 y el correcto es
+    # $1.330,42. La DIAN valida el cuadre del documento linea por linea.
     base_total = redondear(sum(i['base'] for i in items))
-    iva_total = redondear(sum(i['base'] * i['iva_tasa'] / 100 for i in items))
-    inc_total = redondear(sum(i['base'] * i['inc_tasa'] / 100 for i in items))
+    iva_total = redondear(sum(
+        redondear(i['base'] * i['iva_tasa'] / 100) for i in items
+    ))
+    inc_total = redondear(sum(
+        redondear(i['base'] * i['inc_tasa'] / 100) for i in items
+    ))
     total = redondear(base_total + iva_total + inc_total)
 
     fecha = normalizar_fecha(venta[1])
@@ -568,6 +660,8 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
     qr = url_consulta(cuide, fecha=fecha, nit=emisor['nit'], total=total)
 
     # ── XML ──────────────────────────────────────────────────────────────────
+    # Leyenda del software: el anexo tecnico exige que el documento identifique
+    # el software propio que lo genero (nombre, version y empresa).
     documento = {
         'numero': numero, 'fecha': fecha, 'hora': hora, 'cuide': cuide,
         'tipo_ambiente': ajustes['ambiente'], 'moneda': 'COP',
@@ -575,6 +669,8 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
         # Forma de pago y referencia de la venta: los necesita
         # `cac:PaymentMeans` en el XML (el anexo la exige siempre).
         'tipo_pago': venta[10], 'id_venta': id_venta,
+        'nombre_software': NOMBRE_SOFTWARE, 'version_software': VERSION_SOFTWARE,
+        'empresa_software': EMPRESA_SOFTWARE,
     }
     totales = {
         'line_extension_amount': base_total,
@@ -583,8 +679,13 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
         'payable_amount': total,
         'iva_valor': iva_total,
         'inc_valor': inc_total,
-        'iva_tasa': (max((i['iva_tasa'] for i in items), default=0)),
-        'inc_tasa': 0,
+        # OJO: NO se usa `max(iva_tasa)`. Con tarifas mixtas (19% y 5%, o un
+        # producto exento) el resumen de impuestos debe declarar UN
+        # `TaxSubtotal` por tarifa, cada uno con SU base y SU valor; declarar
+        # solo la mayor hace que la DIAN no cuadre el documento (la base del
+        # subtotal no corresponde al valor del impuesto).
+        'impuestos_iva': _resumen_impuestos(items, 'iva_tasa'),
+        'impuestos_inc': _resumen_impuestos(items, 'inc_tasa'),
     }
     extras = {
         'software_id': ajustes['software_id'],

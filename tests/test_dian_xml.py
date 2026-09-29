@@ -24,6 +24,7 @@ RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, RAIZ)
 
 from ferreteria.services import dian_xml  # noqa: E402
+from ferreteria.services import dian_emision  # noqa: E402
 from ferreteria.services.dian_pos import calcular_cuide  # noqa: E402
 
 NS_CAC = dian_xml.NS_CAC
@@ -63,12 +64,15 @@ def _items():
     }]
 
 
-def _totales():
+def _totales(impuestos_iva=None):
+    """Totales del documento. Por defecto, un unico grupo de IVA al 19%."""
+    if impuestos_iva is None:
+        impuestos_iva = [{'tasa': 19.0, 'base': 100000.0, 'valor': 19000.0}]
     return {
         'line_extension_amount': 100000.0, 'tax_exclusive_amount': 100000.0,
         'tax_inclusive_amount': 119000.0, 'payable_amount': 119000.0,
-        'iva_valor': 19000.0, 'inc_valor': 0, 'iva_tasa': 19.0,
-        'inc_tasa': 0,
+        'iva_valor': sum(g['valor'] for g in impuestos_iva),
+        'inc_valor': 0, 'impuestos_iva': impuestos_iva, 'impuestos_inc': [],
     }
 
 
@@ -251,6 +255,120 @@ def test_linea_declare_impuestos():
     assert linea.find(f'{{{NS_CBC}}}LineExtensionAmount') is not None
     assert linea.find(f'{{{NS_CAC}}}TaxTotal') is not None
     assert linea.find(f'{{{NS_CAC}}}Price/{{{NS_CBC}}}PriceAmount') is not None
+
+
+# ── Un TaxSubtotal por tarifa (la DIAN no acepta un unico con max()) ─────────
+def test_cada_tarifa_declara_su_propio_subtotal():
+    """Con 19% y 5% la DIAN exige un TaxSubtotal por tarifa, con SU base.
+
+    Antes se declaraba uno solo con la tasa mayor (max), y la base no
+    correspondía al valor del impuesto: el documento no cuadraba.
+    """
+    grupos = [
+        {'tasa': 19.0, 'base': 100000.0, 'valor': 19000.0},
+        {'tasa': 5.0, 'base': 48002.0, 'valor': 2400.10},
+    ]
+    raiz = dian_xml.construir_invoice(
+        _documento(), _emisor(), _adquirente(), _items(),
+        _totales(impuestos_iva=grupos))
+
+    tax_total = raiz.find(f'{{{NS_CAC}}}TaxTotal')
+    subtotales = tax_total.findall(f'{{{NS_CAC}}}TaxSubtotal')
+    assert len(subtotales) == 2, (
+        f'se esperaban 2 TaxSubtotal (19% y 5%) y hay {len(subtotales)}'
+    )
+
+    # Cada subtotal debe declarar su propia tarifa y su base.
+    tarifas = set()
+    for sub in subtotales:
+        pct = sub.find(f'{{{NS_CAC}}}TaxCategory/{{{NS_CBC}}}Percent').text
+        base = float(sub.find(f'{{{NS_CBC}}}TaxableAmount').text)
+        valor = float(sub.find(f'{{{NS_CBC}}}TaxAmount').text)
+        tarifa = float(pct)
+        tarifas.add(tarifa)
+        # La base debe corresponder a la tarifa declarada.
+        esperado = round(base * tarifa / 100, 2)
+        assert abs(esperado - valor) <= 0.01, (
+            f'la base {base} al {tarifa}% da {esperado}, no {valor}'
+        )
+    assert tarifas == {19.0, 5.0}, tarifas
+
+
+def test_un_producto_exento_no_declara_subtotal():
+    """Un producto exento (0%) no genera TaxSubtotal de IVA."""
+    raiz = _factura()
+    tax_total = raiz.find(f'{{{NS_CAC}}}TaxTotal')
+    for sub in tax_total.findall(f'{{{NS_CAC}}}TaxSubtotal'):
+        pct = float(sub.find(f'{{{NS_CAC}}}TaxCategory/{{{NS_CBC}}}Percent').text)
+        assert pct > 0, 'se declaro un subtotal de impuesto para una tasa 0%'
+
+
+# ── Producto exento: NO puede recibir el IVA global ──────────────────────────
+def test_leer_items_respeta_el_producto_exento():
+    """Un producto `iva_naturaleza='exento'` queda con tasa 0 aunque el negocio
+    tenga IVA global activo.
+
+    BUG QUE ESTA PRUEBA FIXA: la columna `iva_naturaleza` se leia y se
+    descartaba, asi que un exento con tasa 0 caia en la regla "usa la tasa del
+    negocio" y quedaba gravado al 19%. La DIAN rechaza declarar impuesto sobre
+    una operacion exenta, y el cliente pagaria de mas.
+    """
+    import sqlite3 as _s
+    from ferreteria import config as _cfg
+
+    conn = _s.connect(_cfg.DB_NAME)
+    cur = conn.cursor()
+    # Producto exento: tasa 0 y naturaleza 'exento'.
+    cur.execute(
+        'INSERT INTO productos (nombre, precio_venta, precio_costo,'
+        ' stock_actual, iva_tasa, iva_naturaleza, unidad_medida, activo)'
+        " VALUES ('Libro exento', 30000, 24000, 10, 0, 'exento', '94', 1)")
+    cur.execute(
+        'INSERT INTO detalle_ventas (id_venta, id_producto, cantidad,'
+        ' precio_unitario, subtotal)'
+        ' SELECT (SELECT MAX(id) FROM ventas), id, 1, 30000, 30000'
+        ' FROM productos WHERE nombre=?', ('Libro exento',))
+    conn.commit()
+
+    id_venta = cur.execute('SELECT MAX(id) FROM ventas').fetchone()[0]
+    items = dian_emision._leer_items(cur, id_venta, 19.0)
+    conn.close()
+
+    exento = [i for i in items if 'exento' in i['descripcion'].lower()]
+    assert exento, 'no se encontro la linea del producto exento'
+    assert exento[0]['iva_tasa'] == 0.0, (
+        f"el producto exento quedo gravado al {exento[0]['iva_tasa']}%"
+    )
+    # Y su base debe ser el precio completo (sin desagregar).
+    assert exento[0]['precio_unitario'] == 30000.0
+
+
+def test_un_producto_gravado_sigue_usando_su_tasa():
+    """El caso normal: un producto excluido al 19% mantiene su tasa."""
+    import sqlite3 as _s
+    from ferreteria import config as _cfg
+
+    conn = _s.connect(_cfg.DB_NAME)
+    cur = conn.cursor()
+    cur.execute(
+        'INSERT INTO productos (nombre, precio_venta, precio_costo,'
+        ' stock_actual, iva_tasa, iva_naturaleza, unidad_medida, activo)'
+        " VALUES ('Cemento grav', 59500, 47600, 10, 19, 'excluido', '94', 1)")
+    cur.execute(
+        'INSERT INTO detalle_ventas (id_venta, id_producto, cantidad,'
+        ' precio_unitario, subtotal)'
+        ' SELECT (SELECT MAX(id) FROM ventas), id, 1, 59500, 59500'
+        ' FROM productos WHERE nombre=?', ('Cemento grav',))
+    conn.commit()
+
+    id_venta = cur.execute('SELECT MAX(id) FROM ventas').fetchone()[0]
+    items = dian_emision._leer_items(cur, id_venta, 5.0)
+    conn.close()
+
+    grav = [i for i in items if 'Cemento grav' in i['descripcion']]
+    assert grav[0]['iva_tasa'] == 19.0
+    # 59500 con IVA incluido -> base 50000.
+    assert grav[0]['precio_unitario'] == 50000.0
 
 
 # ── Serialización ────────────────────────────────────────────────────────────

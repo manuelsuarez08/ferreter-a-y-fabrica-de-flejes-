@@ -12,6 +12,10 @@ from ..security import admin_required, login_required
 from ..services.auditoria import registrar_auditoria
 from ..services.ordenes_fleje import registrar_orden_fleje_desde_venta
 from ..services.dian import redondear_pesos
+# Se importa el modulo (no sus funciones) porque `estado_fiscal_venta` y
+# `venta_emitida` se usan para BLOQUEAR la edicion y la anulacion de ventas
+# que ya tienen documento electronico.
+from ..services import dian_emision
 
 bp = Blueprint('ventas', __name__)
 
@@ -659,6 +663,10 @@ def get_factura_detalle(id_venta):
             "prefijo_resolucion": venta[27] or "",
             "rango_desde": venta[28] or 0,
             "rango_hasta": venta[29] or 0,
+            # Leyenda del software de facturación: se imprime en la tirilla.
+            "nombre_software": dian_emision.NOMBRE_SOFTWARE,
+            "version_software": dian_emision.VERSION_SOFTWARE,
+            "empresa_software": dian_emision.EMPRESA_SOFTWARE,
         },
         "negocio": {
             "nombre": (negocio[0] if negocio else "Ferretería y Fábrica de Flejes"),
@@ -695,6 +703,28 @@ def anular_venta(id_venta):
         conn.close()
         return jsonify({"error": "No se puede anular una venta de crédito que ya tiene abonos"}), 400
 
+    # ── BLOQUEO FISCAL ──────────────────────────────────────────────────────
+    # Una venta ya emitida NO se puede anular marcando `anulada`: el documento
+    # electrónico sigue siendo valido en el catalogo de la DIAN y el cliente ya
+    # lo tiene con su CUIDE. La unica salida legal es la Nota Credito
+    # Electronica, que la DIAN relaciona con el documento original.
+    estado, numero, cuide = dian_emision.estado_fiscal_venta(conn, id_venta)
+    if dian_emision.venta_emitida(estado):
+        conn.close()
+        return jsonify({
+            "error": (
+                f"La venta #{id_venta} ya tiene documento electrónico "
+                f"({numero or 'sin número'}, estado {estado}) y no se puede anular "
+                "de esta forma. La DIAN exige emitir una NOTA CRÉDITO "
+                "ELECTRÓNICA vinculada al documento original; anular la venta "
+                "dejaría un documento válido por el total completo."
+            ),
+            "requiere_nota_credito": True,
+            "numero_documento": numero,
+            "cuide": cuide,
+            "estado": estado,
+        }), 409
+
     detalles = conn.execute(
         "SELECT id_producto, cantidad FROM detalle_ventas WHERE id_venta = ?", (id_venta,)
     ).fetchall()
@@ -729,6 +759,27 @@ def editar_cliente_factura(id_venta):
         conn.close()
         return jsonify({"error": "Venta no encontrada"}), 404
     id_cliente = res[0]
+
+    # ── BLOQUEO FISCAL ──────────────────────────────────────────────────────
+    # El nombre, el NIT y la direccion son los datos del ADQUIRENTE que
+    # quedaron impresos en el documento electronico. Cambiarlos despues de
+    # emitir dejaria el documento con unos datos y la venta con otros, y la
+    # DIAN rechaza esa inconsistencia. Corregir el adquirente de un documento
+    # emitido tambien exige Nota Credito.
+    _estado, _numero, _ = dian_emision.estado_fiscal_venta(conn, id_venta)
+    if dian_emision.venta_emitida(_estado):
+        conn.close()
+        return jsonify({
+            "error": (
+                f"La venta #{id_venta} ya fue emitida a la DIAN "
+                f"({_numero or 'sin número'}). No se pueden cambiar los datos del "
+                "adquirente (nombre, NIT, dirección) porque quedaron impresos en "
+                "el documento electrónico firmado."
+            ),
+            "requiere_nota_credito": True,
+            "numero_documento": _numero,
+            "estado": _estado,
+        }), 409
 
     conn.execute(
         "UPDATE clientes SET nombre = ?, cedula_nit = ?, telefono = ?, direccion = ?, "
@@ -769,6 +820,25 @@ def editar_detalle_factura(id_venta):
     if venta[0]:
         conn.close()
         return jsonify({"error": "No se puede editar una venta anulada"}), 400
+
+    # ── BLOQUEO FISCAL ──────────────────────────────────────────────────────
+    # Si la venta ya se emitió, cambiar cantidades o precios haria que la venta
+    # y su documento electrónico dejaran de cuadrar: el PDF/XML firmado dice una
+    # cosa y el POS otra. La DIAN rechaza esa inconsistencia.
+    _estado, _numero, _cuide = dian_emision.estado_fiscal_venta(conn, id_venta)
+    if dian_emision.venta_emitida(_estado):
+        conn.close()
+        return jsonify({
+            "error": (
+                f"La venta #{id_venta} ya fue emitida a la DIAN ({_numero or 'sin número'}). "
+                "No se pueden modificar precios ni cantidades: el documento "
+                "electrónico firmado ya no coincidiría con la venta. Para "
+                "corregirla hay que emitir una NOTA CRÉDITO ELECTRÓNICA."
+            ),
+            "requiere_nota_credito": True,
+            "numero_documento": _numero,
+            "estado": _estado,
+        }), 409
     # Detalle anterior (para ajustar stock y detectar cambios).
     anteriores = {
         r[0]: r[1] for r in cursor.execute(
@@ -824,8 +894,20 @@ def editar_detalle_factura(id_venta):
         )
 
     # Recalcula total con el IVA vigente del negocio.
+    #
+    # OJO: se usa `redondear_pesos` (Decimal con ROUND_HALF_UP) y NO el
+    # `round()` nativo. `round()` en Python 3 hace "banker's rounding":
+    # round(0.5)=0 y round(1.5)=2, que es un redondeo distinto al que exige la
+    # DIAN (desempate siempre al alza). Con el IVA al 19%, dos centavos de
+    # diferencia aquí lo descuadraban con el valor que había calculado la
+    # creación de la venta, y el documento electrónico diría una cosa y la venta
+    # otra.
     iva_porcentaje, iva_activo = _leer_config_iva(cursor)
-    iva_valor = round(subtotal_venta * iva_porcentaje / 100) if (iva_activo and iva_porcentaje > 0) else 0
+    if iva_activo and iva_porcentaje > 0:
+        iva_valor = redondear_pesos(subtotal_venta * iva_porcentaje / 100)
+    else:
+        iva_valor = 0
+    subtotal_venta = redondear_pesos(subtotal_venta)
     total_venta = subtotal_venta + iva_valor
     # Si era a credito, el saldo sigue al nuevo total (menos los abonos hechos).
     tipo_pago = cursor.execute("SELECT tipo_pago FROM ventas WHERE id = ?", (id_venta,)).fetchone()[0]
