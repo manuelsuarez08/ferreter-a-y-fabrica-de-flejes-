@@ -143,6 +143,13 @@ ESTADOS_PEDIDO = ('pendiente', 'alistando', 'listo', 'en_camino', 'entregado', '
 # Estados válidos de una cotización.
 ESTADOS_COTIZACION = ('Pendiente', 'Aprobada', 'Vencida', 'Anulada')
 
+# Cliente por defecto del POS: el "consumidor final" genérico de mostrador. Es el
+# id 1 que siembra `db._sembrar_datos_por_defecto`. El formulario de venta arranca
+# siempre aquí para que el cajero no tenga que buscar a alguien por cada venta
+# de mostrador, y lo cambia solo cuando el cliente sí está registrado.
+CLIENTE_MOSTRADOR_ID = 1
+NOMBRE_CLIENTE_MOSTRADOR = 'Cliente Mostrador (General)'
+
 # Máquina de estados de pedidos validada por rol (patrón State).
 TRANSICIONES_PEDIDO = {
     'pendiente': {'admin': ['alistando', 'cancelado'], 'empleado': ['cancelado'], 'bodega': ['alistando', 'cancelado']},

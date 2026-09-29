@@ -465,6 +465,10 @@ def _aplicar_migraciones(cursor):
         ('ventas', 'dian_cuide', 'TEXT'),
         ('ventas', 'dian_descripcion', 'TEXT'),
         ('ventas', 'dian_fecha_emision', 'TEXT'),
+        # Notas internas de la venta: estado de formaletas, entregas parciales,
+        # acuerdos con el cliente, etc. No viaja al XML (allí van los conceptos
+        # DIAN), es el respaldo interno del mostrador y de la facturación.
+        ('ventas', 'observaciones', 'TEXT'),
     ):
         migrar_columna(cursor, tabla, columna, definicion)
 

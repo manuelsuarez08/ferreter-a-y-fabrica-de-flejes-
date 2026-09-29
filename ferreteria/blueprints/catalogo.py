@@ -99,6 +99,42 @@ def handle_clientes():
         return jsonify({"error": "La cédula o NIT ya está registrado"}), 400
 
 
+@bp.route('/api/clientes/buscar', methods=['GET'])
+@login_required
+def buscar_clientes():
+    """Busqueda incremental de clientes para el autocompletado del POS.
+
+    Devuelve como maximo `limite` clientes que coincidan con `q` en nombre,
+    cedula/NIT o telefono. Se consulta en el servidor (no se baja el catalogo
+    completo) porque el autocomplete escribe en cada tecla.
+    """
+    conn = get_db()
+    q = str(request.args.get('q') or '').strip()
+    limite = min(max(int(request.args.get('limite', 20) or 20), 1), 100)
+    if not q:
+        # Sin texto se devuelven los primeros clientes, para que el desplegable
+        # tenga contenido antes de que el cajero escriba nada.
+        filas = conn.execute(
+            "SELECT id, nombre, cedula_nit, telefono, direccion FROM clientes "
+            "ORDER BY id DESC LIMIT ?", (limite,)
+        ).fetchall()
+    else:
+        patron = f"%{q}%"
+        filas = conn.execute(
+            "SELECT id, nombre, cedula_nit, telefono, direccion FROM clientes "
+            "WHERE nombre LIKE ? OR COALESCE(cedula_nit, '') LIKE ? "
+            "OR COALESCE(telefono, '') LIKE ? "
+            # El cliente mostrador solo aparece si el cajero lo busca a mano.
+            "ORDER BY CASE WHEN id = 1 THEN 1 ELSE 0 END, nombre COLLATE NOCASE LIMIT ?",
+            (patron, patron, patron, limite),
+        ).fetchall()
+    conn.close()
+    return jsonify([{
+        "id": f[0], "nombre": f[1] or "", "cedula_nit": f[2] or "",
+        "telefono": f[3] or "", "direccion": f[4] or "",
+    } for f in filas])
+
+
 @bp.route('/api/clientes/<int:id_cliente>', methods=['PUT'])
 @login_required
 def actualizar_cliente(id_cliente):

@@ -42,7 +42,8 @@ def _listar_ventas():
                c.cedula_nit, c.telefono, v.id_cliente,
                COALESCE(v.direccion_cliente, c.direccion, ''), v.anulada, v.motivo_anulacion,
                v.tipo_entrega, v.numero_pedido,
-               COALESCE(v.numero_dian, ''), COALESCE(v.dian_estado, 'sin_emitir')
+               COALESCE(v.numero_dian, ''), COALESCE(v.dian_estado, 'sin_emitir'),
+               COALESCE(v.observaciones, '')
         FROM ventas v
         JOIN clientes c ON v.id_cliente = c.id
         LEFT JOIN detalle_ventas dv ON v.id = dv.id_venta
@@ -64,6 +65,7 @@ def _listar_ventas():
         "tipo_entrega": r[13] or "entrega_inmediata", "numero_pedido": r[14],
         # Estado fiscal del documento electronico (para el badge del historial).
         "numero_dian": r[15] or "", "dian_estado": r[16] or "sin_emitir",
+        "observaciones": r[17] or "",
     } for r in rows])
 
 
@@ -189,6 +191,9 @@ def _registrar_venta():
         from datetime import timedelta
         fecha_vencimiento = (now + timedelta(days=plazo_dias)).strftime('%Y-%m-%d')
     tipo_operacion = str(data.get('tipo_operacion') or '10').strip() or '10'
+    # Notas internas del mostrador: formaletas, entregas parciales, acuerdos. Se
+    # guardan tal cual y salen en la factura impresa y en el historial.
+    observaciones = str(data.get('observaciones') or '').strip()
 
     saldo_pendiente = total_neto if tipo_pago == 'credito' else 0
 
@@ -209,17 +214,18 @@ def _registrar_venta():
                                 tipo_pago, direccion_cliente, tipo_entrega, numero_pedido,
                                 subtotal_venta, iva_valor, iva_porcentaje,
                                 retencion_fuente, retencion_ica, total_neto, plazo_dias,
-                                fecha_vencimiento, tipo_operacion)
+                                fecha_vencimiento, tipo_operacion, observaciones)
             VALUES (:cliente, :dia, :hora, :total, :saldo, :pago, :direccion, :entrega, :pedido,
                     :subtotal, :iva, :iva_pct, :ret_fuente, :ret_ica, :neto,
-                    :plazo, :vencimiento, :tipo_op)
+                    :plazo, :vencimiento, :tipo_op, :observaciones)
             """,
             {'cliente': id_cliente, 'dia': now.strftime('%Y-%m-%d'), 'hora': now.strftime('%H:%M:%S'),
              'total': total_venta, 'saldo': saldo_pendiente, 'pago': tipo_pago,
              'direccion': direccion_cliente, 'entrega': tipo_entrega, 'pedido': numero_pedido,
              'subtotal': subtotal_venta, 'iva': iva_valor, 'iva_pct': iva_porcentaje,
              'ret_fuente': retencion_fuente, 'ret_ica': retencion_ica, 'neto': total_neto,
-             'plazo': plazo_dias, 'vencimiento': fecha_vencimiento, 'tipo_op': tipo_operacion},
+             'plazo': plazo_dias, 'vencimiento': fecha_vencimiento, 'tipo_op': tipo_operacion,
+             'observaciones': observaciones},
         )
         id_venta = cursor.lastrowid
 
@@ -605,8 +611,9 @@ def get_factura_detalle(id_venta):
                COALESCE(cfg.numero_resolucion, ''),
                COALESCE(cfg.prefijo, ''),
                COALESCE(cfg.rango_desde, 0),
-               COALESCE(cfg.rango_hasta, 0)
-        FROM ventas v JOIN clientes c ON v.id_cliente = c.id
+                       COALESCE(cfg.rango_hasta, 0),
+                       COALESCE(v.observaciones, '')
+               FROM ventas v JOIN clientes c ON v.id_cliente = c.id
         LEFT JOIN documentos_electronicos d ON d.id_venta = v.id
         CROSS JOIN configuracion cfg
         WHERE v.id = ?
@@ -647,6 +654,7 @@ def get_factura_detalle(id_venta):
         "subtotal_venta": venta[17] or 0,
         "iva_valor": venta[18] or 0,
         "iva_porcentaje": venta[19] or 0,
+        "observaciones": venta[30] or "",
         # ── Documento Equivalente Electronico POS (DIAN) ─────────────────
         # Estado fiscal de la venta, para que la tirilla pueda imprimir el
         # CUIDE y el QR sin una segunda consulta al servidor.
@@ -1015,9 +1023,73 @@ def registrar_abono():
     }), 201
 
 
+@bp.route('/api/creditos/<int:id_cliente>', methods=['GET'])
+@login_required
+def detalle_credito_cliente(id_cliente):
+    """Ficha completa de la deuda de un cliente.
+
+    Devuelve la lista de facturas que le quedan por pagar (con su saldo
+    actual), el total adeudado y el total abonado, para que el modulo de
+    creditos muestre la factura completa y no solo una cifra.
+    """
+    conn = get_db()
+    cliente = conn.execute(
+        "SELECT nombre, cedula_nit, telefono, direccion FROM clientes WHERE id = ?", (id_cliente,)
+    ).fetchone()
+    if not cliente:
+        conn.close()
+        return jsonify({"error": "Cliente no encontrado"}), 404
+
+    facturas = conn.execute(
+        """
+        SELECT v.id, v.fecha_dia, v.hora, v.total_venta,
+               COALESCE(v.saldo_pendiente, 0), v.tipo_pago,
+               COALESCE(v.direccion_cliente, c.direccion, ''),
+               COALESCE(v.observaciones, ''),
+               COALESCE(v.fecha_vencimiento, ''),
+               COALESCE((SELECT SUM(dv.cantidad) FROM detalle_ventas dv
+                          WHERE dv.id_venta = v.id), 0) AS unidades,
+               COALESCE((SELECT GROUP_CONCAT(p.nombre || ' (x' || dv.cantidad || ')', ', ')
+                          FROM detalle_ventas dv
+                          JOIN productos p ON p.id = dv.id_producto
+                          WHERE dv.id_venta = v.id), '') AS productos
+        FROM ventas v JOIN clientes c ON c.id = v.id_cliente
+        WHERE v.id_cliente = ? AND COALESCE(v.anulada, 0) = 0
+        ORDER BY v.id DESC
+        """, (id_cliente,)
+    ).fetchall()
+
+    total_facturado = sum(f[3] or 0 for f in facturas)
+    total_abonado = conn.execute(
+        "SELECT COALESCE(SUM(monto), 0) FROM abonos WHERE id_cliente = ?", (id_cliente,)
+    ).fetchone()[0] or 0
+    conn.close()
+
+    return jsonify({
+        "cliente": {"id": id_cliente, "nombre": cliente[0], "cedula_nit": cliente[1] or "",
+                    "telefono": cliente[2] or "", "direccion": cliente[3] or ""},
+        "facturas": [{
+            "id": f[0], "fecha_dia": f[1], "hora": f[2], "total_venta": f[3] or 0,
+            "saldo_pendiente": f[4] or 0, "tipo_pago": f[5] or "",
+            "direccion": f[6] or "", "observaciones": f[7] or "",
+            "fecha_vencimiento": f[8] or "", "unidades": f[9] or 0,
+            "productos": f[10] or "", "pagada": (f[4] or 0) <= 0,
+        } for f in facturas],
+        "total_facturado": total_facturado,
+        "total_abonado": total_abonado,
+        "deuda_total": sum(f[4] or 0 for f in facturas),
+    })
+
+
 @bp.route('/api/abonos/<int:id_cliente>', methods=['GET'])
 @login_required
 def historial_abonos(id_cliente):
+    """Historial de abonos del cliente, filtrable por dia, mes o anio.
+
+    Acepta `?periodo=dia|mes|anio` y, segun el periodo, `fecha` (YYYY-MM-DD),
+    `mes` (YYYY-MM) o `anio` (YYYY). Sin parametros devuelve todo el historial,
+    como antes.
+    """
     conn = get_db()
     cursor = conn.cursor()
     cliente = cursor.execute(
@@ -1027,30 +1099,61 @@ def historial_abonos(id_cliente):
         conn.close()
         return jsonify({"error": "Cliente no encontrado"}), 404
 
+    periodo = str(request.args.get('periodo') or '').strip().lower()
+    where = ""
+    params = []
+    if periodo == 'dia':
+        fecha = str(request.args.get('fecha') or '').strip()
+        if fecha:
+            where = " AND substr(fecha, 1, 10) = ?"
+            params.append(fecha)
+    elif periodo == 'mes':
+        mes = str(request.args.get('mes') or '').strip()
+        if mes:
+            where = " AND substr(fecha, 1, 7) = ?"
+            params.append(mes)
+    elif periodo == 'anio':
+        anio = str(request.args.get('anio') or '').strip()
+        if anio:
+            where = " AND substr(fecha, 1, 4) = ?"
+            params.append(anio)
+
     deuda_original = cursor.execute(
         "SELECT COALESCE(SUM(total_venta), 0) FROM ventas WHERE id_cliente = ? AND tipo_pago = 'credito'",
         (id_cliente,),
     ).fetchone()[0] or 0
+    # El saldo acumulado se calcula sobre el historial COMPLETO (no filtrado): si
+    # no, al ver solo un mes las cifras de "deuda anterior" y "saldo restante"
+    # no cuadran con la cartera real del cliente.
     abonos = cursor.execute(
         "SELECT id, monto, fecha FROM abonos WHERE id_cliente = ? ORDER BY id ASC", (id_cliente,)
     ).fetchall()
+    abonos_filtrados = cursor.execute(
+        f"SELECT id, monto, fecha FROM abonos WHERE id_cliente = ?{where} ORDER BY id ASC",
+        [id_cliente] + params,
+    ).fetchall()
     conn.close()
 
+    saldo_por_id = {}
     historial = []
     total_abonado = 0
     for id_abono, monto, fecha in abonos:
         deuda_antes = max(deuda_original - total_abonado, 0)
         total_abonado += monto
-        historial.append({
+        saldo_por_id[id_abono] = {
             "id": id_abono, "fecha": fecha, "cliente": cliente[0],
             "cedula_nit": cliente[1] or "", "telefono": cliente[2] or "",
             "direccion": cliente[3] or "", "deuda_anterior": deuda_antes,
             "monto": monto, "saldo_pendiente": max(deuda_original - total_abonado, 0),
-        })
+        }
+    historial = [saldo_por_id[i] for i, _, _ in abonos_filtrados]
 
     return jsonify({
         "cliente": {"id": id_cliente, "nombre": cliente[0], "cedula_nit": cliente[1] or "",
                     "telefono": cliente[2] or "", "direccion": cliente[3] or ""},
+        "periodo": periodo or "todo",
+        "total_abonado": total_abonado,
+        "saldo_pendiente": max(deuda_original - total_abonado, 0),
         "abonos": historial,
     })
 

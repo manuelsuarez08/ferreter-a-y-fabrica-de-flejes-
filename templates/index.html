@@ -125,6 +125,23 @@
       border-top: 1px dashed #000;
       margin: 6px 0;
     }
+    /* Notas internas del mostrador (formaletas, entregas parciales, acuerdos).
+       En la tirilla térmica se imprimen con el mismo cuerpo del resto del
+       recibo; el bloque se oculta solo si el cajero no escribió nada. */
+    .recibo-termico .recibo-observaciones {
+      font-size: 0.92em;
+      line-height: 1.3;
+    }
+    /* Panel fijo del POS: la columna del carrito queda siempre visible mientras
+       el cajero recorre los productos, para no tener que bajar a mirar el total. */
+    #tabla-carrito-body tr td {
+      vertical-align: middle;
+    }
+    #tabla-carrito-body tfoot, #tabla-carrito-body thead th {
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
     .recibo-termico h1,
     .recibo-termico h2,
     .recibo-termico h3,
@@ -381,7 +398,16 @@
           <div class="row g-3">
             <div class="col-md-5">
               <label for="select-cliente" class="form-label fw-bold">Cliente:</label>
-              <select id="select-cliente" placeholder="Buscar cliente..."></select>
+              <div class="input-group">
+                <select id="select-cliente" placeholder="Buscar cliente por nombre, cédula o teléfono..."></select>
+                <button type="button" class="btn btn-outline-primary fw-bold" id="btn-cliente-nuevo"
+                        title="Registrar un cliente sin salir de esta venta"
+                        onclick="abrirModalClienteRapido()">+ Cliente</button>
+              </div>
+              <small class="text-muted" id="nota-cliente-mostrador">
+                Por defecto se factura a <strong>Cliente Mostrador (General)</strong>.
+                Busque al cliente si ya está registrado.
+              </small>
             </div>
             <div class="col-md-4">
               <label for="select-tipo-pago" class="form-label fw-bold">Tipo de Pago:</label>
@@ -395,6 +421,15 @@
             <div class="col-md-3" id="bloque-direccion-venta">
               <label for="input-direccion-venta" class="form-label fw-bold">Dirección de Entrega:</label>
               <input type="text" id="input-direccion-venta" class="form-control" placeholder="Dirección de envío/obra" spellcheck="true">
+            </div>
+            <div class="col-12">
+              <label for="input-observaciones-venta" class="form-label fw-bold">
+                Observaciones / Notas
+              </label>
+              <textarea id="input-observaciones-venta" class="form-control" rows="2"
+                        placeholder="Ej: cliente entrega formaleta la próxima semana, entrega parcial, agreed a pagar el viernes…"
+                        spellcheck="true"></textarea>
+              <small class="text-muted">Quedan registradas en la venta y se imprimen en la factura. No viajan al XML de la DIAN.</small>
             </div>
           </div>
 
@@ -512,30 +547,62 @@
           </div>
         </div>
 
-        <div class="table-responsive mb-3">
-          <table class="table table-bordered align-middle">
-            <thead class="table-light">
-              <tr>
-                <th>Producto</th>
-                <th>Precio Unitario <span class="text-muted small">(editable)</span></th>
-                <th>Cantidad</th>
-                <th>Subtotal</th>
-                <th style="width: 80px;">Acción</th>
-              </tr>
-            </thead>
-            <tbody id="tabla-carrito-body">
-              <tr><td colspan="5" class="text-center text-muted">No hay productos agregados a la venta.</td></tr>
-            </tbody>
-          </table>
-        </div>
-
-        <div class="d-flex justify-content-between align-items-center bg-light p-3 rounded border">
-          <div>
-            <div class="text-muted small">Subtotal: <span id="subtotal-venta-texto">$ 0 COP</span></div>
-            <div class="text-muted small" id="fila-iva-pos">IVA <span id="iva-porcentaje-pos"></span>: <span id="iva-venta-texto">$ 0 COP</span></div>
-            <h4 class="m-0">Total Venta: <span id="total-venta-texto" class="text-primary fw-bold">$ 0 COP</span></h4>
+        <!-- ══ Rediseño del POS: panel divided ═══════════════════════════════
+             A la IZQUIERDA queda la captura (buscador, escaner, flejes); a la
+             DERECHA, en una columna FIJA (sticky), la lista de productos ya
+             agregados con sus totales. Así el cajero ve en todo momento qué
+             lleva en la factura antes de finalizarla, sin tener que hacer
+             scroll hasta el final de la página. -->
+        <div class="row g-3">
+          <div class="col-lg-7">
+            <div class="card p-3 h-100 bg-light border">
+              <h6 class="fw-bold mb-2">🧾 Armando la venta</h6>
+              <p class="text-muted small mb-2">
+                Escanee el código de barras o busque el producto arriba. Cada vez que
+                agregue un producto aparecerá a la derecha, con su subtotal y el total
+                acumulado de la factura.
+              </p>
+              <ul class="text-muted small mb-0">
+                <li>El precio de cada renglón se puede editar aquí mismo.</li>
+                <li>El total se recalcula con el IVA configurado del negocio.</li>
+                <li>Use <strong>+ Cliente</strong> si el comprador no está registrado.</li>
+                <li>Las <strong>Observaciones</strong> quedan impresas en la factura.</li>
+              </ul>
+            </div>
           </div>
-          <button class="btn btn-primary btn-lg fw-bold" onclick="procesarVenta()">💾 Registrar / Facturar Venta</button>
+
+          <div class="col-lg-5">
+            <div class="card border-primary shadow-sm position-sticky" style="top: 80px;">
+              <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+                <span class="fw-bold">🛒 Productos en esta factura</span>
+                <span class="badge bg-light text-primary" id="contador-carrito">0 ítems</span>
+              </div>
+              <div class="card-body p-0">
+                <div class="table-responsive" style="max-height: 45vh; overflow-y: auto;">
+                  <table class="table table-sm table-bordered align-middle mb-0">
+                    <thead class="table-light" style="position: sticky; top: 0; z-index: 1;">
+                      <tr>
+                        <th>Producto</th>
+                        <th>Precio Unitario <span class="text-muted small">(editable)</span></th>
+                        <th>Cantidad</th>
+                        <th>Subtotal</th>
+                        <th style="width: 60px;">Acción</th>
+                      </tr>
+                    </thead>
+                    <tbody id="tabla-carrito-body">
+                      <tr><td colspan="5" class="text-center text-muted">No hay productos agregados a la venta.</td></tr>
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+              <div class="card-footer bg-white">
+                <div class="text-muted small">Subtotal: <span id="subtotal-venta-texto">$ 0 COP</span></div>
+                <div class="text-muted small" id="fila-iva-pos">IVA <span id="iva-porcentaje-pos"></span>: <span id="iva-venta-texto">$ 0 COP</span></div>
+                <h4 class="m-0 mb-3">Total Venta: <span id="total-venta-texto" class="text-primary fw-bold">$ 0 COP</span></h4>
+                <button class="btn btn-primary btn-lg fw-bold w-100" onclick="procesarVenta()">💾 Registrar / Facturar Venta</button>
+              </div>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -922,7 +989,7 @@
           <form id="form-abono" onsubmit="registrarAbono(event)" class="row g-3">
             <div class="col-md-5">
               <label class="form-label fw-bold">Cliente en Cartera</label>
-              <select id="select-credito-cliente" class="form-select" onchange="cargarHistorialAbonos(this.value)" required></select>
+              <select id="select-credito-cliente" class="form-select" onchange="seleccionarClienteCredito(this.value)" required></select>
             </div>
             <div class="col-md-4">
               <label class="form-label fw-bold">Monto del Abono ($)</label>
@@ -936,6 +1003,32 @@
 
         <div class="card p-3 mb-4 border">
           <h5 class="fw-bold mb-3">Historial de Abonos del Cliente Seleccionado</h5>
+          <div class="row g-2 align-items-end mb-3">
+            <div class="col-auto">
+              <label class="form-label fw-bold mb-0" for="abono-filtro-periodo">Ver abonos por:</label>
+            </div>
+            <div class="col-auto">
+              <select id="abono-filtro-periodo" class="form-select" onchange="cambiarFiltroPeriodoAbonos()">
+                <option value="">Todo el historial</option>
+                <option value="dia">Día</option>
+                <option value="mes">Mes</option>
+                <option value="anio">Año</option>
+              </select>
+            </div>
+            <div class="col-auto" id="abono-filtro-dia-wrap" style="display:none;">
+              <input type="date" id="abono-filtro-dia" class="form-control" onchange="cargarHistorialAbonos()">
+            </div>
+            <div class="col-auto" id="abono-filtro-mes-wrap" style="display:none;">
+              <input type="month" id="abono-filtro-mes" class="form-control" onchange="cargarHistorialAbonos()">
+            </div>
+            <div class="col-auto" id="abono-filtro-anio-wrap" style="display:none;">
+              <select id="abono-filtro-anio" class="form-select" onchange="cargarHistorialAbonos()"></select>
+            </div>
+            <div class="col-auto">
+              <button type="button" class="btn btn-outline-secondary" onclick="limpiarFiltroAbonos()">Limpiar filtro</button>
+            </div>
+            <div class="col text-muted small text-end" id="abono-resumen-saldo"></div>
+          </div>
           <div class="table-responsive">
             <table class="table table-striped table-hover align-middle border mb-0">
               <thead class="table-light">
@@ -950,6 +1043,60 @@
               </thead>
               <tbody id="tabla-abonos-body">
                 <tr><td colspan="6" class="text-center text-muted">Seleccione un cliente para ver sus abonos.</td></tr>
+              </tbody>
+            </table>
+          </div>
+        </div>
+
+        <!-- Facturas del cliente y saldo adeudado, en detalle. -->
+        <div class="card p-3 mb-4 border-primary">
+          <div class="d-flex justify-content-between align-items-center flex-wrap gap-2 mb-3">
+            <h5 class="fw-bold mb-0" id="titulo-facturas-credito">Facturas y Saldo del Cliente</h5>
+            <button type="button" class="btn btn-outline-primary btn-sm fw-bold" onclick="abrirFacturaClienteSeleccionado()" id="btn-ver-factura-credito" style="display:none;">
+                  Ver factura completa
+            </button>
+          </div>
+          <div class="row g-2 mb-3" id="resumen-credito">
+            <div class="col-md-4">
+              <div class="card bg-light border h-100">
+                <div class="card-body py-2">
+                  <div class="text-muted small">Total facturado</div>
+                  <div class="fw-bold" id="credito-total-facturado">—</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-md-4">
+              <div class="card bg-light border h-100">
+                <div class="card-body py-2">
+                  <div class="text-muted small">Total abonado</div>
+                  <div class="fw-bold text-success" id="credito-total-abonado">—</div>
+                </div>
+              </div>
+            </div>
+            <div class="col-md-4">
+              <div class="card bg-danger-subtle border h-100">
+                <div class="card-body py-2">
+                  <div class="text-muted small">Saldo adeudado</div>
+                  <div class="fw-bold text-danger" id="credito-deuda-total">—</div>
+                </div>
+              </div>
+            </div>
+          </div>
+          <div class="table-responsive">
+            <table class="table table-sm table-striped table-hover align-middle border mb-0">
+              <thead class="table-light">
+                <tr>
+                  <th>Factura</th>
+                  <th>Fecha / Hora</th>
+                  <th>Productos</th>
+                  <th>Total</th>
+                  <th>Saldo Pendiente</th>
+                  <th>Observaciones</th>
+                  <th>Estado</th>
+                </tr>
+              </thead>
+              <tbody id="tabla-facturas-credito-body">
+                <tr><td colspan="7" class="text-center text-muted">Seleccione un cliente para ver sus facturas.</td></tr>
               </tbody>
             </table>
           </div>
@@ -1016,10 +1163,11 @@
                 <th>Productos Vendidos</th>
                 <th>Tipo Pago</th>
                 <th>Total</th>
+                <th>Observaciones</th>
               </tr>
             </thead>
             <tbody id="tabla-historial-body">
-              <tr><td colspan="7" class="text-center text-muted">Cargando historial...</td></tr>
+              <tr><td colspan="9" class="text-center text-muted">Cargando historial...</td></tr>
             </tbody>
           </table>
         </div>
@@ -1929,6 +2077,56 @@
     </div>
   </div>
 
+  <!-- ══ MODAL CLIENTE RÁPIDO (registro sin salir del POS) ══════════════
+       Se abre desde el botón "+ Cliente" del formulario de venta. Al guardar,
+       el cliente queda seleccionado en la venta en curso: el carrito, el tipo
+       de pago y las observaciones NO se pierden. -->
+  <div class="modal fade" id="modalClienteRapido" tabindex="-1" data-bs-backdrop="static">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header bg-primary text-white">
+          <h5 class="modal-title fw-bold">Registrar cliente sin salir de la venta</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <form id="form-cliente-rapido" onsubmit="guardarClienteRapido(event)" class="modal-body">
+          <div class="alert alert-info py-2 small">
+            Los datos fiscales (tipo de persona, régimen y responsabilidades) se pueden
+            completar después en la pestaña <strong>Clientes</strong>. Para emitir factura
+            electrónica sí son obligatorios.
+          </div>
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label fw-bold" for="cli-rapido-nombre">Nombre Completo *</label>
+              <input type="text" id="cli-rapido-nombre" class="form-control" required spellcheck="true">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold" for="cli-rapido-cedula">Cédula / NIT *</label>
+              <input type="text" id="cli-rapido-cedula" class="form-control" required spellcheck="false">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold" for="cli-rapido-telefono">Teléfono</label>
+              <input type="text" id="cli-rapido-telefono" class="form-control" spellcheck="false">
+            </div>
+            <div class="col-md-8">
+              <label class="form-label fw-bold" for="cli-rapido-direccion">Dirección</label>
+              <input type="text" id="cli-rapido-direccion" class="form-control" spellcheck="true">
+            </div>
+            <div class="col-md-4">
+              <label class="form-label fw-bold" for="cli-rapido-email">Correo electrónico</label>
+              <input type="email" id="cli-rapido-email" class="form-control" spellcheck="false">
+            </div>
+          </div>
+          <div class="d-flex justify-content-end gap-2 mt-4">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="submit" class="btn btn-primary fw-bold" id="btn-guardar-cliente-rapido">
+              💾 Guardar y usar este cliente
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
   <!-- MODAL VER / EDITAR FACTURA -->
   <div class="modal fade" id="modalFactura" tabindex="-1">
     <div class="modal-dialog modal-lg">
@@ -1990,6 +2188,13 @@
               </tbody>
             </table>
             <div id="fac-aviso-anulada" class="text-center fw-bold" style="display:none;">*** VENTA ANULADA ***</div>
+
+            <!-- Notas internas de la venta (formaletas, entregas parciales, acuerdos).
+                 No forman parte del XML de la DIAN: son el respaldo del mostrador. -->
+            <div id="fac-bloque-observaciones" style="display:none;" class="recibo-observaciones">
+              <div class="recibo-sep"></div>
+              <p class="mb-0"><strong>Observaciones:</strong> <span id="fac-observaciones"></span></p>
+            </div>
 
             <!-- ── Documento Equivalente Electronico POS (DIAN) ───────────────
                  La tirilla debe llevar el CUIDE y el codigo QR: es lo que le
@@ -2412,6 +2617,11 @@
 
   <script>
     const ROL_ACTUAL = '{{ rol }}';
+    // Cliente por defecto del POS: el "consumidor final" genérico de mostrador.
+    // Viene del backend (`config.CLIENTE_MOSTRADOR_ID`) para que el id y el
+    // nombre no se escriban a mano en dos lugares distintos.
+    const CLIENTE_MOSTRADOR_ID = {{ cliente_mostrador_id|default(1) }};
+    const NOMBRE_CLIENTE_MOSTRADOR = {{ nombre_cliente_mostrador|default('Cliente Mostrador (General)')|tojson }};
 
     // ── Carga diferida de librerías pesadas ────────────────────────────────
     // html2pdf (~885 KB) y html5-qrcode (~367 KB) se descargan solo cuando se
@@ -3027,12 +3237,40 @@
       productosLista = await resProds.json();
 
       if (tsCliente) tsCliente.destroy();
-      const defaultClienteId = clientesLista.length ? String(clientesLista[0].id) : '';
+      // El POS arranca siempre en "Cliente Mostrador (General)" (id 1). Es el
+      // consumidor final genérico: la mayoría de las ventas son de mostrador y no
+      // vale la pena obligar al cajero a buscar un nombre en cada una. Si el id 1
+      // no existiera (base muy vieja), se cae al primer cliente disponible para
+      // no dejar la venta sin cliente asignado.
+      let defaultClienteId = String(CLIENTE_MOSTRADOR_ID);
+      if (!clientesLista.some(c => String(c.id) === defaultClienteId)) {
+        defaultClienteId = clientesLista.length ? String(clientesLista[0].id) : '';
+      }
       tsCliente = new TomSelect('#select-cliente', {
         options: clientesLista.map(c => ({ value: String(c.id), text: `${c.nombre} (${c.cedula_nit || 'Sin doc'})` })),
         items: defaultClienteId ? [defaultClienteId] : [],
         create: false,
-        placeholder: 'Buscar cliente...',
+        // Autocompletado server-side: se busca por nombre, cédula/NIT o
+        // teléfono sin bajar el catálogo completo en cada tecla.
+        maxOptions: 30,
+        loadThrottle: 300,
+        load: debounce(async function(query, callback) {
+          if (!query.length) { callback(); return; }
+          try {
+            const res = await fetch('/api/clientes/buscar?limite=30&q=' + encodeURIComponent(query));
+            if (!res.ok) { callback(); return; }
+            const encontrados = await res.json();
+            encontrados.forEach(c => {
+              if (!clientesLista.some(x => String(x.id) === String(c.id))) clientesLista.push(c);
+            });
+            callback(encontrados.map(c => ({
+              value: String(c.id),
+              text: `${c.nombre} (${c.cedula_nit || 'Sin doc'})`
+            })));
+          } catch (e) {
+            callback();
+          }
+        }, 300),
         onChange: function(val) {
           const selectedId = Array.isArray(val) ? val[0] : val;
           const cli = clientesLista.find(c => String(c.id) === String(selectedId));
@@ -3299,6 +3537,14 @@
       const tbody = document.getElementById('tabla-carrito-body');
       tbody.innerHTML = '';
 
+      // Contador del encabezado del panel fijo: el cajero ve de un vistazo cuántas
+      // líneas lleva la factura sin mirar la tabla.
+      const contador = document.getElementById('contador-carrito');
+      if (contador) {
+        const unidades = carrito.reduce((s, i) => s + (Number(i.cantidad) || 0), 0);
+        contador.innerText = `${carrito.length} ${carrito.length === 1 ? 'ítem' : 'ítems'} · ${unidades} und`;
+      }
+
       if (carrito.length === 0) {
         tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">No hay productos agregados a la venta.</td></tr>';
         document.getElementById('total-venta-texto').innerText = monedaCOP(0);
@@ -3371,9 +3617,16 @@
       document.getElementById('select-tipo-pago').value = 'efectivo';
       document.getElementById('input-direccion-venta').value = '';
       document.getElementById('input-cantidad').value = 1;
+      const obsVenta = document.getElementById('input-observaciones-venta');
+      if (obsVenta) obsVenta.value = '';
       document.getElementById('detalle-producto-seleccionado').classList.add('d-none');
       // Resetear tipo de entrega a "mostrador"
       seleccionarTipoEntrega('entrega_inmediata');
+      // La siguiente venta arranca de nuevo en el cliente mostrador generico.
+      if (tsCliente) {
+        tsCliente.setValue(String(CLIENTE_MOSTRADOR_ID), true);
+        document.getElementById('input-direccion-venta').value = '';
+      }
     }
 
     // ── Selector tipo de entrega ──────────────────────────────────────────────
@@ -3402,6 +3655,71 @@
       }
     }
 
+    // ══ Registro rápido de cliente desde el POS ═════════════════════════
+    // Abre el modal de alta sin perder el carrito, el tipo de pago ni las
+    // observaciones de la venta en curso.
+    function abrirModalClienteRapido() {
+      const form = document.getElementById('form-cliente-rapido');
+      if (form) form.reset();
+      new bootstrap.Modal(document.getElementById('modalClienteRapido')).show();
+      setTimeout(() => document.getElementById('cli-rapido-nombre')?.focus(), 400);
+    }
+
+    async function guardarClienteRapido(e) {
+      e.preventDefault();
+      const btn = document.getElementById('btn-guardar-cliente-rapido');
+      const payload = {
+        nombre: document.getElementById('cli-rapido-nombre').value.trim(),
+        cedula_nit: document.getElementById('cli-rapido-cedula').value.trim(),
+        telefono: document.getElementById('cli-rapido-telefono').value.trim(),
+        direccion: document.getElementById('cli-rapido-direccion').value.trim(),
+        email: document.getElementById('cli-rapido-email').value.trim(),
+      };
+      if (!payload.nombre || !payload.cedula_nit) {
+        alert('El nombre y la cédula/NIT son obligatorios.');
+        return;
+      }
+
+      const textoOriginal = btn.innerText;
+      btn.disabled = true;
+      btn.innerText = 'Guardando…';
+      try {
+        const res = await fetch('/api/clientes', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert('No se pudo guardar el cliente:\n\n' + (data.error || 'Error desconocido'));
+          return;
+        }
+
+        // Se recarga el formulario para que el cliente nuevo quede disponible en
+        // el autocompletado y se selecciona de una vez. `procesarVenta` se vuelve
+        // a ejecutar con la lista fresca, pero el carrito vive en una variable
+        // global: no se pierde nada de lo que ya estaba agregado.
+        await cargarFormularioVentas();
+        const nuevo = clientesLista.find(c =>
+          String(c.cedula_nit || '').trim() === payload.cedula_nit);
+        if (nuevo && tsCliente) {
+          tsCliente.setValue(String(nuevo.id), true);
+          if (nuevo.direccion) {
+            document.getElementById('input-direccion-venta').value = nuevo.direccion;
+          }
+        }
+
+        bootstrap.Modal.getInstance(document.getElementById('modalClienteRapido'))?.hide();
+        alert('Cliente "' + payload.nombre + '" registrado y seleccionado en la venta.');
+        cargarClientesTabla();
+      } catch (err) {
+        alert('Error de conexión al guardar el cliente.');
+      } finally {
+        btn.disabled = false;
+        btn.innerText = textoOriginal;
+      }
+    }
+
     async function procesarVenta() {
       if (carrito.length === 0) {
         alert('Agregue al menos un producto a la venta.');
@@ -3422,6 +3740,8 @@
         tipo_pago:     document.getElementById('select-tipo-pago').value,
         direccion:     direccion,
         tipo_entrega:  tipoEntrega,
+        // Notas internas: formaletas, entregas parciales, acuerdos con el cliente.
+        observaciones: (document.getElementById('input-observaciones-venta')?.value || '').trim(),
         items: carrito.map(i => ({ id_producto: i.id_producto, cantidad: i.cantidad, precio_unitario: i.precio }))
       };
 
@@ -4176,7 +4496,8 @@
 		    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-success">No hay deudores que coincidan.</td></tr>';
 		    return;
 		  }
-		  tbody.innerHTML = creditos.map(c => `<tr>
+		  tbody.innerHTML = creditos.map(c => `<tr style="cursor:pointer;" title="Ver facturas y abonos de este cliente"
+		    onclick="seleccionarClienteCredito(${c.id_cliente})">
 		    <td>${c.id_cliente}</td>
 		    <td>${escapeHtml(c.nombre)}</td>
 		    <td>${escapeHtml(c.cedula_nit || '')}</td>
@@ -4233,30 +4554,191 @@
       alert(historial.map(v => `Venta #${v.id} | ${v.fecha} | ${monedaCOP(v.total)} | ${v.tipo_pago}${v.anulada ? ' | ANULADA' : ''}`).join('\n'));
     }
 
-    async function cargarHistorialAbonos(idCliente) {
-      const tbody = document.getElementById('tabla-abonos-body');
+    // ══ Créditos: ficha del cliente, saldo e historial filtrable ═════════
+    // Cliente que está viendo el cajero en la sección de créditos. Se guarda
+    // para que el botón "Ver factura completa" sepa a cuál factura ir.
+    let clienteCreditoActual = null;
+    let facturasCreditoActual = [];
+
+    // Al elegir un cliente en la lista de cartera, se selecciona en el <select>
+    // de abonos y se recarga todo su detalle. Así el cajero no tiene que volver
+    // a elegirlo en el desplegable.
+    function seleccionarClienteCredito(idCliente) {
+      if (!idCliente) return;
+      const select = document.getElementById('select-credito-cliente');
+      if (select && select.value !== String(idCliente)) select.value = String(idCliente);
+      cargarHistorialAbonos(idCliente);
+      cargarFacturasCreditoCliente(idCliente);
+    }
+
+    async function cargarFacturasCreditoCliente(idCliente) {
+      const tbody = document.getElementById('tabla-facturas-credito-body');
+      if (!tbody) return;
       if (!idCliente) {
-        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">Seleccione un cliente para ver sus abonos.</td></tr>';
+        clienteCreditoActual = null;
+        facturasCreditoActual = [];
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">Seleccione un cliente para ver sus facturas.</td></tr>';
+        setTexto('titulo-facturas-credito', 'Facturas y Saldo del Cliente');
+        ['credito-total-facturado', 'credito-total-abonado', 'credito-deuda-total']
+          .forEach(id => setTexto(id, '—'));
+        const btn = document.getElementById('btn-ver-factura-credito');
+        if (btn) btn.style.display = 'none';
         return;
       }
 
-      const res = await fetch(`/api/abonos/${idCliente}`);
+      tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">Cargando facturas del cliente...</td></tr>';
+      const res = await fetch(`/api/creditos/${idCliente}`);
       const data = await res.json();
       if (!res.ok) {
-        tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger">${data.error}</td></tr>`;
+        tbody.innerHTML = `<tr><td colspan="7" class="text-center text-danger">${escapeHtml(data.error || 'Error al cargar')}</td></tr>`;
         return;
       }
+
+      clienteCreditoActual = data.cliente;
+      facturasCreditoActual = data.facturas || [];
+      setTexto('titulo-facturas-credito',
+        `Facturas y Saldo de ${data.cliente.nombre}`);
+      setTexto('credito-total-facturado', monedaCOP(data.total_facturado));
+      setTexto('credito-total-abonado', monedaCOP(data.total_abonado));
+      setTexto('credito-deuda-total', monedaCOP(data.deuda_total));
+
+      if (facturasCreditoActual.length === 0) {
+        tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">Este cliente no tiene facturas registradas.</td></tr>';
+      } else {
+        tbody.innerHTML = facturasCreditoActual.map(f => {
+          const saldo = Number(f.saldo_pendiente) || 0;
+          const estado = f.pagada
+            ? '<span class="badge bg-success">Pagada</span>'
+            : '<span class="badge bg-danger">Saldo pendiente</span>';
+          const obs = f.observaciones
+            ? `<span title="${escapeHtml(f.observaciones)}">${escapeHtml(f.observaciones.slice(0, 40))}${f.observaciones.length > 40 ? '…' : ''}</span>`
+            : '<span class="text-muted">—</span>';
+          return `<tr>
+            <td class="fw-bold">#${f.id}</td>
+            <td>${escapeHtml(f.fecha_dia)}<br><small class="text-muted">${escapeHtml(f.hora || '')}</small></td>
+            <td><small>${escapeHtml(f.productos || '—')}</small></td>
+            <td>${monedaCOP(f.total_venta)}</td>
+            <td class="fw-bold text-danger">${monedaCOP(saldo)}</td>
+            <td><small>${obs}</small></td>
+            <td>${estado}</td>
+          </tr>`;
+        }).join('');
+      }
+
+      // El botón de "ver factura" apunta a la más antigua que aún tenga saldo:
+      // es la que normalmente se viene a pagar.
+      const conSaldo = facturasCreditoActual.find(f => !f.pagada);
+      const btn = document.getElementById('btn-ver-factura-credito');
+      if (btn) {
+        btn.style.display = facturasCreditoActual.length ? '' : 'none';
+        btn.onclick = () => {
+          const objetivo = conSaldo || facturasCreditoActual[0];
+          if (objetivo) verFactura(objetivo.id);
+        };
+      }
+    }
+
+    function abrirFacturaClienteSeleccionado() {
+      if (!facturasCreditoActual.length) return;
+      const conSaldo = facturasCreditoActual.find(f => !f.pagada) || facturasCreditoActual[0];
+      verFactura(conSaldo.id);
+    }
+
+    // ── Filtro del historial de abonos: día / mes / año ─────────────────
+    function cambiarFiltroPeriodoAbonos() {
+      const periodo = document.getElementById('abono-filtro-periodo').value;
+      document.getElementById('abono-filtro-dia-wrap').style.display = periodo === 'dia' ? '' : 'none';
+      document.getElementById('abono-filtro-mes-wrap').style.display = periodo === 'mes' ? '' : 'none';
+      document.getElementById('abono-filtro-anio-wrap').style.display = periodo === 'anio' ? '' : 'none';
+
+      if (periodo === 'anio') llenarAniosAbonos();
+      // Al cambiar de periodo se toma la fecha actual como punto de partida, para
+      // no mostrar un filtro vacío sin que el usuario haya escrito nada.
+      const hoy = new Date();
+      if (periodo === 'dia' && !document.getElementById('abono-filtro-dia').value) {
+        document.getElementById('abono-filtro-dia').value = hoy.toISOString().slice(0, 10);
+      }
+      if (periodo === 'mes' && !document.getElementById('abono-filtro-mes').value) {
+        document.getElementById('abono-filtro-mes').value = hoy.toISOString().slice(0, 7);
+      }
+      cargarHistorialAbonos();
+    }
+
+    function llenarAniosAbonos() {
+      const select = document.getElementById('abono-filtro-anio');
+      if (!select || select.dataset.cargado === '1') return;
+      const anioActual = new Date().getFullYear();
+      const opciones = [];
+      // Tres años hacia atrás y uno hacia adelante: alcanza para el histórico
+      // reciente sin dejar el desplegable vacío si la base tiene años viejos.
+      for (let a = anioActual + 1; a >= anioActual - 3; a--) opciones.push(a);
+      select.innerHTML = '<option value="">Todos los años</option>' +
+        opciones.map(a => `<option value="${a}"${a === anioActual ? ' selected' : ''}>${a}</option>`).join('');
+      select.dataset.cargado = '1';
+    }
+
+    function limpiarFiltroAbonos() {
+      document.getElementById('abono-filtro-periodo').value = '';
+      document.getElementById('abono-filtro-dia').value = '';
+      document.getElementById('abono-filtro-mes').value = '';
+      document.getElementById('abono-filtro-anio').value = '';
+      document.getElementById('abono-filtro-dia-wrap').style.display = 'none';
+      document.getElementById('abono-filtro-mes-wrap').style.display = 'none';
+      document.getElementById('abono-filtro-anio-wrap').style.display = 'none';
+      cargarHistorialAbonos();
+    }
+
+    // Arma la query del filtro activo. Sin periodo devuelve el historial entero.
+    function queryFiltroAbonos() {
+      const periodo = document.getElementById('abono-filtro-periodo').value;
+      if (!periodo) return '';
+      const params = new URLSearchParams({ periodo });
+      if (periodo === 'dia') {
+        const v = document.getElementById('abono-filtro-dia').value;
+        if (v) params.set('fecha', v);
+      } else if (periodo === 'mes') {
+        const v = document.getElementById('abono-filtro-mes').value;
+        if (v) params.set('mes', v);
+      } else if (periodo === 'anio') {
+        const v = document.getElementById('abono-filtro-anio').value;
+        if (v) params.set('anio', v);
+      }
+      return '?' + params.toString();
+    }
+
+    async function cargarHistorialAbonos(idCliente) {
+      const tbody = document.getElementById('tabla-abonos-body');
+      // Si se llama desde el filtro, el cliente sigue siendo el del desplegable.
+      if (idCliente === undefined) {
+        idCliente = document.getElementById('select-credito-cliente')?.value;
+      }
+      if (!idCliente) {
+        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">Seleccione un cliente para ver sus abonos.</td></tr>';
+        setTexto('abono-resumen-saldo', '');
+        return;
+      }
+
+      const res = await fetch(`/api/abonos/${idCliente}${queryFiltroAbonos()}`);
+      const data = await res.json();
+      if (!res.ok) {
+        tbody.innerHTML = `<tr><td colspan="6" class="text-center text-danger">${escapeHtml(data.error || 'Error')}</td></tr>`;
+        return;
+      }
+
+      setTexto('abono-resumen-saldo',
+        `Total abonado: ${monedaCOP(data.total_abonado)} | Saldo pendiente: ${monedaCOP(data.saldo_pendiente)}`);
 
       tbody.innerHTML = '';
       if (data.abonos.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="6" class="text-center text-muted">Este cliente todavía no tiene abonos registrados.</td></tr>';
+        const filtrado = document.getElementById('abono-filtro-periodo').value;
+        tbody.innerHTML = `<tr><td colspan="6" class="text-center text-muted">${filtrado ? 'No hay abonos en el periodo seleccionado.' : 'Este cliente todavía no tiene abonos registrados.'}</td></tr>`;
         return;
       }
 
       data.abonos.forEach(abono => {
         tbody.innerHTML += `<tr>
           <td>#${abono.id}</td>
-          <td>${abono.fecha}</td>
+          <td>${escapeHtml(abono.fecha)}</td>
           <td>${monedaCOP(abono.deuda_anterior)}</td>
           <td class="text-success fw-bold">${monedaCOP(abono.monto)}</td>
           <td class="text-danger fw-bold">${monedaCOP(abono.saldo_pendiente)}</td>
@@ -4282,6 +4764,7 @@
            document.getElementById('form-abono').reset();
            cargarCreditosTabla();
            cargarHistorialAbonos(payload.id_cliente);
+           cargarFacturasCreditoCliente(payload.id_cliente);
            mostrarComprobanteAbono(data.abono, autoImprimirActivado());
       }
 
@@ -4444,6 +4927,10 @@
                                     line-height: 1.3; border-top: 1px dashed #000;
                                     padding-top: 6px; }
       .recibo-termico .recibo-sep { border-top: 1px dashed #000; margin: 6px 0; }
+      /* Observaciones / notas internas de la venta. Se imprimen tal cual las
+         escribio el cajero (formaletas, entregas parciales, acuerdos). */
+      .recibo-termico .recibo-observaciones { font-size: 13px; line-height: 1.3; }
+      .recibo-termico .recibo-observaciones p { white-space: pre-wrap; }
 
       /* ── Documento Equivalente Electrónico POS (DIAN) ─────────────────
          Estas reglas van también en CSS_TIRILLA (el que se inyecta en la
@@ -4630,9 +5117,13 @@
 		const tbody = document.getElementById('tabla-historial-body');
 			tbody.innerHTML = '';
 		ventas.forEach(v => {
-		  tbody.innerHTML += `<tr><td>${v.id}</td><td>${escapeHtml(v.fecha_dia)} ${escapeHtml(v.hora)}</td><td>${escapeHtml(v.cliente)}</td><td>${escapeHtml(v.direccion)}</td><td>${escapeHtml(v.productos_detalle || '')}</td><td>${escapeHtml(v.tipo_pago)}</td><td>${monedaCOP(v.total_venta)}</td><td>${badgeFacturacion(v)}</td></tr>`;
+		  const obs = (v.observaciones || '').trim();
+		  const celdaObs = obs
+		    ? `<td><small title="${escapeHtml(obs)}">${escapeHtml(obs.slice(0, 40))}${obs.length > 40 ? '…' : ''}</small></td>`
+		    : '<td class="text-muted">—</td>';
+		  tbody.innerHTML += `<tr><td>${v.id}</td><td>${escapeHtml(v.fecha_dia)} ${escapeHtml(v.hora)}</td><td>${escapeHtml(v.cliente)}</td><td>${escapeHtml(v.direccion)}</td><td>${escapeHtml(v.productos_detalle || '')}</td><td>${escapeHtml(v.tipo_pago)}</td><td>${monedaCOP(v.total_venta)}</td>${celdaObs}<td>${badgeFacturacion(v)}</td></tr>`;
 		});
-		if (ventas.length === 0) tbody.innerHTML = '<tr><td colspan="8" class="text-center text-muted">No hay ventas que coincidan con la búsqueda.</td></tr>';
+		if (ventas.length === 0) tbody.innerHTML = '<tr><td colspan="9" class="text-center text-muted">No hay ventas que coincidan con la búsqueda.</td></tr>';
 		}
 
 		// Filtro por texto del historial: acota la lista ya cargada por # venta,
@@ -4642,7 +5133,7 @@
 		const q = (texto || '').trim().toLowerCase();
 		if (!q) { pintarHistorialVentas(historialVentasLista); return; }
 		const filtradas = historialVentasLista.filter(v => {
-		const campos = [v.id, v.cliente, v.direccion, v.productos_detalle, v.tipo_pago, v.fecha_dia, v.hora];
+		const campos = [v.id, v.cliente, v.direccion, v.productos_detalle, v.tipo_pago, v.fecha_dia, v.hora, v.observaciones];
 		return campos.some(c => String(c || '').toLowerCase().includes(q));
 		});
 		pintarHistorialVentas(filtradas);
@@ -4766,6 +5257,12 @@
 					setTexto('fac-id', factura.id);
 				setTexto('fac-fecha', fechaCO(factura.fecha_dia));
 				setTexto('fac-hora', factura.hora);
+				// Observaciones / notas internas de la venta. Solo se muestran (y se
+				// imprimen) si el cajero escribió algo.
+				const bloqueObs = document.getElementById('fac-bloque-observaciones');
+				const textoObs = (factura.observaciones || '').trim();
+				setTexto('fac-observaciones', textoObs);
+				if (bloqueObs) bloqueObs.style.display = textoObs ? '' : 'none';
 				setTexto('fac-pago', factura.tipo_pago);
 				setTexto('fac-metodo-pago', factura.tipo_pago);
 				setTexto('fac-cliente-nombre', factura.cliente);
@@ -6413,6 +6910,10 @@
               return;
             }
             const colores = { Pendiente: 'warning text-dark', Aprobada: 'success', Vencida: 'secondary', Anulada: 'danger' };
+            // Solo el administrador puede eliminar una cotizacion: no toca stock,
+            // caja ni cartera, pero si deja rastro en la auditoria. El boton se
+            // oculta para los demas roles en lugar de fallar al hacer clic.
+            const esAdmin = ROL_ACTUAL === 'admin';
             tbody.innerHTML = lista.map(c => `
               <tr>
                 <td class="fw-bold">${escapeHtml(c.consecutivo)}</td>
@@ -6425,6 +6926,7 @@
                   <button class="btn btn-sm btn-primary" onclick="verCotizacion(${c.id})">Ver</button>
                   <button class="btn btn-sm fw-bold text-white" style="background:#25D366;" onclick="whatsappDesdeLista(${c.id})">📱</button>
                   <button class="btn btn-sm btn-success" onclick="convertirDesdeLista(${c.id})">🛒 Facturar</button>
+                  ${esAdmin ? `<button class="btn btn-sm btn-outline-danger" title="Eliminar esta cotizacion" onclick="eliminarCotizacion(${c.id}, '${escapeHtml(c.consecutivo)}')">🗑️</button>` : ''}
                 </td>
               </tr>`).join('');
           }
@@ -6462,6 +6964,24 @@
             btn.onclick = () => cambiarEstadoCotizacion(id, esAprobada ? 'Pendiente' : 'Aprobada');
 
             new bootstrap.Modal(document.getElementById('modalVerCotizacion')).show();
+          }
+
+          async function eliminarCotizacion(id, consecutivo) {
+            // Una cotizacion es solo una propuesta de precio: no toca inventario,
+            // caja ni cartera, asi que se puede borrar sin efectos fiscales.
+            // Se pide confirmacion porque el DELETE no se puede deshacer.
+            if (!confirm(
+              '¿Eliminar la cotización ' + consecutivo + '?\n\n' +
+              'Solo se borra la propuesta: no afecta el inventario, la caja ni la ' +
+              'cartera de ningún cliente.')) return;
+            const res = await fetch('/api/cotizaciones/' + id, { method: 'DELETE' });
+            const data = await res.json();
+            if (!res.ok) {
+              alert('No se pudo eliminar: ' + (data.error || 'error desconocido'));
+              return;
+            }
+            alert(data.mensaje);
+            cargarCotizaciones();
           }
 
           async function cambiarEstadoCotizacion(id, estado) {
