@@ -3,7 +3,8 @@
 Incluye el registro de la venta (POS), su anulación, el detalle de factura,
 los despachos "para llevar" y la gestión de créditos/abonos por cliente.
 """
-from datetime import datetime
+import re
+from datetime import datetime, timedelta
 
 from flask import Blueprint, jsonify, request, session
 
@@ -69,13 +70,30 @@ def _listar_ventas():
     } for r in rows])
 
 
+# ── Ordenes a la fabrica de flejes ───────────────────────────────
+# Regla de negocio (definida con el cliente): una venta genera orden a la
+# fabrica SI Y SOLO SI el producto pertenece a la categoria "Fleje" o "Flejes".
+#
+# Antes el criterio era mas laxo: bastaba que el NOMBRE del producto contuviera
+# "fleje", o que el item trajera medidas (calibre/ancho_cm/largo_cm) del
+# formulario de flejes a medida. Ese formulario ya no existe, asi que el
+# criterio queda en la categoria, que es el dato estable del catalogo.
+#
+# OJO: se compara por igualdad con las dos categorias validas, no con
+# `find('fleje')`. Un `find` colaria productos de categorias como
+# "Flejes tubulares" o "No-fleje" y les crearia una orden que el taller no
+# espera.
+CATEGORIAS_FLEJE = ('fleje', 'flejes')
+
+
 def _es_producto_fleje(nombre, categoria, item):
-    """Determina si un ítem vendido corresponde a un fleje a figurar."""
-    return bool(
-        (categoria or '').lower().find('fleje') >= 0
-        or (nombre or '').lower().find('fleje') >= 0
-        or item.get('calibre') or item.get('ancho_cm') or item.get('largo_cm')
-    )
+    """True si el producto vendido pertenece a la categoria Fleje/Flejes.
+
+    `item` y `nombre` ya no participan en la decision: se conservan como
+    parametros para no romper las llamadas existentes y porque
+    `registrar_orden_fleje_desde_venta` los necesita.
+    """
+    return (categoria or '').strip().lower() in CATEGORIAS_FLEJE
 
 
 def _leer_config_iva(cursor):
@@ -247,6 +265,9 @@ def _registrar_venta():
                  'motivo': f'Venta #{id_venta}', 'usuario': session['usuario'], 'fecha': _ahora()},
             )
 
+            # Toda venta de un producto de categoria Fleje/Flejes genera la orden
+            # a la fabrica, tenga o no medidas en su ficha: el taller la necesita
+            # para fabricar o preparar el material.
             if _es_producto_fleje(d['nombre'], d['categoria'], d['item']):
                 registrar_orden_fleje_desde_venta(conn, id_venta, id_cliente, d['item'], d['nombre'])
 
@@ -1079,6 +1100,103 @@ def detalle_credito_cliente(id_cliente):
         "total_abonado": total_abonado,
         "deuda_total": sum(f[4] or 0 for f in facturas),
     })
+
+
+@bp.route('/api/creditos/<int:id_cliente>/consolidado', methods=['GET'])
+@login_required
+def consolidado_mensual_cliente(id_cliente):
+    """Reporte consolidado del mes en curso para un cliente.
+
+    Devuelve TODAS las compras del cliente en el mes actual, con el detalle de
+    cada venta, mas el total facturado, lo abonado en el mes y el saldo global.
+    Es el "estado de cuenta" que el cliente pide: no una tabla suelta, sino una
+    hoja de vida de lo que llevo comprado y pagado.
+
+    Acepta `?mes=YYYY-MM` para sacar el mes anterior u otro cualquiera; si no
+    viene, usa el mes local actual.
+    """
+    conn = get_db()
+    cliente = conn.execute(
+        "SELECT nombre, cedula_nit, telefono, direccion FROM clientes WHERE id = ?",
+        (id_cliente,),
+    ).fetchone()
+    if not cliente:
+        conn.close()
+        return jsonify({"error": "Cliente no encontrado"}), 404
+
+    mes = str(request.args.get('mes') or '').strip()
+    if not re.fullmatch(r'\d{4}-\d{2}', mes):
+        hoy = datetime.now()
+        mes = f'{hoy.year:04d}-{hoy.month:02d}'
+    inicio = f'{mes}-01'
+
+    ventas = conn.execute(
+        """
+        SELECT v.id, v.fecha_dia, v.hora, v.total_venta,
+               COALESCE(v.saldo_pendiente, 0), v.tipo_pago,
+               COALESCE(v.observaciones, ''),
+               COALESCE((SELECT SUM(dv.cantidad) FROM detalle_ventas dv
+                          WHERE dv.id_venta = v.id), 0) AS unidades,
+               COALESCE((SELECT GROUP_CONCAT(p.nombre || ' (x' || dv.cantidad || ')', ', ')
+                          FROM detalle_ventas dv
+                          JOIN productos p ON p.id = dv.id_producto
+                          WHERE dv.id_venta = v.id), '') AS productos
+        FROM ventas v
+        WHERE v.id_cliente = ? AND COALESCE(v.anulada, 0) = 0
+          AND substr(v.fecha_dia, 1, 7) = ?
+        ORDER BY v.id ASC
+        """,
+        (id_cliente, mes),
+    ).fetchall()
+
+    abonos = conn.execute(
+        "SELECT id, monto, fecha FROM abonos "
+        "WHERE id_cliente = ? AND substr(fecha, 1, 7) = ? ORDER BY id ASC",
+        (id_cliente, mes),
+    ).fetchall()
+
+    # Totales historicos: el saldo es de todo el historico, no solo del mes.
+    total_historico = conn.execute(
+        "SELECT COALESCE(SUM(total_venta), 0) FROM ventas "
+        "WHERE id_cliente = ? AND COALESCE(anulada, 0) = 0",
+        (id_cliente,),
+    ).fetchone()[0] or 0
+    abonado_historico = conn.execute(
+        "SELECT COALESCE(SUM(monto), 0) FROM abonos WHERE id_cliente = ?",
+        (id_cliente,),
+    ).fetchone()[0] or 0
+    conn.close()
+
+    inicio_mes = datetime.strptime(inicio, '%Y-%m-%d')
+    fin_mes = (inicio_mes.replace(day=28) +
+               timedelta(days=4)).replace(day=1) - timedelta(days=1)
+
+    return jsonify({
+        "cliente": {"id": id_cliente, "nombre": cliente[0], "cedula_nit": cliente[1] or "",
+                    "telefono": cliente[2] or "", "direccion": cliente[3] or ""},
+        "mes": mes,
+        "mes_nombre": f'{mes_nombre_es(int(inicio_mes.month))} {inicio_mes.year}',
+        "periodo": f'{inicio} a {fin_mes.strftime("%Y-%m-%d")}',
+        "ventas": [{
+            "id": v[0], "fecha_dia": v[1], "hora": v[2], "total_venta": v[3] or 0,
+            "saldo_pendiente": v[4] or 0, "tipo_pago": v[5] or "",
+            "observaciones": v[6] or "", "unidades": v[7] or 0,
+            "productos": v[8] or "", "pagada": (v[4] or 0) <= 0,
+        } for v in ventas],
+        "abonos": [{"id": a[0], "monto": a[1], "fecha": a[2]} for a in abonos],
+        "total_mes": sum(v[3] or 0 for v in ventas),
+        "abonos_mes": sum(a[1] for a in abonos),
+        "total_facturado": total_historico,
+        "total_abonado": abonado_historico,
+        "saldo_global": max(total_historico - abonado_historico, 0),
+    })
+
+
+def mes_nombre_es(numero):
+    """Nombre de mes en espanol para la cabecera del consolidado."""
+    return ('Enero', 'Febrero', 'Marzo', 'Abril', 'Mayo', 'Junio', 'Julio',
+            'Agosto', 'Septiembre', 'Octubre', 'Noviembre', 'Diciembre')[
+        max(1, min(int(numero), 12)) - 1]
 
 
 @bp.route('/api/abonos/<int:id_cliente>', methods=['GET'])

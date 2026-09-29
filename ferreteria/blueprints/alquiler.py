@@ -391,6 +391,69 @@ def api_alquileres_activos():
     return jsonify([dict(r) for r in rows])
 
 
+@bp.route('/api/alquileres/<int:id_alquiler>/recibo', methods=['GET'])
+@login_required
+def api_recibo_alquiler(id_alquiler):
+    """Datos del RECIBO DE ENTREGA de un alquiler.
+
+    Es el respaldo de que se presto una maquina: queda en poder de ambas partes
+    con fecha y hora de salida, el detalle de cada equipo con el estado en que
+    salio, y la fecha pactada de devolucion. Sin esto no hay forma de demostrar
+    cuando se llevo la maquinaria ni en que estado.
+    """
+    conn = get_db()
+    conn.row_factory = sqlite3.Row
+    cabecera = conn.execute(
+        """
+        SELECT a.id, a.fecha_salida, a.fecha_devolucion_pactada, a.estado,
+               a.valor_deposito, COALESCE(a.notas_salida, '') AS notas_salida,
+               a.id_cliente, COALESCE(c.nombre, 'Cliente no registrado') AS cliente,
+               COALESCE(c.cedula_nit, '') AS cedula_nit,
+               COALESCE(c.telefono, '') AS telefono,
+               COALESCE(c.direccion, '') AS direccion
+        FROM alquileres a
+        LEFT JOIN clientes c ON c.id = a.id_cliente
+        WHERE a.id = ?
+        """,
+        (id_alquiler,),
+    ).fetchone()
+    if not cabecera:
+        conn.close()
+        return jsonify({"error": "Alquiler no encontrado"}), 404
+
+    equipos = conn.execute(
+        """
+        SELECT d.cantidad, d.estado_salida, COALESCE(d.observaciones, '') AS observaciones,
+               e.nombre AS equipo, COALESCE(e.codigo_interno, '') AS codigo_interno,
+               COALESCE(e.marca, '') AS marca, COALESCE(e.modelo, '') AS modelo,
+               COALESCE(e.numero_serie, '') AS numero_serie,
+               COALESCE(d.tarifa_tipo, '') AS tarifa_tipo,
+               COALESCE(d.tarifa_valor, 0) AS tarifa_valor
+        FROM detalle_alquiler d
+        LEFT JOIN equipos_alquiler e ON e.id = d.id_equipo
+        WHERE d.id_alquiler = ?
+        ORDER BY d.id
+        """,
+        (id_alquiler,),
+    ).fetchall()
+
+    negocio = conn.execute(
+        "SELECT nombre, nit, telefono, direccion FROM configuracion WHERE id = 1"
+    ).fetchone()
+    conn.close()
+
+    return jsonify({
+        "alquiler": dict(cabecera),
+        "equipos": [dict(e) for e in equipos],
+        "negocio": {
+            "nombre": (negocio["nombre"] if negocio else "Ferretería y Fábrica de Flejes"),
+            "nit": (negocio["nit"] if negocio else "") or "",
+            "telefono": (negocio["telefono"] if negocio else "") or "",
+            "direccion": (negocio["direccion"] if negocio else "") or "",
+        },
+    })
+
+
 @bp.route('/api/alquiler/alertas', methods=['GET'])
 @login_required
 def api_alquiler_alertas():

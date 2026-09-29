@@ -482,69 +482,11 @@
             </div>
           </div>
 
-          <div class="card border-warning bg-warning-subtle mt-4">
-            <div class="card-body p-3">
-              <div class="d-flex justify-content-between align-items-center mb-3">
-                <h5 class="fw-bold mb-0 text-warning-emphasis">🧰 Flejes a medida / orden a fábrica</h5>
-                <span class="badge bg-warning text-dark">Pedido inmediato</span>
-              </div>
-              <div class="row g-2 align-items-end">
-                <div class="col-md-2">
-                  <label class="form-label fw-bold">Calibre</label>
-                  <select id="fleje-calibre" class="form-select">
-                    <option value="">Seleccione</option>
-                    <option value="1/4">1/4"</option>
-                    <option value="3/8">3/8"</option>
-                    <option value="9mm">9 mm</option>
-                    <option value="1/2">1/2"</option>
-                  </select>
-                </div>
-                <div class="col-md-2">
-                  <label class="form-label fw-bold">Ancho (cm)</label>
-                  <input type="number" step="0.1" id="fleje-ancho" class="form-control" value="10">
-                </div>
-                <div class="col-md-2">
-                  <label class="form-label fw-bold">Largo (cm)</label>
-                  <input type="number" step="0.1" id="fleje-largo" class="form-control" value="20">
-                </div>
-                <div class="col-md-2">
-                  <label class="form-label fw-bold">Gancho (cm)</label>
-                  <input type="number" step="0.1" id="fleje-gancho" class="form-control" value="5">
-                </div>
-                <div class="col-md-2">
-                  <label class="form-label fw-bold">Cantidad</label>
-                  <input type="number" min="1" id="fleje-cantidad" class="form-control" value="1">
-                </div>
-                <div class="col-md-2">
-                  <button type="button" class="btn btn-warning w-100 fw-bold" onclick="agregarFlejeAlPedido()">Agregar</button>
-                </div>
-              </div>
+          <!-- Seccion de "Flejes a medida" eliminada: los flejes ahora son
+               productos del catalogo (con su precio) y toda venta de la
+               categoria Fleje/Flejes genera sola la orden a la fabrica.
+               El panel de Fabrica de Flejes sigue operativo. -->
 
-              <div class="mt-3">
-                <div class="table-responsive">
-                  <table class="table table-sm table-bordered bg-white mb-0">
-                    <thead class="table-light">
-                      <tr>
-                        <th>Calibre</th>
-                        <th>Ancho x Largo</th>
-                        <th>Gancho</th>
-                        <th>Cantidad</th>
-                        <th>Acción</th>
-                      </tr>
-                    </thead>
-                    <tbody id="tabla-flejes-pedido-body">
-                      <tr><td colspan="5" class="text-center text-muted">Sin flejes agregados aún.</td></tr>
-                    </tbody>
-                  </table>
-                </div>
-              </div>
-
-              <div class="mt-3 d-flex justify-content-between align-items-center gap-2">
-                <small class="text-muted">Se descontará el material del inventario de hierro al enviar la orden.</small>
-                <button type="button" class="btn btn-success fw-bold" onclick="enviarFlejesAFabrica()">📦 Enviar a Fábrica</button>
-              </div>
-            </div>
-          </div>
         </div>
 
         <!-- ══ Rediseño del POS: panel divided ═══════════════════════════════
@@ -931,12 +873,16 @@
             <div class="col-md-2">
               <label class="form-label fw-bold">Cód. Municipio (DANE)</label>
               <input type="text" id="cli-municipio" class="form-control" maxlength="5"
-                     placeholder="05001" spellcheck="false">
+                     value="{{ municipio_negocio }}"
+                     title="Código DIVPOLKA de la DIAN. Por defecto: Samaná, Caldas (17665)"
+                     spellcheck="false">
             </div>
             <div class="col-md-2">
               <label class="form-label fw-bold">Cód. Departamento</label>
               <input type="text" id="cli-departamento" class="form-control" maxlength="2"
-                     placeholder="05" spellcheck="false">
+                     value="{{ departamento_negocio }}"
+                     title="Por defecto: Caldas (17)"
+                     spellcheck="false">
             </div>
             <div class="col-md-2 d-flex align-items-end">
               <button type="submit" id="btn-guardar-cliente" class="btn btn-primary w-100 fw-bold">Guardar</button>
@@ -1027,7 +973,14 @@
             <div class="col-auto">
               <button type="button" class="btn btn-outline-secondary" onclick="limpiarFiltroAbonos()">Limpiar filtro</button>
             </div>
-            <div class="col text-muted small text-end" id="abono-resumen-saldo"></div>
+            <div class="col-12 text-muted small d-flex justify-content-between align-items-center flex-wrap gap-2">
+              <span id="abono-resumen-saldo"></span>
+              <button type="button" class="btn btn-outline-primary btn-sm fw-bold"
+                      id="btn-consolidado-mes" onclick="imprimirConsolidadoCliente()"
+                      title="Hoja de vida del mes en curso: todas sus compras y abonos">
+                🧾 Consolidated del mes
+              </button>
+            </div>
           </div>
           <div class="table-responsive">
             <table class="table table-striped table-hover align-middle border mb-0">
@@ -1532,25 +1485,11 @@
       <!-- ══════════════ PESTAÑA PEDIDOS ══════════════ -->
       <div class="tab-pane fade {{ 'show active' if rol in ['pedidos','motocarguero'] else '' }}" id="pedidos">
 
-        <!-- Sub-pestañas: Despachos (para_llevar) | Pedidos manuales -->
-        <ul class="nav nav-pills mb-3 gap-2" id="pedidos-subtabs">
-          <li class="nav-item">
-            <button class="nav-link active fw-bold" id="subtab-despachos-btn"
-              onclick="activarSubtabPedidos('despachos')">
-              🚚 Cola de Despacho
-            </button>
-          </li>
-          {% if rol != 'motocarguero' %}
-          <li class="nav-item">
-            <button class="nav-link fw-bold" id="subtab-manuales-btn"
-              onclick="activarSubtabPedidos('manuales')">
-              📋 Pedidos Manuales
-            </button>
-          </li>
-          {% endif %}
-        </ul>
+        <!-- La pestana Pedidos es la Cola de Despacho (ventas "para llevar").
+             Antes tenia un sub-selector con "Pedidos Manuales", que se elimino:
+             esa logica la absorbe Ventas y Facturacion. -->
 
-        <!-- ── SUB-PANEL: COLA DE DESPACHO (ventas para_llevar) ── -->
+        <!-- ── COLA DE DESPACHO (ventas para_llevar) ── -->
         <div id="subtab-despachos">
           <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
             <h4 class="mb-0">🚚 Cola de Despacho — Pedidos Para Llevar</h4>
@@ -1632,50 +1571,12 @@
         </div>
 
         <!-- ── SUB-PANEL: PEDIDOS MANUALES (módulo anterior) ── -->
-        <div id="subtab-manuales" class="d-none">
-          <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-            <h4 class="mb-0">📋 Gestión de Pedidos</h4>
-            <div class="d-flex gap-2 align-items-center flex-wrap">
-              <select id="pedido-filtro-estado" class="form-select form-select-sm" style="width:auto" onchange="cargarPedidos()">
-                <option value="">Todos los estados</option>
-                <option value="pendiente">⏳ Pendiente</option>
-                <option value="alistando">📦 Alistando</option>
-                <option value="listo">✅ Listo para despacho</option>
-                <option value="en_camino">🛵 En camino</option>
-                <option value="entregado">🏠 Entregado</option>
-                <option value="cancelado">❌ Cancelado</option>
-              </select>
-              {% if rol in ['admin', 'empleado', 'bodega'] %}
-              <button class="btn btn-primary fw-bold" onclick="abrirModalNuevoPedido()">➕ Nuevo Pedido</button>
-              {% endif %}
-              <button class="btn btn-outline-secondary btn-sm" onclick="cargarPedidos()" title="Actualizar">🔄</button>
-            </div>
-          </div>
-
-          <div class="table-responsive">
-            <table class="table table-hover align-middle border">
-              <thead class="table-dark">
-                <tr>
-                  <th>#</th>
-                  <th>Cliente</th>
-                  <th>Dirección Entrega</th>
-                  <th>Total</th>
-                  <th>Estado</th>
-                  <th>Vendedor</th>
-                  <th>Bodega</th>
-                  <th>Motocarguero</th>
-                  <th>Fecha</th>
-                  <th>Acciones</th>
-                </tr>
-              </thead>
-              <tbody id="tabla-pedidos-body">
-                <tr><td colspan="10" class="text-center text-muted py-4">Haz clic en la pestaña para cargar los pedidos.</td></tr>
-              </tbody>
-            </table>
-          </div>
-        </div>
+        
 
       </div>
+  <!-- Sub-panel de "Pedidos Manuales" retirado: esa logica la absorbe
+       Ventas y Facturacion. Se conserva la Cola de Despacho, que es el
+       flujo de entrega de las ventas "para llevar". -->
       <!-- ═══════════════════════════════════════════ -->
 
       <!-- PESTAÑA ALQUILER DE MAQUINARIA -->
@@ -1918,78 +1819,7 @@
            </div>
         </div>
 
-  <!-- MODAL NUEVO PEDIDO -->
-  <div class="modal fade" id="modalNuevoPedido" tabindex="-1">
-    <div class="modal-dialog modal-xl">
-      <div class="modal-content">
-        <div class="modal-header bg-primary text-white">
-          <h5 class="modal-title fw-bold">➕ Nuevo Pedido</h5>
-          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-        </div>
-        <div class="modal-body">
-          <div class="row g-3 mb-3">
-            <div class="col-md-5">
-              <label class="form-label fw-bold">Cliente</label>
-              <select id="pedido-cliente" placeholder="Buscar cliente..."></select>
-            </div>
-            <div class="col-md-4">
-              <label class="form-label fw-bold">Dirección de Entrega</label>
-              <input type="text" id="pedido-direccion" class="form-control" placeholder="Dirección donde se entrega" spellcheck="true">
-            </div>
-            <div class="col-md-3">
-              <label class="form-label fw-bold">Observaciones</label>
-              <input type="text" id="pedido-observaciones" class="form-control" placeholder="Notas adicionales" spellcheck="true">
-            </div>
-          </div>
 
-          <div class="card p-3 mb-3 border">
-            <h6 class="fw-bold mb-2">Agregar Productos al Pedido</h6>
-            <div class="row g-2 align-items-end">
-              <div class="col-md-6">
-                <label class="form-label fw-bold">Producto</label>
-                <select id="pedido-select-producto" placeholder="Buscar producto..."></select>
-              </div>
-              <div class="col-md-2">
-                <label class="form-label fw-bold">Cantidad</label>
-                <input type="number" id="pedido-cantidad" class="form-control" value="1" min="1">
-              </div>
-              <div class="col-md-2">
-                <button type="button" class="btn btn-success w-100" onclick="agregarItemPedido()">➕ Agregar</button>
-              </div>
-            </div>
-          </div>
-
-          <div class="table-responsive">
-            <table class="table table-bordered align-middle">
-              <thead class="table-light">
-                <tr>
-                  <th>Producto</th>
-                  <th>Precio Unit. <span class="text-muted small">(editable)</span></th>
-                  <th>Cantidad</th>
-                  <th>Subtotal</th>
-                  <th style="width:50px"></th>
-                </tr>
-              </thead>
-              <tbody id="tabla-items-pedido">
-                <tr><td colspan="5" class="text-center text-muted">Sin productos. Agregue items arriba.</td></tr>
-              </tbody>
-              <tfoot>
-                <tr class="table-light fw-bold">
-                  <td colspan="3" class="text-end">Total Pedido:</td>
-                  <td id="pedido-total-texto" class="text-primary">$ 0 COP</td>
-                  <td></td>
-                </tr>
-              </tfoot>
-            </table>
-          </div>
-        </div>
-        <div class="modal-footer">
-          <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancelar</button>
-          <button type="button" class="btn btn-primary fw-bold" onclick="guardarPedido()">💾 Crear Pedido</button>
-        </div>
-      </div>
-    </div>
-  </div>
 
   <!-- MODAL DETALLE / ACCIONES PEDIDO -->
   <div class="modal fade" id="modalDetallePedido" tabindex="-1">
@@ -2136,6 +1966,8 @@
           <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
         </div>
         <div class="modal-body">
+          <div class="factura-layout">
+          <div class="columna-tirilla">
           <div id="area-factura-pdf" class="factura-box">
             <div class="text-center mb-2">
               <img src="{{ url_for('static', filename='logo_ferreteria.jpeg') }}"
@@ -2225,7 +2057,9 @@
               No se aceptan cambios de material cortado o a la medida.
             </div>
           </div>
+          </div>
 
+          <div class="columna-edicion">
           <!-- Edición del detalle (precios y cantidades) - solo admin -->
           <div class="card mt-3 p-3 border-warning bg-light" id="panel-editar-items" style="display:none;">
             <h6 class="fw-bold mb-2">✏️ Editar precios y cantidades de esta factura</h6>
@@ -2279,6 +2113,8 @@
               </div>
             </div>
           </div>
+          </div>
+          </div>
         </div>
 
         <div class="modal-footer d-flex justify-content-between">
@@ -2297,7 +2133,72 @@
                </div>
             </div>
 
-             <!-- MODAL COMPROBANTE DE ABONO -->
+             <!-- ══ MODAL PRODUCTO RÁPIDO (desde cotizaciones) ═══════════════════
+       Crea el producto en el inventario y lo deja seleccionado en la
+       cotización en curso, sin salir del módulo. Mismo criterio que el
+       modal de cliente rápido del POS. -->
+  <div class="modal fade" id="modalProductoRapido" tabindex="-1" data-bs-backdrop="static">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header bg-primary text-white">
+          <h5 class="modal-title fw-bold">Registrar producto sin salir de la cotización</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <form id="form-producto-rapido" onsubmit="guardarProductoRapido(event)" class="modal-body">
+          <div class="alert alert-info py-2 small">
+            El precio que escriba es el <strong>precio final de venta</strong> (lo que paga
+            el cliente, IVA incluido), igual que en Inventario de Productos.
+          </div>
+          <div class="row g-3">
+            <div class="col-md-6">
+              <label class="form-label fw-bold" for="prod-rapido-nombre">Nombre *</label>
+              <input type="text" id="prod-rapido-nombre" class="form-control" required spellcheck="true">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold" for="prod-rapido-categoria">Categoría *</label>
+              <input type="text" id="prod-rapido-categoria" class="form-control" required
+                     list="lista-categorias-rapidas" placeholder="Ej: Tubería" spellcheck="true">
+              <datalist id="lista-categorias-rapidas"></datalist>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold" for="prod-rapido-codigo">Código de barras</label>
+              <input type="text" id="prod-rapido-codigo" class="form-control" spellcheck="false"
+                     autocomplete="off">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold" for="prod-rapido-dimensiones">Dimensiones / Medida</label>
+              <input type="text" id="prod-rapido-dimensiones" class="form-control"
+                     placeholder="Ej: 1/2 pulgada" spellcheck="false">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold" for="prod-rapido-iva">IVA (%)</label>
+              <select id="prod-rapido-iva" class="form-select">
+                <option value="19" selected>19% (general)</option>
+                <option value="5">5%</option>
+                <option value="0">0% (tasa cero)</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold" for="prod-rapido-precio">Precio de venta (IVA incl.) *</label>
+              <input type="number" min="0" step="0.01" id="prod-rapido-precio" class="form-control" required>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold" for="prod-rapido-stock">Stock inicial</label>
+              <input type="number" min="0" step="0.01" id="prod-rapido-stock" class="form-control" value="0">
+            </div>
+          </div>
+          <div class="d-flex justify-content-end gap-2 mt-4">
+            <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cancelar</button>
+            <button type="submit" class="btn btn-primary fw-bold" id="btn-guardar-producto-rapido">
+              💾 Guardar y agregarlo a la cotización
+            </button>
+          </div>
+        </form>
+      </div>
+    </div>
+  </div>
+
+  <!-- MODAL COMPROBANTE DE ABONO -->
   <div class="modal fade" id="modalComprobanteAbono" tabindex="-1">
     <div class="modal-dialog">
       <div class="modal-content">
@@ -2376,9 +2277,14 @@
            <div class="card p-3 mb-3 border">
              <h6 class="fw-bold mb-2">Agregar ítems a la cotización</h6>
              <div class="row g-2 align-items-end">
-               <div class="col-md-5">
+               <div class="col-md-4">
                  <label class="form-label fw-bold">Producto</label>
-                 <select id="cot-select-producto" placeholder="Buscar producto..."></select>
+                 <div class="input-group">
+                   <select id="cot-select-producto" placeholder="Buscar producto..."></select>
+                   <button type="button" class="btn btn-outline-primary fw-bold"
+                           title="Crear el producto en el inventario sin salir de la cotización"
+                           onclick="abrirModalProductoRapido()">+ Producto</button>
+                 </div>
                </div>
                <div class="col-md-2">
                  <label class="form-label fw-bold">Cantidad</label>
@@ -2388,14 +2294,14 @@
                  <label class="form-label fw-bold">Precio Unit.</label>
                  <input type="number" min="0" step="0.01" id="cot-precio" class="form-control" placeholder="Automático">
                </div>
-               <div class="col-md-3">
+               <div class="col-md-2">
                  <button type="button" class="btn btn-warning w-100 fw-bold" onclick="agregarItemCotizacion()">➕ Agregar</button>
                </div>
              </div>
              <div class="row g-2 align-items-end mt-2">
                <div class="col-md-9">
-                 <label class="form-label fw-bold">O ítem libre (material especial / fleje a medida)</label>
-                 <input type="text" id="cot-item-libre-desc" class="form-control" placeholder="Ej: Fleje 3/8 x 10x20 cm, 50 pzs" spellcheck="true">
+                 <label class="form-label fw-bold">O ítem libre (material especial)</label>
+                 <input type="text" id="cot-item-libre-desc" class="form-control" placeholder="Ej: Corte especial, instalación" spellcheck="true">
                </div>
                <div class="col-md-3">
                  <button type="button" class="btn btn-outline-warning w-100 fw-bold" onclick="agregarItemLibreCotizacion()">Agregar ítem libre</button>
@@ -2645,7 +2551,6 @@
     const cargarQrCode = () => cargarScriptUnaVez('html5qrcode', VENDOR_QRCODE);
 
     let carrito = [];
-    let carritoFlejes = [];
     // IVA vigente del negocio (se carga desde /api/configuracion). Se calcula en
     // el POS solo para mostrarlo; el cobro real lo hace el servidor.
     let ivaPorcentaje = 19;
@@ -2688,6 +2593,27 @@
       function fechaCO(iso) {
         const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(iso ?? ''));
         return m ? `${m[3]}/${m[2]}/${m[1]}` : (iso ?? '');
+      }
+
+      // ── Fecha local en formato YYYY-MM-DD ────────────────────────────────
+      // BUG (corregido): se usaba `new Date().toISOString().slice(0,10)`, que
+      // devuelve la fecha en UTC, NO la local. En Colombia (UTC-5) cualquier
+      // momento despues de las 19:00 daba el dia SIGUIENTE, asi que "Ver Hoy"
+      // consultaba una fecha sin ventas y el historial aparecia vacio.
+      // Se arman los componentes con los metodos locales (getFullYear, getMonth,
+      // getDate), que ya estan en la zona horaria del navegador.
+      function hoyLocalISO() {
+        const d = new Date();
+        const mes = String(d.getMonth() + 1).padStart(2, '0');
+        const dia = String(d.getDate()).padStart(2, '0');
+        return `${d.getFullYear()}-${mes}-${dia}`;
+      }
+
+      // Mismo criterio, pero para el mes en curso (YYYY-MM). Lo usa el filtro
+      // de abonos y el reporte consolidado.
+      function mesLocalISO() {
+        const d = new Date();
+        return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`;
       }
 
       function escapeHtml(value) {
@@ -3187,6 +3113,9 @@
               <td>${vencido ? '<span class="badge bg-danger">Vencido</span>' : '<span class="badge bg-success">Activo</span>'}</td>
               <td>
                 <button class="btn btn-sm btn-warning" onclick="abrirDevolucionAlquiler(${r.id})">Devolver</button>
+                <button class="btn btn-sm btn-outline-primary"
+                        title="Recibo de entrega: queda en poder de ambas partes con fecha y hora"
+                        onclick="imprimirReciboEntregaAlquiler(${r.id})">🧾 Recibo</button>
               </td>
             </tr>
           `;
@@ -3194,6 +3123,60 @@
       } catch (err) {
         console.error('Error cargando alquileres:', err);
       }
+    }
+
+    // ══ Recibo de entrega de equipo (punto 8) ════════════════════════
+    // Comprobante de que la maquinaria salio: fecha y hora, detalle de cada
+    // equipo con su estado de salida, y la fecha pactada de devolucion. Sin
+    // esto no hay respaldo de cuando se llevo ni de como estaba.
+    async function imprimirReciboEntregaAlquiler(idAlquiler) {
+      const res = await fetch(`/api/alquileres/${idAlquiler}/recibo`);
+      const d = await res.json();
+      if (!res.ok) { alert('Error: ' + (d.error || 'no se pudo cargar el recibo')); return; }
+
+      const a = d.alquiler;
+      const neg = d.negocio || {};
+      const estadoSalida = { bueno: 'Bueno', con_danos: 'Con daños', faltante: 'Faltante' };
+
+      const filas = d.equipos.map(e => `<tr>
+        <td class="text-center">${e.cantidad}</td>
+        <td>${escapeHtml(e.equipo || '—')}${e.codigo_interno ? '<br><small>' + escapeHtml(e.codigo_interno) + '</small>' : ''}</td>
+        <td>${escapeHtml(estadoSalida[e.estado_salida] || e.estado_salida || '—')}</td>
+        <td><small>${escapeHtml(e.observaciones || '')}</small></td>
+      </tr>`).join('');
+
+      const html = `
+        <div class="text-center mb-2">
+          <h3 class="fw-bold mb-0">${escapeHtml(neg.nombre || 'FERRETERÍA Y FÁBRICA DE FLEJES').toUpperCase()}</h3>
+          <p class="text-muted mb-0">${neg.nit ? 'NIT: ' + escapeHtml(neg.nit) : ''}${neg.telefono ? ' | Tel: ' + escapeHtml(neg.telefono) : ''}</p>
+          <p class="text-muted mb-0">${escapeHtml(neg.direccion || '')}</p>
+          <p class="fw-bold mb-0">RECIBO DE ENTREGA DE EQUIPO</p>
+          <p class="mb-0">Alquiler N° ${a.id}</p>
+        </div>
+        <div class="recibo-sep"></div>
+        <p><strong>Fecha y hora de entrega:</strong> ${escapeHtml(a.fecha_salida || '—')}</p>
+        <p><strong>Cliente:</strong> ${escapeHtml(a.cliente)}</p>
+        <p><strong>Cédula/NIT:</strong> ${escapeHtml(a.cedula_nit || 'Sin documento')}</p>
+        <p><strong>Teléfono:</strong> ${escapeHtml(a.telefono || '—')}</p>
+        <p><strong>Devolución pactada:</strong> ${escapeHtml(a.fecha_devolucion_pactada || '—')}</p>
+        <p><strong>Depósito recibido:</strong> ${monedaCOP(a.valor_deposito)}</p>
+        <div class="recibo-sep"></div>
+        <table class="table table-sm mb-0">
+          <thead class="table-light"><tr><th class="text-center">Cant.</th><th>Equipo</th>
+            <th>Estado al salir</th><th>Observaciones</th></tr></thead>
+          <tbody>${filas || '<tr><td colspan="4" class="text-center">Sin equipos.</td></tr>'}</tbody>
+        </table>
+        ${a.notas_salida ? '<div class="recibo-sep"></div><p class="mb-0"><strong>Notas:</strong> ' + escapeHtml(a.notas_salida) + '</p>' : ''}
+        <div class="recibo-sep"></div>
+        <p class="mb-0">Firmas:</p>
+        <div style="display:flex;justify-content:space-between;margin-top:22px;font-size:13px;">
+          <span style="border-top:1px solid #000;padding-top:3px;flex:1;text-align:center;">Entregado por</span>
+          <span style="width:18px;"></span>
+          <span style="border-top:1px solid #000;padding-top:3px;flex:1;text-align:center;">Recibido por</span>
+        </div>
+        <div class="recibo-pie">Comprobante de entrega. Consérvelo para el control de devolución.</div>`;
+
+      imprimirFragmento(html, 'alquiler');
     }
 
     function abrirDevolucionAlquiler(idAlquiler) {
@@ -3336,98 +3319,10 @@
       });
     }
 
-    function agregarFlejeAlPedido() {
-      const calibre = document.getElementById('fleje-calibre').value.trim();
-      const ancho = Number(document.getElementById('fleje-ancho').value || 0);
-      const largo = Number(document.getElementById('fleje-largo').value || 0);
-      const gancho = Number(document.getElementById('fleje-gancho').value || 0);
-      const cantidad = Number(document.getElementById('fleje-cantidad').value || 0);
-
-      if (!calibre || ancho <= 0 || largo <= 0 || cantidad <= 0) {
-        alert('Complete calibre, ancho, largo y cantidad para el fleje.');
-        return;
-      }
-
-      carritoFlejes.push({
-        calibre,
-        ancho_cm: ancho,
-        largo_cm: largo,
-        largo_gancho_cm: gancho,
-        cantidad_piezas: cantidad
-      });
-
-      renderTablaFlejesPedido();
-      document.getElementById('fleje-calibre').value = '';
-      document.getElementById('fleje-ancho').value = 10;
-      document.getElementById('fleje-largo').value = 20;
-      document.getElementById('fleje-gancho').value = 5;
-      document.getElementById('fleje-cantidad').value = 1;
-    }
-
-    function renderTablaFlejesPedido() {
-      const tbody = document.getElementById('tabla-flejes-pedido-body');
-      if (!tbody) return;
-      tbody.innerHTML = '';
-
-      if (carritoFlejes.length === 0) {
-        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Sin flejes agregados aún.</td></tr>';
-        return;
-      }
-
-      carritoFlejes.forEach((item, index) => {
-        tbody.innerHTML += `
-          <tr>
-            <td>${escapeHtml(item.calibre)}</td>
-            <td>${Number(item.ancho_cm).toFixed(1)} x ${Number(item.largo_cm).toFixed(1)} cm</td>
-            <td>${Number(item.largo_gancho_cm).toFixed(1)} cm</td>
-            <td>${item.cantidad_piezas}</td>
-            <td><button type="button" class="btn btn-sm btn-danger" onclick="eliminarFlejeDelPedido(${index})">Quitar</button></td>
-          </tr>
-        `;
-      });
-    }
-
-    function eliminarFlejeDelPedido(index) {
-      carritoFlejes.splice(index, 1);
-      renderTablaFlejesPedido();
-    }
-
-    async function enviarFlejesAFabrica() {
-      if (carritoFlejes.length === 0) {
-        alert('Agregue al menos un fleje para enviar a la fábrica.');
-        return;
-      }
-
-      const idCliente = document.getElementById('select-cliente')?.value;
-      if (!idCliente) {
-        alert('Seleccione un cliente antes de enviar la orden a la fábrica.');
-        return;
-      }
-
-      try {
-        const payload = {
-          id_cliente: Number(idCliente),
-          observaciones: 'Pedido generado desde ventas / facturación',
-          items: carritoFlejes
-        };
-
-        const res = await fetch('/api/fabrica/ordenes', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(payload)
-        });
-        const data = await res.json();
-
-        if (!res.ok) throw new Error(data.error || 'No se pudo crear la orden');
-
-        alert(`✅ ${data.mensaje}\nOrden: ${data.numero_orden}`);
-        carritoFlejes = [];
-        renderTablaFlejesPedido();
-        await cargarOrdenesFlejes();
-      } catch (err) {
-        alert(err.message || 'Error al enviar la orden a la fábrica');
-      }
-    }
+    // ── Seccion de "Flejes a medida" retirada ──────────────────────
+    // Los flejes son productos de catalogo: se venden por su precio y, si
+    // su categoria es Fleje/Flejes, la venta genera sola la orden a la
+    // fabrica (ver _es_producto_fleje en blueprints/ventas.py).
 
     function procesarCodigoBarras(event) {
       if (event.key !== 'Enter') return;
@@ -4554,6 +4449,165 @@
       alert(historial.map(v => `Venta #${v.id} | ${v.fecha} | ${monedaCOP(v.total)} | ${v.tipo_pago}${v.anulada ? ' | ANULADA' : ''}`).join('\n'));
     }
 
+    // ══ Producto rápido desde cotizaciones (punto 6) ═══════════════
+    // Abre el alta de producto sin perder la cotización en curso. Al guardar,
+    // el producto queda creado en el inventario Y agregado a la cotización.
+    function abrirModalProductoRapido() {
+      const form = document.getElementById('form-producto-rapido');
+      if (form) form.reset();
+      llenarCategoriasRapidas();
+      new bootstrap.Modal(document.getElementById('modalProductoRapido')).show();
+      setTimeout(() => document.getElementById('prod-rapido-nombre')?.focus(), 400);
+    }
+
+    // Autocompleta el datalist con las categorias que ya existen, para no
+    // escribir "TUBERIA" y "Tubería" como dos categorias distintas.
+    async function llenarCategoriasRapidas() {
+      const lista = document.getElementById('lista-categorias-rapidas');
+      if (!lista || lista.dataset.cargado === '1') return;
+      try {
+        const res = await fetch('/api/productos?limite=200');
+        const prods = await res.json();
+        const cats = [...new Set(prods.map(p => (p.categoria || '').trim()).filter(Boolean))]
+          .sort((a, b) => a.localeCompare(b, 'es'));
+        lista.innerHTML = cats.map(c => `<option value="${escapeHtml(c)}">`).join('');
+        lista.dataset.cargado = '1';
+      } catch (e) { /* el datalist es solo ayuda, no es critico */ }
+    }
+
+    async function guardarProductoRapido(e) {
+      e.preventDefault();
+      const btn = document.getElementById('btn-guardar-producto-rapido');
+      const payload = {
+        nombre: document.getElementById('prod-rapido-nombre').value.trim(),
+        categoria: document.getElementById('prod-rapido-categoria').value.trim(),
+        dimensiones: document.getElementById('prod-rapido-dimensiones').value.trim(),
+        codigo_barras: document.getElementById('prod-rapido-codigo').value.trim(),
+        precio_venta: Number(document.getElementById('prod-rapido-precio').value || 0),
+        iva_tasa: Number(document.getElementById('prod-rapido-iva').value || 19),
+        stock_actual: Number(document.getElementById('prod-rapido-stock').value || 0),
+        unidad_medida: '94',
+      };
+      if (!payload.nombre || !payload.categoria) {
+        alert('El nombre y la categoría son obligatorios.');
+        return;
+      }
+      if (payload.precio_venta <= 0) {
+        alert('Escriba el precio de venta del producto.');
+        return;
+      }
+
+      const textoOriginal = btn.innerText;
+      btn.disabled = true;
+      btn.innerText = 'Guardando…';
+      try {
+        const res = await fetch('/api/productos', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(payload)
+        });
+        const data = await res.json();
+        if (!res.ok) {
+          alert('No se pudo guardar el producto:\n\n' + (data.error || 'Error desconocido'));
+          return;
+        }
+
+        // El buscador de productos es server-side, asi que el producto nuevo
+        // todavia no esta en las opciones. Se agrega a mano y se selecciona.
+        // `cargarFormularioCotizaciones` NO se llama aqui a proposito: ese
+        // TomSelect usa `load`, no un catalogo fijo, y recargarlo cerraria el
+        // modal de la cotizacion que esta en curso.
+        if (tsCotProducto) {
+          const nombreNuevo = `${payload.nombre} ${payload.dimensiones ? '['+payload.dimensiones+']' : ''}`;
+          tsCotProducto.addOption({
+            id: data.id,
+            nombre: nombreNuevo,
+            precio_venta: payload.precio_venta,
+            codigo_barras: payload.codigo_barras || '',
+          });
+          tsCotProducto.setValue(String(data.id), true);
+        }
+        bootstrap.Modal.getInstance(document.getElementById('modalProductoRapido'))?.hide();
+        alert('Producto "' + payload.nombre + '" creado y seleccionado.\nEscriba la cantidad y presione "Agregar".');
+      } catch (err) {
+        alert('Error de conexión al guardar el producto.');
+      } finally {
+        btn.disabled = false;
+        btn.innerText = textoOriginal;
+      }
+    }
+
+    // ══ Consolidado mensual del cliente (punto 3) ═════════════════
+    // Hoja de vida del mes en curso: todas sus compras, todos sus abonos y
+    // el saldo global. Es el "estado de cuenta" que pide el cliente.
+    async function imprimirConsolidadoCliente() {
+      const idCliente = document.getElementById('select-credito-cliente')?.value;
+      if (!idCliente) {
+        alert('Seleccione primero un cliente.');
+        return;
+      }
+      const res = await fetch(`/api/creditos/${idCliente}/consolidado`);
+      const d = await res.json();
+      if (!res.ok) { alert('Error: ' + (d.error || 'no se pudo cargar')); return; }
+
+      const negocio = window.datosNegocio || {};
+      const filaVenta = (v) => `<tr><td>#${v.id}</td><td>${escapeHtml(v.fecha_dia)}</td>`
+        + `<td><small>${escapeHtml(v.productos || '—')}</small></td>`
+        + `<td class="text-end">${monedaCOP(v.total_venta)}</td>`
+        + `<td class="text-end">${monedaCOP(v.saldo_pendiente)}</td></tr>`;
+
+      const html = `
+        <div class="text-center mb-2">
+          <h3 class="fw-bold mb-0">${escapeHtml(negocio.nombre || 'FERRETERÍA Y FÁBRICA DE FLEJES').toUpperCase()}</h3>
+          <p class="text-muted mb-0">${negocio.nit ? 'NIT: ' + escapeHtml(negocio.nit) : ''}</p>
+          <p class="fw-bold mb-0">ESTADO DE CUENTA — ${escapeHtml(d.mes_nombre.toUpperCase())}</p>
+        </div>
+        <div class="recibo-sep"></div>
+        <p><strong>Cliente:</strong> ${escapeHtml(d.cliente.nombre)}</p>
+        <p><strong>Cédula/NIT:</strong> ${escapeHtml(d.cliente.cedula_nit || 'Sin documento')}</p>
+        <p><strong>Teléfono:</strong> ${escapeHtml(d.cliente.telefono || '—')}</p>
+        <p><strong>Periodo:</strong> ${escapeHtml(d.periodo)}</p>
+        <div class="recibo-sep"></div>
+        <table class="table table-sm mb-0">
+          <thead class="table-light"><tr><th>Factura</th><th>Fecha</th><th>Productos</th>
+            <th class="text-end">Total</th><th class="text-end">Saldo</th></tr></thead>
+          <tbody>${d.ventas.map(filaVenta).join('')
+            || '<tr><td colspan="5" class="text-center">Sin compras en el mes.</td></tr>'}</tbody>
+        </table>
+        <div class="recibo-sep"></div>
+        <table class="table table-sm mb-0">
+          <tbody>
+            <tr><th>Total comprado en el mes</th><td class="text-end">${monedaCOP(d.total_mes)}</td></tr>
+            <tr><th>Abonos del mes</th><td class="text-end">${monedaCOP(d.abonos_mes)}</td></tr>
+            <tr><th>Total facturado histórico</th><td class="text-end">${monedaCOP(d.total_facturado)}</td></tr>
+            <tr><th>Total abonado histórico</th><td class="text-end">${monedaCOP(d.total_abonado)}</td></tr>
+            <tr class="recibo-total"><th>SALDO ACTUAL</th><td class="text-end">${monedaCOP(d.saldo_global)}</td></tr>
+          </tbody>
+        </table>
+        <div class="recibo-pie">Documento informativo de cartera. No es factura electrónica.</div>`;
+
+      await imprimirFragmento(html, 'consolidado');
+    }
+
+    // Imprime HTML arbitrario con el formato de tirilla (80 mm).
+    // `imprimirRecibo` recibe un ID (hace getElementById y clona), asi que se
+    // crea un area oculta con el contenido y se le pasa su id.
+    function imprimirFragmento(html, tipo) {
+      const idArea = 'area-impresion-temporal';
+      // Reutiliza el area si ya existe: imprimir dos veces seguidas no debe
+      // dejar dos nodos huerfanos.
+      let area = document.getElementById(idArea);
+      if (!area) {
+        area = document.createElement('div');
+        area.id = idArea;
+        area.style.display = 'none';
+        document.body.appendChild(area);
+      }
+      area.className = 'recibo-termico';
+      area.innerHTML = html;
+      imprimirRecibo(idArea, tipo);
+    }
+
     // ══ Créditos: ficha del cliente, saldo e historial filtrable ═════════
     // Cliente que está viendo el cajero en la sección de créditos. Se guarda
     // para que el botón "Ver factura completa" sepa a cuál factura ir.
@@ -4654,12 +4708,11 @@
       if (periodo === 'anio') llenarAniosAbonos();
       // Al cambiar de periodo se toma la fecha actual como punto de partida, para
       // no mostrar un filtro vacío sin que el usuario haya escrito nada.
-      const hoy = new Date();
       if (periodo === 'dia' && !document.getElementById('abono-filtro-dia').value) {
-        document.getElementById('abono-filtro-dia').value = hoy.toISOString().slice(0, 10);
+        document.getElementById('abono-filtro-dia').value = hoyLocalISO();
       }
       if (periodo === 'mes' && !document.getElementById('abono-filtro-mes').value) {
-        document.getElementById('abono-filtro-mes').value = hoy.toISOString().slice(0, 7);
+        document.getElementById('abono-filtro-mes').value = mesLocalISO();
       }
       cargarHistorialAbonos();
     }
@@ -4765,7 +4818,11 @@
            cargarCreditosTabla();
            cargarHistorialAbonos(payload.id_cliente);
            cargarFacturasCreditoCliente(payload.id_cliente);
-           mostrarComprobanteAbono(data.abono, autoImprimirActivado());
+           // El comprobante SIEMPRE se imprime tras registrar el abono: es el
+           // respaldo del pago que el cliente se lleva. Antes solo se imprimia
+           // si el usuario habia activado la preferencia global, y el cajero
+           // solia dejarla apagada, asi que el pago quedaba sin recibo.
+           mostrarComprobanteAbono(data.abono, true);
       }
 
     // Impresión automática: se recuerda la preferencia del usuario en localStorage.
@@ -4932,6 +4989,61 @@
       .recibo-termico .recibo-observaciones { font-size: 13px; line-height: 1.3; }
       .recibo-termico .recibo-observaciones p { white-space: pre-wrap; }
 
+      /* ══ MODAL DE FACTURA: vista previa y campos en una sola pantalla ══
+         El modal era largo: la tirilla arriba y, debajo, el panel de edicion
+         de precios y el formulario del cliente. Con una factura de muchas lineas
+         habia que hacer scroll dentro del modal para llegar a los botones del
+         pie, y la vista previa se descuadraba.
+         Ahora el cuerpo es un flex de dos columnas con scroll propio: la
+         tirilla a la izquierda (el inseparable) y los campos de edicion a la
+         derecha. Cada columna scrollea sola y el pie queda siempre visible. */
+      #modalFactura .modal-dialog {
+        max-width: 96vw;
+        height: 92vh;
+      }
+      #modalFactura .modal-content {
+        height: 100%;
+      }
+      #modalFactura .modal-body {
+        display: flex;
+        flex-direction: column;
+        overflow: hidden;
+        padding: 0;
+      }
+      #modalFactura .factura-layout {
+        display: flex;
+        flex: 1 1 auto;
+        min-height: 0;
+        gap: 0;
+      }
+      #modalFactura .columna-tirilla {
+        flex: 0 0 46%;
+        min-width: 320px;
+        overflow-y: auto;
+        padding: 1rem;
+        background: #f8f9fa;
+        border-right: 1px solid #dee2e6;
+      }
+      #modalFactura .columna-edicion {
+        flex: 1 1 auto;
+        min-width: 0;
+        overflow-y: auto;
+        padding: 1rem;
+      }
+      #modalFactura .modal-footer {
+        flex: 0 0 auto;
+      }
+      /* En pantallas angostas no caben dos columnas: se apilan y vuelve a
+         haber una sola columna con scroll (el comportamiento de antes). */
+      @media (max-width: 991.98px) {
+        #modalFactura .modal-dialog { height: auto; max-width: 95vw; }
+        #modalFactura .modal-content { height: auto; }
+        #modalFactura .modal-body { overflow-y: auto; }
+        #modalFactura .factura-layout { flex-direction: column; }
+        #modalFactura .columna-tirilla,
+        #modalFactura .columna-edicion { overflow: visible; flex: 0 0 auto; }
+      }
+
       /* ── Documento Equivalente Electrónico POS (DIAN) ─────────────────
          Estas reglas van también en CSS_TIRILLA (el que se inyecta en la
          ventana de impresión y en el PDF). Si solo estuvieran en la hoja de
@@ -5096,8 +5208,8 @@
       setTimeout(unaVez, 2000);
     }
 
-		function setHoyHistorial() {
-			document.getElementById('filtro-fecha-historial').value = new Date().toISOString().slice(0, 10);
+      function setHoyHistorial() {
+			document.getElementById('filtro-fecha-historial').value = hoyLocalISO();
 			cargarHistorialVentas();
 		}
 
@@ -5264,7 +5376,11 @@
 				setTexto('fac-observaciones', textoObs);
 				if (bloqueObs) bloqueObs.style.display = textoObs ? '' : 'none';
 				setTexto('fac-pago', factura.tipo_pago);
-				setTexto('fac-metodo-pago', factura.tipo_pago);
+				// BUG (corregido): aqui estaba `setTexto('fac-metodo-pago', ...)`, pero
+				// ese id NO existe en el HTML. `setTexto` hace getElementById(...).innerText
+				// sobre null, lanzaba TypeError, y como verFactura es async el error se
+				// perdia como promesa rechazada: el modal NUNCA abria y no se veia nada en
+				// la consola. El medio de pago ya se pinta en 'fac-pago'.
 				setTexto('fac-cliente-nombre', factura.cliente);
 				setTexto('fac-cliente-nit', factura.cedula_nit || '');
 				setTexto('fac-cliente-tel', factura.telefono || '');
@@ -5528,7 +5644,7 @@
       document.getElementById('config-nit').value = config.nit || '';
       document.getElementById('config-telefono').value = config.telefono || '';
       document.getElementById('config-direccion').value = config.direccion || '';
-      const fechaHoy = new Date().toISOString().slice(0, 10);
+      const fechaHoy = hoyLocalISO();
       document.getElementById('gasto-fecha').value = document.getElementById('gasto-fecha').value || fechaHoy;
       document.getElementById('cierre-fecha').value = document.getElementById('cierre-fecha').value || fechaHoy;
       const movimientoProducto = document.getElementById('mov-producto');
@@ -5554,7 +5670,7 @@
     // Carga y pinta toda la vista del cierre de un dia.
     async function cargarCierreDiario() {
       const input = document.getElementById('cierre-diario-fecha');
-      if (!input.value) input.value = new Date().toISOString().slice(0, 10);
+      if (!input.value) input.value = hoyLocalISO();
       const fecha = input.value;
       try {
         const res = await fetch('/api/cierre-diario?fecha=' + encodeURIComponent(fecha));
@@ -5768,7 +5884,7 @@
       const negocio = (document.getElementById('config-nombre').value || 'FERRETERÍA').toUpperCase();
 
       const tablas = (titulo, filasHTML) =>
-        '<h3>' + titulo + '</h3><table border="1" cellspacing="0" cellpadding="4" width="100%">' + filasHTML + '</table>';
+        '<h3>' + titulo + '</h3><table><tbody>' + filasHTML + '</tbody></table>';
 
       const productos = (d.productos_vendidos || []).map(p =>
         '<tr><td>' + escapeHtml(p.nombre) + '</td><td align="right">' + p.cantidad + '</td><td align="right">' +
@@ -5785,9 +5901,19 @@
 
       const html =
         '<html><head><title>Cierre ' + d.fecha + '</title><style>' +
-        'body{font-family:Arial;font-size:12px;padding:20px}' +
-        'h1{font-size:18px}h3{font-size:14px;margin-top:18px}' +
-        '.resumen td{padding:6px;font-size:14px}' +
+        // TIRILLA DE CIERRE (punto 10): cuerpo y tablas mas grandes y TODO en
+        // negrita. Salia en 12px normal y con la letra fina de la impresora
+        // termica los numeros quedaba ilegibles. Ahora el cuerpo sube a 16px,
+        // los titulos a 20px y se aplica font-weight:bold de forma global, que
+        // es lo que hace legible un 80 mm.
+        'body{font-family:Arial,sans-serif;font-size:16px;font-weight:bold;padding:16px;color:#000;line-height:1.35}' +
+        'h1{font-size:20px;margin:0 0 10px 0}' +
+        'h3{font-size:17px;margin:18px 0 6px 0}' +
+        'table{border-collapse:collapse;width:100%;margin-bottom:6px}' +
+        'td,th{padding:5px 6px;font-size:15px;font-weight:bold;border:1px solid #000;text-align:left}' +
+        'th{background:#e8e8e8}' +
+        'td[align="right"],th[align="right"]{text-align:right;white-space:nowrap}' +
+        '.firma td{border:none;padding-top:26px;font-size:15px}' +
         '</style></head><body>' +
         '<h1>' + negocio + ' — Cierre Diario ' + d.fecha + '</h1>' +
         tablas('Resumen',
@@ -5804,11 +5930,14 @@
           '<tr><td>Efectivo Contado</td><td align="right">' + monedaCOP(contado) + '</td></tr>' +
           '<tr><td><b>Diferencia</b></td><td align="right"><b>' + (dif > 0 ? 'SOBRA ' : (dif < 0 ? 'FALTA ' : 'CUADRADA ')) +
           monedaCOP(Math.abs(dif)) + '</b></td></tr>') +
-        (productos ? tablas('Productos Vendidos', '<tr><th>Producto</th><th>Cant.</th><th>Subtotal</th><th>Pago</th></tr>' + productos) : '') +
-        (gastos ? tablas('Gastos', '<tr><th>Hora</th><th>Concepto</th><th>Categoría</th><th>Monto</th></tr>' + gastos) : '') +
-        (abonos ? tablas('Abonos Recibidos', '<tr><th>Hora</th><th>Cliente</th><th>Monto</th><th>Saldo</th></tr>' + abonos) : '') +
-        (fiados ? tablas('Fiados del Día', '<tr><th>Hora</th><th>Cliente</th><th>Total</th><th>Pendiente</th></tr>' + fiados) : '') +
-        '<p style="margin-top:24px">Generado: ' + new Date().toLocaleString('es-CO') + '</p>' +
+        (productos ? tablas('Productos Vendidos', '<tr><th>Producto</th><th align="right">Cant.</th><th align="right">Subtotal</th><th>Pago</th></tr>' + productos) : '') +
+        (gastos ? tablas('Gastos', '<tr><th>Hora</th><th>Concepto</th><th>Categoría</th><th align="right">Monto</th></tr>' + gastos) : '') +
+        (abonos ? tablas('Abonos Recibidos', '<tr><th>Hora</th><th>Cliente</th><th align="right">Monto</th><th align="right">Saldo</th></tr>' + abonos) : '') +
+        (fiados ? tablas('Fiados del Día', '<tr><th>Hora</th><th>Cliente</th><th align="right">Total</th><th align="right">Pendiente</th></tr>' + fiados) : '') +
+        '<p style="margin-top:20px">Generado: ' + new Date().toLocaleString('es-CO') + '</p>' +
+        // Espacio para firma del responsable del cierre.
+        '<table class="firma" style="margin-top:20px"><tr>' +
+        '<td style="text-align:center">Firma del responsable</td></tr></table>' +
         '</body></html>';
 
       const win = window.open('', '_blank');
@@ -6126,10 +6255,7 @@
     // ══════════════════════════════════════════════════════════════════════
     //  MÓDULO DE PEDIDOS
     // ══════════════════════════════════════════════════════════════════════
-    let itemsPedidoActual = [];
     let pedidoDetalleActual = null;
-    let tsPedidoCliente = null;
-    let tsPedidoProducto = null;
 
     const ESTADO_INFO = {
       pendiente:  { label: '⏳ Pendiente',        color: 'warning text-dark' },
@@ -6226,23 +6352,18 @@
 
     function irAPedidos() {
       const tab = document.getElementById('pedidos-tab');
-      if (tab) { bootstrap.Tab.getOrCreateInstance(tab).show(); activarSubtabPedidos('despachos'); }
+      if (tab) { bootstrap.Tab.getOrCreateInstance(tab).show(); cargarDespachos(); }
     }
 
-    // ── Tabla de pedidos ─────────────────────────────────────────────────────
+    // ── Cola de despacho ──────────────────────────────────────────────────────
+    // Antes esta funcion alternaba entre dos sub-paneles ("Despachos" y
+    // "Pedidos Manuales"). Se elimino el de pedidos manuales, asi que la cola
+    // de despacho es lo unico que hay: ya no necesita un selector de sub-tab.
     function activarSubtabPedidos(tipo) {
-      const mostrarDespachos = tipo === 'despachos';
-      // El motocarguero no tiene la subtab de pedidos manuales: se valida null.
+      // Se mantiene la firma porque el JS externo y varios onclick la llaman.
       const panelDespachos = document.getElementById('subtab-despachos');
-      const panelManuales = document.getElementById('subtab-manuales');
-      const btnDespachos = document.getElementById('subtab-despachos-btn');
-      const btnManuales = document.getElementById('subtab-manuales-btn');
-      if (panelDespachos) panelDespachos.classList.toggle('d-none', !mostrarDespachos);
-      if (panelManuales) panelManuales.classList.toggle('d-none', mostrarDespachos);
-      if (btnDespachos) btnDespachos.classList.toggle('active', mostrarDespachos);
-      if (btnManuales) btnManuales.classList.toggle('active', !mostrarDespachos);
-      if (mostrarDespachos) cargarDespachos();
-      else cargarPedidos();
+      if (panelDespachos) panelDespachos.classList.remove('d-none');
+      cargarDespachos();
 
       // Al entrar a Pedidos, marcar como vistas las notificaciones de flejes listos que llegan aquí
       fetch('/api/fabrica/notificaciones/marcar_leidas', {
@@ -6502,133 +6623,12 @@
       cargarDespachos();
     }
 
-    async function cargarPedidos() {
-      const tbody = document.getElementById('tabla-pedidos-body');
-      tbody.innerHTML = '<tr><td colspan="10" class="text-center text-muted py-3">Cargando...</td></tr>';
-      const estado = document.getElementById('pedido-filtro-estado').value;
-      try {
-        const res = await fetch('/api/pedidos' + (estado ? '?estado=' + estado : ''));
-        if (!res.ok) { tbody.innerHTML = `<tr><td colspan="10" class="text-danger text-center">Error ${res.status}</td></tr>`; return; }
-        const pedidos = await res.json();
-        tbody.innerHTML = '';
-        if (!pedidos.length) {
-          tbody.innerHTML = '<tr><td colspan="10" class="text-center text-muted py-4">No hay pedidos para mostrar.</td></tr>';
-          return;
-        }
-        pedidos.forEach(p => {
-          const info  = ESTADO_INFO[p.estado] || { label: p.estado, color: 'secondary' };
-          const fecha = (p.fecha_creacion || '').slice(0, 16);
-          tbody.innerHTML += `
-            <tr>
-              <td class="fw-bold">#${p.id}</td>
-              <td>${escapeHtml(p.nombre_cliente)}<br><small class="text-muted">${escapeHtml(p.telefono_cliente||'')}</small></td>
-              <td class="small">${escapeHtml(p.direccion_entrega||'—')}</td>
-              <td class="fw-bold text-primary">${monedaCOP(p.total_pedido)}</td>
-              <td><span class="badge bg-${info.color}">${escapeHtml(info.label)}</span></td>
-              <td class="small">${escapeHtml(p.usuario_vendedor)}</td>
-              <td class="small">${escapeHtml(p.usuario_bodega||'—')}</td>
-              <td class="small">${escapeHtml(p.nombre_motocarguero||'—')}</td>
-              <td class="small">${escapeHtml(fecha)}</td>
-              <td><button class="btn btn-sm btn-outline-dark" onclick="abrirDetallePedido(${p.id})">Ver / Gestionar</button></td>
-            </tr>`;
-        });
-        pollNotificacionesPedidos();
-      } catch(e) {
-        tbody.innerHTML = '<tr><td colspan="10" class="text-danger text-center">No se pudo conectar.</td></tr>';
-      }
-    }
-
-    // ── Nuevo pedido ─────────────────────────────────────────────────────────
-    function abrirModalNuevoPedido() {
-      itemsPedidoActual = [];
-      renderItemsPedido();
-      if (tsPedidoCliente) tsPedidoCliente.destroy();
-      tsPedidoCliente = new TomSelect('#pedido-cliente', {
-        options: clientesLista.map(c => ({ value: c.id, text: `${c.nombre} (${c.cedula_nit||'Sin doc'})` })),
-        create: false,
-        onChange: val => {
-          const cli = clientesLista.find(c => c.id == val);
-          if (cli) document.getElementById('pedido-direccion').value = cli.direccion || '';
-        }
-      });
-      if (tsPedidoProducto) tsPedidoProducto.destroy();
-      tsPedidoProducto = new TomSelect('#pedido-select-producto', {
-        options: productosLista.map(p => ({
-          value: p.id,
-          text: `${p.nombre}${p.dimensiones?' ['+p.dimensiones+']':''} — ${monedaCOP(p.precio_venta)} (Stock: ${p.stock_actual})`
-        })),
-        create: false
-      });
-      document.getElementById('pedido-observaciones').value = '';
-      new bootstrap.Modal(document.getElementById('modalNuevoPedido')).show();
-    }
-
-    function agregarItemPedido() {
-      const idProd = tsPedidoProducto ? tsPedidoProducto.getValue() : '';
-      const cantidad = parseInt(document.getElementById('pedido-cantidad').value) || 1;
-      if (!idProd) { alert('Seleccione un producto.'); return; }
-      const prod = productosLista.find(p => String(p.id) === String(idProd));
-      if (!prod) return;
-      const existe = itemsPedidoActual.find(i => i.id_producto == idProd);
-      if (existe) { existe.cantidad += cantidad; }
-      else { itemsPedidoActual.push({ id_producto: prod.id, nombre: prod.nombre, dimensiones: prod.dimensiones||'', precio: prod.precio_venta, cantidad }); }
-      renderItemsPedido();      if (tsPedidoProducto) tsPedidoProducto.clear();
-      document.getElementById('pedido-cantidad').value = 1;
-    }
-
-    function quitarItemPedido(idx) {
-      itemsPedidoActual.splice(idx, 1);
-      renderItemsPedido();
-    }
-
-    function renderItemsPedido() {
-      const tbody = document.getElementById('tabla-items-pedido');
-      if (!itemsPedidoActual.length) {
-        tbody.innerHTML = '<tr><td colspan="5" class="text-center text-muted">Sin productos. Agregue items arriba.</td></tr>';
-        document.getElementById('pedido-total-texto').textContent = '$ 0 COP';
-        return;
-      }
-      let total = 0;
-      tbody.innerHTML = '';
-      itemsPedidoActual.forEach((item, idx) => {
-        const sub = item.precio * item.cantidad;
-        total += sub;
-        tbody.innerHTML += `
-          <tr>
-            <td>${escapeHtml(item.nombre)}${item.dimensiones ? ' <small class="text-muted">[' + escapeHtml(item.dimensiones) + ']</small>' : ''}</td>
-            <td><input type="number" min="0" step="0.01" class="form-control form-control-sm" style="width:110px"
-                  value="${Number(item.precio).toFixed(2)}" title="Puede editar el precio"
-                  onchange="itemsPedidoActual[${idx}].precio=Math.max(0, Number(this.value)||0);renderItemsPedido()"></td>
-            <td><input type="number" class="form-control form-control-sm" style="width:80px" value="${item.cantidad}" min="1"
-                  onchange="itemsPedidoActual[${idx}].cantidad=parseInt(this.value)||1;renderItemsPedido()"></td>
-            <td>${monedaCOP(sub)}</td>
-            <td><button class="btn btn-sm btn-outline-danger" onclick="quitarItemPedido(${idx})">✕</button></td>
-          </tr>`;
-      });
-      document.getElementById('pedido-total-texto').textContent = monedaCOP(total);
-    }
-
-    async function guardarPedido() {
-      const idCliente = tsPedidoCliente ? tsPedidoCliente.getValue() : '';
-      if (!idCliente) { alert('Seleccione un cliente.'); return; }
-      if (!itemsPedidoActual.length) { alert('Agregue al menos un producto.'); return; }
-      const payload = {
-        id_cliente: parseInt(idCliente),
-        direccion_entrega: document.getElementById('pedido-direccion').value.trim(),
-        observaciones: document.getElementById('pedido-observaciones').value.trim(),
-        items: itemsPedidoActual.map(i => ({ id_producto: i.id_producto, cantidad: i.cantidad, precio_unitario: i.precio }))
-      };
-      const res = await fetch('/api/pedidos', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
-      const data = await res.json();
-      if (res.ok) {
-        alert(`Pedido #${data.id_pedido} creado. Total: ${monedaCOP(data.total)}`);
-        bootstrap.Modal.getInstance(document.getElementById('modalNuevoPedido')).hide();
-        cargarPedidos();
-        pollNotificacionesPedidos();
-      } else {
-        alert('Error: ' + data.error);
-      }
-    }
+    
+    // ── Pedidos Manuales retirados ──────────────────────────────────────
+    // El sub-panel se elimino: esa logica la absorbe Ventas y Facturacion.
+    // La Cola de Despacho (ventas "para llevar") sigue operativa.
+    // (agregarItemPedido / quitarItemPedido tambien se fueron con el: usaban
+    //  itemsPedidoActual, que ya no existe.)
 
     // ── Detalle y cambio de estado ────────────────────────────────────────────
     async function abrirDetallePedido(id) {
@@ -6702,12 +6702,15 @@
       const data = await res.json();
       if (res.ok) {
         bootstrap.Modal.getInstance(document.getElementById('modalDetallePedido')).hide();
-        cargarPedidos();
+        // Antes se recargaba `cargarPedidos()` (la tabla de pedidos manuales).
+        // Ese panel se elimino, asi que ahora se recarga la cola de despacho,
+        // que es la vista viva de estos estados.
+        cargarDespachos();
         pollNotificacionesPedidos();
-            } else {
-              alert('Error: ' + data.error);
-            }
-          }
+      } else {
+        alert('Error: ' + data.error);
+      }
+    }
 
           // ══════
           //  MÓDULO DE COTIZACIONES

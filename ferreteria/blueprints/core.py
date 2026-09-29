@@ -17,6 +17,7 @@ from werkzeug.security import check_password_hash, generate_password_hash
 from ..config import CLIENTE_MOSTRADOR_ID, DB_NAME, NOMBRE_CLIENTE_MOSTRADOR
 from ..db import get_db
 from ..security import admin_required, login_required
+from .catalogo import DEPARTAMENTO_NEGOCIO, MUNICIPIO_NEGOCIO
 from ..services.auditoria import registrar_auditoria
 
 bp = Blueprint('core', __name__)
@@ -34,6 +35,10 @@ def index():
         # El POS arranca en el cliente mostrador genérico (ver config.py).
         cliente_mostrador_id=CLIENTE_MOSTRADOR_ID,
         nombre_cliente_mostrador=NOMBRE_CLIENTE_MOSTRADOR,
+        # Ubicacion fija de la ferreteria: Samaná, Caldas. Se precarga en el
+        # formulario de cliente para que el cajero no la busque cada vez.
+        municipio_negocio=MUNICIPIO_NEGOCIO,
+        departamento_negocio=DEPARTAMENTO_NEGOCIO,
     )
 
 

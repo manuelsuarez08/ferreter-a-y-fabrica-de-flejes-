@@ -23,6 +23,20 @@ _COLUMNAS_FISCALES_CLIENTE = (
     'codigo_municipio', 'codigo_departamento',
 )
 
+# ── Valores por defecto para clientes de venta local ───────────────
+# El negocio es de Samaná, Caldas. Estos codigos son los de la DIAN
+# (división política y departamento) y van al XML del documento
+# electrónico, así que se fijan aquí para que el cajero no los tenga que
+# elegir en cada alta de cliente: son SIEMPRE los mismos.
+#
+# 17665 = Samaná (Caldas), 17 = Caldas.
+# OJO: el municipio NO es un id interno, es el código DIVPOLKA de la DIAN.
+CODIGO_MUNICIPIO_DEFECTO = '17665'
+CODIGO_DEPARTAMENTO_DEFECTO = '17'
+# El mismo par para la dirección del emisor y para la configuración.
+MUNICIPIO_NEGOCIO = CODIGO_MUNICIPIO_DEFECTO
+DEPARTAMENTO_NEGOCIO = CODIGO_DEPARTAMENTO_DEFECTO
+
 
 def _normalizar_datos_fiscales_cliente(data):
     """Extrae y limpia los campos fiscales del tercero que llegan del formulario.
@@ -30,6 +44,11 @@ def _normalizar_datos_fiscales_cliente(data):
     El DV se recalcula automáticamente cuando el tipo de documento es NIT, para
     no depender de que el usuario lo digite bien (un DV errado hace que la DIAN
     rechace el documento).
+
+    Ubicación y responsabilidades: si el formulario las deja vacías, se toman
+    las de la ferretería (Samaná/Caldas) y los regímenes que el 99% de los
+    clientes de mostrador tiene. El cajero no deberia tener que elegir regimen
+    fiscal en cada factura; solo se cambia cuando el cliente de verdad difiera.
     """
     tipo_documento = (str(data.get('tipo_documento', '')).strip() or 'CC').upper()
     cedula_nit = str(data.get('cedula_nit', '')).strip()
@@ -46,8 +65,10 @@ def _normalizar_datos_fiscales_cliente(data):
                            or 'No Responsable de IVA'),
         'responsabilidades': (str(data.get('responsabilidades', '')).strip()
                               or 'R-99-PN'),
-        'codigo_municipio': str(data.get('codigo_municipio', '')).strip(),
-        'codigo_departamento': str(data.get('codigo_departamento', '')).strip(),
+        'codigo_municipio': (str(data.get('codigo_municipio', '')).strip()
+                             or CODIGO_MUNICIPIO_DEFECTO),
+        'codigo_departamento': (str(data.get('codigo_departamento', '')).strip()
+                                or CODIGO_DEPARTAMENTO_DEFECTO),
     }
 
 
@@ -391,7 +412,10 @@ def _crear_o_reabastecer_producto(cursor, conn):
     registrar_auditoria(conn, 'crear', 'producto', id_producto, 'Producto creado')
     conn.commit()
     conn.close()
-    return jsonify({"mensaje": "Producto agregado con éxito"}), 201
+    # Se devuelve el id: el modal de producto rapido (cotizaciones) lo necesita
+    # para dejar el producto recien creado seleccionado en el buscador.
+    return jsonify({"mensaje": "Producto agregado con éxito",
+                    "id": id_producto, "nombre": nombre}), 201
 
 
 @bp.route('/api/productos/<int:id_producto>', methods=['PUT', 'DELETE'])

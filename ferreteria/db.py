@@ -430,8 +430,8 @@ def _aplicar_migraciones(cursor):
         # Responsabilidades DIAN separadas por coma: 'O-13,O-15,R-99-PN'.
         ('clientes', 'responsabilidades', "TEXT DEFAULT 'R-99-PN'"),
         # Códigos DANE oficiales: municipio (5 dígitos) y departamento (2).
-        ('clientes', 'codigo_municipio', "TEXT DEFAULT ''"),
-        ('clientes', 'codigo_departamento', "TEXT DEFAULT ''"),
+        ('clientes', 'codigo_municipio', "TEXT DEFAULT '17665'"),
+        ('clientes', 'codigo_departamento', "TEXT DEFAULT '17'"),
         # ── Unidad de medida y código DIAN en productos ─────────────────────
         # unidad_medida: código UN/ECE (ej. '94' unidad, 'KGM' kilo, 'MTR' metro).
         ('productos', 'unidad_medida', "TEXT NOT NULL DEFAULT '94'"),
@@ -481,8 +481,11 @@ def _aplicar_migraciones(cursor):
         ('digito_verificacion', "TEXT DEFAULT ''"),
         ('regimen_fiscal', "TEXT DEFAULT 'Responsable de IVA'"),
         ('responsabilidades', "TEXT DEFAULT 'O-13'"),
-        ('codigo_municipio', "TEXT DEFAULT ''"),
-        ('codigo_departamento', "TEXT DEFAULT ''"),
+        # Ubicacion del emisor: la ferreteria esta en Samana, Caldas. Se deja
+        # fijada para que no salga vacia en el XML (un municipio vacio lo
+        # rechaza la DIAN). Ver CODIGO_MUNICIPIO_DEFECTO en blueprints/catalogo.
+        ('codigo_municipio', "TEXT NOT NULL DEFAULT '17665'"),
+        ('codigo_departamento', "TEXT NOT NULL DEFAULT '17'"),
         ('email_emisor', "TEXT DEFAULT ''"),
         ('numero_resolucion', "TEXT DEFAULT ''"),
         ('prefijo', "TEXT DEFAULT ''"),
