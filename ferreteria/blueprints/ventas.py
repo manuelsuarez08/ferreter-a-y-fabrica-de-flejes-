@@ -592,9 +592,19 @@ def get_factura_detalle(id_venta):
                COALESCE(v.iva_porcentaje, 0),
                COALESCE(v.numero_dian, ''), COALESCE(v.dian_estado, 'sin_emitir'),
                COALESCE(v.dian_cuide, ''), COALESCE(v.dian_descripcion, ''),
-               COALESCE(d.qr_url, ''), COALESCE(d.id, 0)
+               COALESCE(d.qr_url, ''), COALESCE(d.id, 0),
+               -- Datos de la resolución de facturación DIAN: el anexo técnico
+               -- exige que el documento equivalente declare la resolución bajo
+               -- la cual se numeró (número, prefijo y rango autorizado). Se lee
+               -- de `configuracion`, que siempre tiene una unica fila (id=1),
+               -- así que un JOIN directo no multiplica el resultado.
+               COALESCE(cfg.numero_resolucion, ''),
+               COALESCE(cfg.prefijo, ''),
+               COALESCE(cfg.rango_desde, 0),
+               COALESCE(cfg.rango_hasta, 0)
         FROM ventas v JOIN clientes c ON v.id_cliente = c.id
         LEFT JOIN documentos_electronicos d ON d.id_venta = v.id
+        CROSS JOIN configuracion cfg
         WHERE v.id = ?
         """, (id_venta,)
     ).fetchone()
@@ -643,6 +653,12 @@ def get_factura_detalle(id_venta):
             "mensaje": venta[23] or "",
             "qr_url": venta[24] or "",
             "id_documento": venta[25] or 0,
+            # Datos de la resolución: el anexo técnico exige declararlos en el
+            # documento equivalente (número, prefijo y rango autorizado).
+            "numero_resolucion": venta[26] or "",
+            "prefijo_resolucion": venta[27] or "",
+            "rango_desde": venta[28] or 0,
+            "rango_hasta": venta[29] or 0,
         },
         "negocio": {
             "nombre": (negocio[0] if negocio else "Ferretería y Fábrica de Flejes"),

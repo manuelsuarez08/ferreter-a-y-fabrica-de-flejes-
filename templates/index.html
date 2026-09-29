@@ -102,11 +102,24 @@
       line-height: 1.1;
       margin: 3px 0;
     }
-    .recibo-termico .recibo-dian canvas {
-      /* La tirilla es monocromatica: el QR debe salir en negro puro para que
-         el lector lo tome. Se desactiva el suavizado para no perder definicion. */
+    .recibo-termico .recibo-dian canvas,
+    .recibo-termico .recibo-dian-qr {
+      /* La tirilla es monocromática: el QR debe salir en negro puro para que
+         el lector lo tome. Se desactiva el suavizado para no perder definición.
+         Tamaño fijo en mm: en una tirilla de 80 mm un QR de ~38 mm se escanea
+         bien con impresoras térmicas de 203 dpi. */
       image-rendering: pixelated;
-      max-width: 100%;
+      display: block;
+      margin: 4px auto 2px auto;
+      width: 38mm;
+      height: 38mm;
+      /* Un QR aplastado no lo lee el escáner: se fuerza proporción 1:1. */
+      object-fit: contain;
+      print-color-adjust: exact;
+      -webkit-print-color-adjust: exact;
+    }
+    .recibo-termico .recibo-dian-qr[style*="display: none"] {
+      display: none !important;
     }
     .recibo-termico .recibo-sep {
       border-top: 1px dashed #000;
@@ -1985,11 +1998,19 @@
             <div id="fac-bloque-dian" class="recibo-dian" style="display:none;">
               <div id="fac-dian-estado" class="small"></div>
               <div id="fac-dian-numero" class="small fw-bold"></div>
+              <!--
+                El QR va en un <img>, NO en un <canvas>: `cloneNode` no copia
+                el contenido dibujado de un canvas, asi que al imprimir (o al
+                generar el PDF) el clon salia con un rectangulo vacio. Con un
+                <img> el PNG que entrega /api/dian/qr viaja en el clon y se
+                imprime. Se reutiliza el `src` ya cargado para no volver a
+                pedirlo en cada impresion.
+              -->
+              <img id="fac-dian-qr" class="recibo-dian-qr" alt="Codigo QR del documento"
+                   style="display:none;">
               <div id="fac-dian-cuide" class="recibo-cuide"></div>
-              <div class="text-center my-1">
-                <canvas id="fac-dian-qr" width="150" height="150"></canvas>
-              </div>
               <div class="small text-center">Consulte su documento en<br>catalogo-vpfe.dian.gov.co</div>
+              <div id="fac-dian-resolucion" class="small"></div>
             </div>
 
             <div class="recibo-pie">
@@ -4422,6 +4443,34 @@
                                     line-height: 1.3; border-top: 1px dashed #000;
                                     padding-top: 6px; }
       .recibo-termico .recibo-sep { border-top: 1px dashed #000; margin: 6px 0; }
+
+      /* ── Documento Equivalente Electrónico POS (DIAN) ─────────────────
+         Estas reglas van también en CSS_TIRILLA (el que se inyecta en la
+         ventana de impresión y en el PDF). Si solo estuvieran en la hoja de
+         pantalla, el bloque DIAN salía sin estilos al imprimir: el QR sin
+         tamaño fijo y el CUIDE desbordando la tirilla. */
+      .recibo-termico .recibo-dian {
+        margin-top: 8px; padding-top: 6px; text-align: center;
+        border-top: 1px dashed #000; font-size: 12px; line-height: 1.25;
+        page-break-inside: avoid; break-inside: avoid;
+      }
+      .recibo-termico .recibo-dian-qr {
+        image-rendering: pixelated;
+        display: block;
+        margin: 4px auto 2px auto;
+        width: 38mm; height: 38mm;
+        object-fit: contain;
+        print-color-adjust: exact;
+        -webkit-print-color-adjust: exact;
+      }
+      .recibo-termico .recibo-dian-qr[style*="display: none"] {
+        display: none !important;
+      }
+      .recibo-termico .recibo-cuide {
+        font-family: ui-monospace, Consolas, "Courier New", monospace;
+        font-size: 8px; line-height: 1.15; word-break: break-all;
+        margin: 2px 0 3px 0;
+      }
     `;
 
     // Genera un PDF con formato de tirilla (80 mm) a partir de un área de la

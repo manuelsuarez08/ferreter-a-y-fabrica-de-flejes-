@@ -96,42 +96,54 @@
       nodoCuide.textContent = cuide ? 'CUIDE: ' + cuide : '';
     }
 
+    // Resolución de facturación: el anexo técnico exige que el documento
+    // equivalente declare bajo qué numeración fue emitido.
+    var nodoRes = document.getElementById('fac-dian-resolucion');
+    if (nodoRes) {
+      var partes = [];
+      if (dato.numero_resolucion) {
+        partes.push('Resolución DIAN: ' + dato.numero_resolucion);
+      }
+      if (dato.prefijo_resolucion) {
+        partes.push('Prefijo: ' + dato.prefijo_resolucion);
+      }
+      if (Number(dato.rango_hasta) > 0) {
+        partes.push('Rango autorizado: ' + (dato.rango_desde || 1)
+                    + ' - ' + dato.rango_hasta);
+      }
+      nodoRes.textContent = partes.join(' | ');
+    }
+
     pintarQr(qrUrl);
   }
 
-  /* Pide el QR al SERVIDOR y lo dibuja en el canvas de la tirilla.
+  /* Pide el QR al SERVIDOR y lo deja en un <img>.
    *
    * Se genera en el servidor (no con una librería JS) porque allí vive el
    * generador ya verificado, y así el navegador no descarga una dependencia más.
    * El endpoint devuelve un PNG.
+   *
+   * Se usa un <img> y NO un <canvas> a propósito: `cloneNode` (impresión) y
+   * html2canvas (PDF) no trasladan el contenido dibujado de un canvas, así que
+   * con canvas el QR salía vacío en la tirilla impresa.
    */
   function pintarQr(qrUrl) {
-    var canvas = document.getElementById('fac-dian-qr');
-    if (!canvas) return;
+    var imagen = document.getElementById('fac-dian-qr');
+    if (!imagen) return;
 
     if (!qrUrl) {
-      canvas.style.display = 'none';
+      imagen.style.display = 'none';
+      imagen.removeAttribute('src');
       return;
     }
 
-    var imagen = new Image();
-    imagen.onload = function () {
-      // El canvas se dimensiona al PNG real para que la tirilla no lo deforme
-      // (un QR aplastado no lo lee el escáner).
-      canvas.width = imagen.naturalWidth;
-      canvas.height = imagen.naturalHeight;
-      var contexto = canvas.getContext('2d');
-      contexto.fillStyle = '#ffffff';
-      contexto.fillRect(0, 0, canvas.width, canvas.height);
-      contexto.drawImage(imagen, 0, 0);
-      canvas.style.display = '';
-    };
+    imagen.src = '/api/dian/qr?url=' + encodeURIComponent(qrUrl);
+    imagen.style.display = '';
     imagen.onerror = function () {
       // Si el QR no se pudo generar (URL demasiado larga), la tirilla se imprime
       // sin él en lugar de con un recuadro roto.
-      canvas.style.display = 'none';
+      imagen.style.display = 'none';
     };
-    imagen.src = '/api/dian/qr?url=' + encodeURIComponent(qrUrl);
   }
 
   /* ── Emisión desde el modal de la factura ───────────────────────────────
