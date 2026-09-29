@@ -33,7 +33,21 @@ _cargar_env()
 
 # Ruta a la base SQLite "semilla": la que vive junto al código (y en el repo).
 # Sirve como origen para poblar por primera vez un disco persistente vacío.
-DB_SEMILLA = os.path.join(BASE_DIR, 'ferreteria.db')
+#
+# IMPORTANTE: la semilla y la base de trabajo son archivos DISTINTOS.
+#   - `ferreteria-semilla.db`  -> en el repo. Solo esquema + catalogo (productos,
+#     equipos, usuarios). NUNCA datos de operacion (ventas, clientes con cedula,
+#     auditoria) ni secretos (NIT, clave tecnica, certificado).
+#   - `ferreteria.db`         -> la base de trabajo local. NUNCA se versiona
+#     con datos reales: cada quien tiene la suya.
+# Antes `ferreteria.db` cumplia los dos papeles, asi que un despliegue podia
+# pisar los datos de quien estaba probando la app.
+DB_SEMILLA = os.path.join(BASE_DIR, 'ferreteria-semilla.db')
+
+# La base de trabajo local. Es la que se usa si no hay FERRETERIA_DB en el
+# entorno. En desarrollo se separa de la semilla para que una regeneracion de
+# la semilla no borre el historico de quien esta probando.
+DB_TRABAJO = os.path.join(BASE_DIR, 'ferreteria.db')
 
 # ── Versión de la semilla ───────────────────
 # Un número entero en el archivo `ferreteria-semilla.version`. Cada vez que se
@@ -55,9 +69,9 @@ SEMILLA_VERSION = _leer_version_semilla()
 
 # Ruta efectiva de la base de datos. Si se define FERRETERIA_DB (p. ej. un
 # disco persistente en Render: /var/data/ferreteria.db) se usa esa; si no, la
-# semilla junto al código.
+# base de trabajo local.
 def _resolver_db_name():
-    return os.environ.get('FERRETERIA_DB') or DB_SEMILLA
+    return os.environ.get('FERRETERIA_DB') or DB_TRABAJO
 DB_NAME = _resolver_db_name()
 
 # ¿Estamos en un servidor de producción (Render)? Render define RENDER=true.

@@ -7,12 +7,16 @@ ferreteria-respaldo-*.db
 ferreteria-respaldo-*.db-journal
 *.db-wal
 *.db-shm
-# OJO: ferreteria.db SI se versiona a proposito. Se usa como SEMILLA para
-# entornos sin disco persistente (p. ej. Render en plan gratuito): al arrancar,
-# asegurar_base_de_datos() copia este archivo al disco/DIR de trabajo si no
-# existe base. Si se ignora, Render arranca sin catalogo y los modulos fallan
-# con error 500. (En plan de pago con disco persistente la semilla no se usa.)
-# ferreteria.db
+
+# `ferreteria.db` es la base de TRABAJO local: cada quien tiene la suya con sus
+# ventas, clientes y configuracion. Ya NO es la semilla (ver `ferreteria/config.py`),
+# asi que se ignora para no publicar datos de operacion del negocio.
+ferreteria.db
+ferreteria.db-journal
+
+# La SEMILLA se versiona (es el catalogo que Render usa para poblarse) y lleva
+# sufijo explicito para que ningun patron de arriba la alcance.
+!ferreteria-semilla.db
 
 # Entornos virtuales
 venv/
