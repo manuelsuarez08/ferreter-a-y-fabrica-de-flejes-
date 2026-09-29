@@ -2,3 +2,12 @@ Flask
 gunicorn
 openpyxl
 Werkzeug
+
+# ── Módulo de facturación electrónica DIAN (Documento Equivalente POS) ──────
+# qrcode: genera el código QR de la tirilla (ferreteria/services/qr.py). El
+#   PNG se arma a mano con `struct` + `zlib`, asi que NO hace falta Pillow.
+qrcode>=7.4,<9
+# cryptography: lee el certificado de firma .p12/.pfx y firma con RSA-SHA384
+#   (ferreteria/services/dian_firma.py). Sin esto NO se puede emitir ningun
+#   documento: la firma XAdES-EPES es obligatoria en el anexo tecnico.
+cryptography>=42,<51

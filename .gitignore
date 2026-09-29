@@ -13,6 +13,10 @@ ferreteria-respaldo-*.db-journal
 # asi que se ignora para no publicar datos de operacion del negocio.
 ferreteria.db
 ferreteria.db-journal
+# Marcador de version que la app escribe junto a la base de trabajo. Es estado
+# local de cada instalacion: la semilla tiene su propio
+# `ferreteria-semilla.version`, que si se versiona.
+ferreteria.db.version
 
 # La SEMILLA se versiona (es el catalogo que Render usa para poblarse) y lleva
 # sufijo explicito para que ningun patron de arriba la alcance.
