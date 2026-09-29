@@ -121,6 +121,12 @@ def _crear_tablas_operacion(cursor):
             cantidad INTEGER NOT NULL,
             precio_unitario REAL NOT NULL,
             subtotal REAL NOT NULL,
+            -- Acumulador de entregas por linea (para "para llevar" entregado por
+            -- partes). OJO: tiene que estar AQUI y no solo en la lista de
+            -- migraciones de abajo: una base nueva se creaba sin la columna y
+            -- cada linea quedaba con cantidad_entregada NULL, asi que el pedido
+            -- nacia con pendiente 0 y el motocarguero no podia registrar nada.
+            cantidad_entregada INTEGER NOT NULL DEFAULT 0,
             FOREIGN KEY (id_venta) REFERENCES ventas (id),
             FOREIGN KEY (id_producto) REFERENCES productos (id)
         )
@@ -391,7 +397,7 @@ def _aplicar_migraciones(cursor):
     """Migraciones idempotentes sobre bases de datos ya existentes."""
     for tabla, columna, definicion in (
         ('clientes', 'direccion', 'TEXT'),
-        # Datos requeridos por la factura electrónica de Siigo.
+        # Correo electrónico del cliente (contacto y envío de comprobantes).
         ('clientes', 'email', 'TEXT'),
         ('clientes', 'tipo_documento', "TEXT DEFAULT 'CC'"),
         ('ventas', 'direccion_cliente', 'TEXT'),
@@ -411,25 +417,102 @@ def _aplicar_migraciones(cursor):
         ('ventas', 'despacho_entregado_por', 'TEXT'),
         ('ventas', 'despacho_entregado_fecha', 'TEXT'),
         ('usuarios', 'nombre_completo', 'TEXT'),
-        # ── Facturación electrónica opcional (Siigo) ────────────────────────
-        # Estado: 'no_solicitada' (venta normal) | 'pendiente' (solicitada, sin
-        # transmitir) | 'aprobada' | 'error' (rechazada o sin conexión).
-        ('ventas', 'siigo_estado', "TEXT NOT NULL DEFAULT 'no_solicitada'"),
-        ('ventas', 'siigo_numero', 'TEXT'),
-        ('ventas', 'siigo_cufe', 'TEXT'),
-        ('ventas', 'siigo_pdf_url', 'TEXT'),
-        ('ventas', 'siigo_xml_url', 'TEXT'),
-        ('ventas', 'siigo_error', 'TEXT'),
-        ('ventas', 'siigo_fecha_emision', 'TEXT'),
-        ('ventas', 'siigo_intentos', 'INTEGER NOT NULL DEFAULT 0'),
         # Acumulador de entregas por linea (para "para llevar" entregado por
         # partes). 0 = nada entregado todavia.
         ('detalle_ventas', 'cantidad_entregada', 'INTEGER NOT NULL DEFAULT 0'),
+        # ── Datos fiscales DIAN del tercero (anexo técnico) ─────────────────
+        # Tipo de persona: 'Natural' | 'Juridica'. Define si el NIT lleva DV.
+        ('clientes', 'tipo_persona', "TEXT DEFAULT 'Natural'"),
+        # Dígito de verificación del NIT (0-9), calculado con el algoritmo DIAN.
+        ('clientes', 'digito_verificacion', "TEXT DEFAULT ''"),
+        # Régimen fiscal: 'Responsable de IVA' | 'No Responsable de IVA'.
+        ('clientes', 'regimen_fiscal', "TEXT DEFAULT 'No Responsable de IVA'"),
+        # Responsabilidades DIAN separadas por coma: 'O-13,O-15,R-99-PN'.
+        ('clientes', 'responsabilidades', "TEXT DEFAULT 'R-99-PN'"),
+        # Códigos DANE oficiales: municipio (5 dígitos) y departamento (2).
+        ('clientes', 'codigo_municipio', "TEXT DEFAULT ''"),
+        ('clientes', 'codigo_departamento', "TEXT DEFAULT ''"),
+        # ── Unidad de medida y código DIAN en productos ─────────────────────
+        # unidad_medida: código UN/ECE (ej. '94' unidad, 'KGM' kilo, 'MTR' metro).
+        ('productos', 'unidad_medida', "TEXT NOT NULL DEFAULT '94'"),
+        # codigo_dian: código homologado de producto/servicio que viaja al XML.
+        ('productos', 'codigo_dian', 'TEXT'),
+        # Naturaleza del IVA a tasa 0: 'exento' vs 'excluido' (se declaran distinto).
+        ('productos', 'iva_naturaleza', "TEXT DEFAULT 'excluido'"),
+        # ── Retenciones, plazo y tipo de operación en ventas ────────────────
+        ('ventas', 'retencion_fuente', 'REAL NOT NULL DEFAULT 0'),
+        ('ventas', 'retencion_ica', 'REAL NOT NULL DEFAULT 0'),
+        ('ventas', 'total_neto', 'REAL NOT NULL DEFAULT 0'),
+        ('ventas', 'plazo_dias', 'INTEGER NOT NULL DEFAULT 0'),
+        ('ventas', 'fecha_vencimiento', 'TEXT'),
+        # Tipo de operación DIAN: '10' estándar, '11' AIU, '12' transporte, etc.
+        ('ventas', 'tipo_operacion', "TEXT NOT NULL DEFAULT '10'"),
+        # ── Documento Equivalente Electrónico POS (Res. 000165, Anexo 1.0) ──
+        # `numero_dian` es el consecutivo fiscal del POS ("POS-1234"), que puede
+        # no coincidir con el id interno de la venta y es el que va al XML.
+        ('ventas', 'numero_dian', 'TEXT'),
+        # Estado fiscal dentro de la venta, desnormalizado a propósito: la
+        # pantalla de facturas lista cientos de ventas y no debe hacer JOIN con
+        # la tabla de documentos solo para pintar un badge.
+        ('ventas', 'dian_estado', "TEXT NOT NULL DEFAULT 'sin_emitir'"),
+        ('ventas', 'dian_cuide', 'TEXT'),
+        ('ventas', 'dian_descripcion', 'TEXT'),
+        ('ventas', 'dian_fecha_emision', 'TEXT'),
     ):
         migrar_columna(cursor, tabla, columna, definicion)
 
     # Base inicial de caja para el módulo de cierre diario.
     migrar_columna(cursor, 'cierres_caja', 'base_inicial', 'REAL NOT NULL DEFAULT 0')
+
+    # ── Datos fiscales del EMISOR y numeración/resolución DIAN ──────────────
+    # Viven en `configuracion` (fila única) para poder cambiarlos sin tocar código.
+    for columna, definicion in (
+        ('digito_verificacion', "TEXT DEFAULT ''"),
+        ('regimen_fiscal', "TEXT DEFAULT 'Responsable de IVA'"),
+        ('responsabilidades', "TEXT DEFAULT 'O-13'"),
+        ('codigo_municipio', "TEXT DEFAULT ''"),
+        ('codigo_departamento', "TEXT DEFAULT ''"),
+        ('email_emisor', "TEXT DEFAULT ''"),
+        ('numero_resolucion', "TEXT DEFAULT ''"),
+        ('prefijo', "TEXT DEFAULT ''"),
+        ('rango_desde', 'INTEGER NOT NULL DEFAULT 1'),
+        ('rango_hasta', 'INTEGER NOT NULL DEFAULT 0'),
+        ('fecha_vencimiento_resolucion', 'TEXT'),
+        ('clave_tecnica', "TEXT DEFAULT ''"),
+        ('software_id', "TEXT DEFAULT ''"),
+        ('software_pin', "TEXT DEFAULT ''"),
+        # Tolerancia de redondeo aceptada por el anexo técnico (en pesos).
+        ('tolerancia_redondeo', 'REAL NOT NULL DEFAULT 1.0'),
+        # ── Documento Equivalente Electrónico POS (DIAN, Anexo Técnico 1.0) ──
+        # Ambiente de destino: 1 = Producción, 2 = Habilitación (set de pruebas).
+        ('dian_ambiente', "TEXT NOT NULL DEFAULT '2'"),
+        # Prefijo del consecutivo del POS. La resolución autoriza un rango; el
+        # número que viaja al XML es prefijo + consecutivo (ej. 'POS-1042').
+        ('dian_prefijo', "TEXT DEFAULT 'POS'"),
+        ('dian_consecutivo', 'INTEGER NOT NULL DEFAULT 1'),
+        # TestSetId que entrega la DIAN al solicitar el set de pruebas.
+        ('dian_test_set_id', "TEXT DEFAULT ''"),
+        # Ruta del certificado .p12/.pfx y su clave (se guardan en la fila única
+        # de configuracion porque el POS es un equipo de mostrador, no un
+        # servidor: no hay gestor de secretos disponible).
+        ('certificado_ruta', "TEXT DEFAULT ''"),
+        ('certificado_clave', "TEXT DEFAULT ''"),
+        # Software propio: SoftwareID y SoftwareSecurityCode (PIN) que la DIAN
+        # entrega al registrar el software en el catálogo del facturador.
+        ('dian_software_security_code', "TEXT DEFAULT ''"),
+        # Modo de emisión por defecto: 'habilitacion' o 'produccion'.
+        ('dian_modo', "TEXT NOT NULL DEFAULT 'habilitacion'"),
+        # Última verificación de conectividad con la DIAN (para la contingencia).
+        ('dian_ultima_conexion', 'TEXT'),
+        # Intentos máximos de la cola antes de dejar el trabajo en 'fallido'.
+        ('dian_max_intentos', 'INTEGER NOT NULL DEFAULT 8'),
+        # ¿Emitir el Documento Equivalente POS AUTOMÁTICAMENTE al registrar la
+        # venta? Se activa cuando el negocio ya está en producción con la DIAN.
+        # Apagado (0), la emisión es manual desde la factura, que es lo correcto
+        # durante la habilitación y mientras se configura el software.
+        ('dian_emision_automatica', 'INTEGER NOT NULL DEFAULT 0'),
+    ):
+        migrar_columna(cursor, 'configuracion', columna, definicion)
 
     # IVA configurable desde la app (porcentaje sobre el subtotal). Se guarda en
     # configuracion para poder cambiarlo sin tocar codigo. Por defecto 19%.
@@ -449,6 +532,19 @@ def _aplicar_migraciones(cursor):
     migrar_columna(cursor, 'productos', 'precio_base', 'REAL NOT NULL DEFAULT 0')
     migrar_columna(cursor, 'productos', 'iva_valor', 'REAL NOT NULL DEFAULT 0')
     migrar_columna(cursor, 'productos', 'iva_tasa', 'REAL NOT NULL DEFAULT 0')
+
+    # OJO: SQLite IGNORA el DEFAULT de ALTER TABLE ADD COLUMN. En una base que ya
+    # existia cuando se agrego `cantidad_entregada`, las lineas viejas quedan en
+    # NULL (no en 0). Con NULL, el pendiente se calcula como
+    # max(0, cantidad - NULL) = 0, asi que el pedido nace "completo" y el
+    # motocarguero no puede registrar ninguna entrega (el modal abre con los
+    # inputs en max=0 y deshabilitados). Se normaliza aqui, de forma idempotente,
+    # para que una base antigua quede igual que una recien creada.
+    cursor.execute(
+        "UPDATE detalle_ventas SET cantidad_entregada = 0 WHERE cantidad_entregada IS NULL"
+    )
+    if cursor.rowcount:
+        print(f'[db] cantidad_entregada normalizada a 0 en {cursor.rowcount} linea(s) antigua(s)')
 
     for tabla in ('equipos_alquiler', 'equipos'):
         for columna, definicion in (
@@ -518,6 +614,7 @@ def init_db():
     _crear_tablas_alquiler(cursor)
     _crear_tablas_pedidos(cursor)
     _crear_tablas_cotizaciones(cursor)
+    _crear_tablas_dian(cursor)
     _aplicar_migraciones(cursor)
     _sembrar_datos_por_defecto(cursor)
 
@@ -775,3 +872,86 @@ def _crear_tablas_cotizaciones(cursor):
         )
     ''')
     cursor.execute("CREATE INDEX IF NOT EXISTS idx_notcot_leida ON notificaciones_cotizaciones (leida)")
+
+
+def _crear_tablas_dian(cursor):
+    """Crea las tablas del Documento Equivalente Electronico POS (DIAN).
+
+    Son dos tablas independientes y a propósito NO se toca `ventas`: si el
+    sistema de facturación electrónica se daña, el POS debe seguir vendiendo. La
+    emisión se cuelga de la venta por `id_venta` (1:1 en el caso normal) y todo
+    el estado fiscal vive aquí, de modo que se puede reintentar o consultar sin
+    tocar la venta original.
+
+    `documentos_electronicos`
+        Un registro por documento (CUIDE, número, XML, respuesta de la DIAN).
+        `estado` sigue el ciclo: pendiente -> firmado -> aceptado | rechazado,
+        y 'contingencia' cuando el documento se emitió sin conexión con la DIAN.
+        `modo` distingue el set de pruebas ('habilitacion') de 'produccion'.
+
+    `cola_dian`
+        Cola de trabajos (patrón outbox) para todo lo que requiere red: enviar un
+        documento, pedir el estado de un set de pruebas o reenviar tras una
+        contingencia. El worker la procesa con backoff exponencial; así una caída
+        de internet o de la DIAN no bloquea la venta en el mostrador.
+    """
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS documentos_electronicos (
+            id                INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_venta          INTEGER NOT NULL,
+            tipo_documento    TEXT NOT NULL DEFAULT 'POS',
+            prefijo           TEXT NOT NULL DEFAULT '',
+            numero            TEXT NOT NULL,
+            cuide             TEXT NOT NULL DEFAULT '',
+            fecha_generacion  TEXT NOT NULL,
+            hora_generacion   TEXT NOT NULL,
+            valor_total       REAL NOT NULL DEFAULT 0,
+            valor_iva         REAL NOT NULL DEFAULT 0,
+            valor_inc         REAL NOT NULL DEFAULT 0,
+            xml               TEXT,
+            xml_firmado       TEXT,
+            qr_url            TEXT,
+            modo              TEXT NOT NULL DEFAULT 'habilitacion',
+            estado            TEXT NOT NULL DEFAULT 'pendiente',
+            contingencia      INTEGER NOT NULL DEFAULT 0,
+            tipo_evento       TEXT,
+            descripcion_evento TEXT,
+            respuesta_dian    TEXT,
+            codigo_dian       TEXT,
+            descripcion_dian  TEXT,
+            track_id          TEXT,
+            test_set_id       TEXT,
+            -- ZipKey que devuelve SendTestSetAsync: es la llave para consultar
+            -- el resultado del set de pruebas con GetStatusZip.
+            zip_key           TEXT,
+            intentos          INTEGER NOT NULL DEFAULT 0,
+            ultimo_error      TEXT,
+            fecha_envio       TEXT,
+            fecha_respuesta   TEXT,
+            UNIQUE (prefijo, numero),
+            FOREIGN KEY (id_venta) REFERENCES ventas (id)
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS cola_dian (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_documento    INTEGER,
+            operacion       TEXT NOT NULL,
+            payload         TEXT,
+            estado          TEXT NOT NULL DEFAULT 'pendiente',
+            intentos        INTEGER NOT NULL DEFAULT 0,
+            proximo_intento TEXT,
+            ultimo_error    TEXT,
+            creado          TEXT NOT NULL,
+            actualizado     TEXT,
+            FOREIGN KEY (id_documento) REFERENCES documentos_electronicos (id)
+        )
+    ''')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_doc_venta ON documentos_electronicos (id_venta)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_doc_estado ON documentos_electronicos (estado)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_doc_cuide ON documentos_electronicos (cuide)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_doc_track ON documentos_electronicos (track_id)")
+    # Red de seguridad para bases creadas por una versión anterior del módulo.
+    migrar_columna(cursor, 'documentos_electronicos', 'zip_key', 'TEXT')
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_cola_estado ON cola_dian (estado, proximo_intento)")
+    cursor.execute("CREATE INDEX IF NOT EXISTS idx_cola_documento ON cola_dian (id_documento)")

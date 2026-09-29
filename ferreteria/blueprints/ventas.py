@@ -11,7 +11,7 @@ from ..db import get_db
 from ..security import admin_required, login_required
 from ..services.auditoria import registrar_auditoria
 from ..services.ordenes_fleje import registrar_orden_fleje_desde_venta
-from ..services import siigo
+from ..services.dian import redondear_pesos
 
 bp = Blueprint('ventas', __name__)
 
@@ -38,8 +38,7 @@ def _listar_ventas():
                c.cedula_nit, c.telefono, v.id_cliente,
                COALESCE(v.direccion_cliente, c.direccion, ''), v.anulada, v.motivo_anulacion,
                v.tipo_entrega, v.numero_pedido,
-               COALESCE(v.siigo_estado, 'no_solicitada'), v.siigo_numero,
-               v.siigo_cufe, v.siigo_pdf_url, v.siigo_error
+               COALESCE(v.numero_dian, ''), COALESCE(v.dian_estado, 'sin_emitir')
         FROM ventas v
         JOIN clientes c ON v.id_cliente = c.id
         LEFT JOIN detalle_ventas dv ON v.id = dv.id_venta
@@ -59,8 +58,8 @@ def _listar_ventas():
         "cedula_nit": r[7], "telefono": r[8], "id_cliente": r[9], "direccion": r[10] or "",
         "anulada": bool(r[11]), "motivo_anulacion": r[12] or "",
         "tipo_entrega": r[13] or "entrega_inmediata", "numero_pedido": r[14],
-        "siigo_estado": r[15] or "no_solicitada", "siigo_numero": r[16] or "",
-        "siigo_cufe": r[17] or "", "siigo_pdf_url": r[18] or "", "siigo_error": r[19] or "",
+        # Estado fiscal del documento electronico (para el badge del historial).
+        "numero_dian": r[15] or "", "dian_estado": r[16] or "sin_emitir",
     } for r in rows])
 
 
@@ -90,12 +89,15 @@ def _construir_detalles(cursor, conn, items):
     for item in items:
         item_id = item['id_producto']
         prod = cursor.execute(
-            "SELECT nombre, categoria, precio_venta FROM productos WHERE id = ?", (item_id,)
+            "SELECT nombre, categoria, precio_venta, COALESCE(unidad_medida, '94'), "
+            "COALESCE(codigo_dian, ''), COALESCE(iva_naturaleza, 'excluido') "
+            "FROM productos WHERE id = ?", (item_id,)
         ).fetchone()
         if not prod:
             return None, (jsonify({"error": f"Producto ID {item_id} no encontrado"}), 400)
 
-        nombre_producto, categoria_producto, precio_venta = prod
+        nombre_producto, categoria_producto, precio_venta = prod[0], prod[1], prod[2]
+        unidad_medida, codigo_dian, iva_naturaleza = prod[3], prod[4], prod[5]
         precio_venta = float(precio_venta or 0)
         cantidad = int(item['cantidad'])
         if cantidad <= 0:
@@ -119,54 +121,22 @@ def _construir_detalles(cursor, conn, items):
         detalles.append({
             'id_producto': item_id, 'cantidad': cantidad, 'precio': precio_venta,
             'nombre': nombre_producto, 'categoria': categoria_producto, 'item': item,
+            # Datos fiscales del ítem (unidad de medida UN/ECE y código DIAN).
+            'unidad_medida': unidad_medida, 'codigo_dian': codigo_dian,
+            'iva_naturaleza': iva_naturaleza,
         })
 
     # IVA sobre el subtotal. Se redondea a pesos (sin centavos) para que la
     # tirilla cuadre exacto: total = subtotal + iva.
     iva_porcentaje, iva_activo = _leer_config_iva(cursor)
     if iva_activo and iva_porcentaje > 0:
-        iva_valor = round(subtotal_venta * iva_porcentaje / 100)
+        iva_valor = redondear_pesos(subtotal_venta * iva_porcentaje / 100)
     else:
         iva_porcentaje, iva_valor = 0.0, 0
+    subtotal_venta = redondear_pesos(subtotal_venta)
     total_venta = subtotal_venta + iva_valor
     return (subtotal_venta, iva_valor, iva_porcentaje, total_venta, detalles), None
 
-
-def _validar_datos_factura_electronica(cliente):
-    """Valida que el cliente tenga los datos completos exigidos por Siigo/DIAN.
-
-    Returns:
-        Lista de campos faltantes (vacía si todo está completo).
-    """
-    faltantes = []
-    if not str(cliente.get('tipo_documento') or '').strip():
-        faltantes.append('Tipo de Documento')
-    if not str(cliente.get('cedula_nit') or '').strip():
-        faltantes.append('Cédula/NIT')
-    if not str(cliente.get('nombre') or '').strip():
-        faltantes.append('Nombre completo')
-    if not str(cliente.get('email') or '').strip():
-        faltantes.append('Correo electrónico')
-    if not str(cliente.get('telefono') or '').strip():
-        faltantes.append('Teléfono')
-    return faltantes
-
-
-def _datos_cliente_para_siigo(cursor, id_cliente):
-    """Lee de la BD los datos del cliente necesarios para la factura electrónica."""
-    fila = cursor.execute(
-        "SELECT nombre, cedula_nit, telefono, COALESCE(email, ''), "
-        "COALESCE(tipo_documento, 'CC') FROM clientes WHERE id = ?",
-        (id_cliente,),
-    ).fetchone()
-    if not fila:
-        return None
-    return {'nombre': fila[0], 'cedula_nit': fila[1], 'telefono': fila[2],
-            'email': fila[3], 'tipo_documento': fila[4]}
-
-# Estados de Siigo válidos para una venta.
-def _estado_siigo_inicial(solicitada):
-    return 'pendiente' if solicitada else 'no_solicitada'
 
 def _registrar_venta():
     data = request.json
@@ -174,33 +144,16 @@ def _registrar_venta():
     tipo_pago = data['tipo_pago']
     items = data['items']
     direccion_ingresada = str(data.get('direccion', '')).strip()
-    # La factura electrónica es OPCIONAL: por defecto NO se solicita.
-    factura_electronica = bool(data.get('factura_electronica', False))
 
     conn = get_db()
     cursor = conn.cursor()
 
     cliente = cursor.execute(
-        "SELECT direccion, nombre, cedula_nit, telefono, COALESCE(email, ''), "
-        "COALESCE(tipo_documento, 'CC') FROM clientes WHERE id = ?", (id_cliente,)
+        "SELECT direccion FROM clientes WHERE id = ?", (id_cliente,)
     ).fetchone()
     if not cliente:
         conn.close()
         return jsonify({"error": "Cliente no encontrado"}), 400
-
-    # Si se pidió factura electrónica, el cliente debe tener datos completos.
-    if factura_electronica:
-        datos_fiscales = {'nombre': cliente[1], 'cedula_nit': cliente[2], 'telefono': cliente[3],
-                          'email': cliente[4], 'tipo_documento': cliente[5]}
-        faltantes = _validar_datos_factura_electronica(datos_fiscales)
-        if faltantes:
-            conn.close()
-            return jsonify({
-                "error": "Para generar la Factura Electrónica el cliente debe tener registrados: "
-                         + ", ".join(faltantes) + ". Edítelo y vuelva a intentarlo, "
-                         "o desactive la casilla para una venta normal.",
-                "campos_faltantes": faltantes,
-            }), 400
 
     direccion_cliente = direccion_ingresada or (cliente[0] or '')
     if direccion_ingresada:
@@ -217,7 +170,23 @@ def _registrar_venta():
     subtotal_venta, iva_valor, iva_porcentaje, total_venta, detalles = resultado
 
     now = datetime.now()
-    saldo_pendiente = total_venta if tipo_pago == 'credito' else 0
+
+    # ── Retenciones, plazo y tipo de operación (anexo técnico DIAN) ─────────
+    # Las retenciones solo aplican si el cliente es agente de retención; llegan
+    # como valor absoluto en pesos desde el POS. El neto es lo que realmente
+    # recibe el negocio: total - retenciones.
+    retencion_fuente = redondear_pesos(data.get('retencion_fuente') or 0)
+    retencion_ica = redondear_pesos(data.get('retencion_ica') or 0)
+    total_retenciones = retencion_fuente + retencion_ica
+    total_neto = total_venta - total_retenciones
+    plazo_dias = max(0, int(data.get('plazo_dias') or 0))
+    fecha_vencimiento = None
+    if tipo_pago == 'credito' and plazo_dias:
+        from datetime import timedelta
+        fecha_vencimiento = (now + timedelta(days=plazo_dias)).strftime('%Y-%m-%d')
+    tipo_operacion = str(data.get('tipo_operacion') or '10').strip() or '10'
+
+    saldo_pendiente = total_neto if tipo_pago == 'credito' else 0
 
     tipo_entrega = data.get('tipo_entrega', 'entrega_inmediata')
     if tipo_entrega not in ('entrega_inmediata', 'para_llevar'):
@@ -234,15 +203,19 @@ def _registrar_venta():
             """
             INSERT INTO ventas (id_cliente, fecha_dia, hora, total_venta, saldo_pendiente,
                                 tipo_pago, direccion_cliente, tipo_entrega, numero_pedido,
-                                siigo_estado, subtotal_venta, iva_valor, iva_porcentaje)
+                                subtotal_venta, iva_valor, iva_porcentaje,
+                                retencion_fuente, retencion_ica, total_neto, plazo_dias,
+                                fecha_vencimiento, tipo_operacion)
             VALUES (:cliente, :dia, :hora, :total, :saldo, :pago, :direccion, :entrega, :pedido,
-                    :siigo_estado, :subtotal, :iva, :iva_pct)
+                    :subtotal, :iva, :iva_pct, :ret_fuente, :ret_ica, :neto,
+                    :plazo, :vencimiento, :tipo_op)
             """,
             {'cliente': id_cliente, 'dia': now.strftime('%Y-%m-%d'), 'hora': now.strftime('%H:%M:%S'),
              'total': total_venta, 'saldo': saldo_pendiente, 'pago': tipo_pago,
              'direccion': direccion_cliente, 'entrega': tipo_entrega, 'pedido': numero_pedido,
-             'siigo_estado': _estado_siigo_inicial(factura_electronica),
-             'subtotal': subtotal_venta, 'iva': iva_valor, 'iva_pct': iva_porcentaje},
+             'subtotal': subtotal_venta, 'iva': iva_valor, 'iva_pct': iva_porcentaje,
+             'ret_fuente': retencion_fuente, 'ret_ica': retencion_ica, 'neto': total_neto,
+             'plazo': plazo_dias, 'vencimiento': fecha_vencimiento, 'tipo_op': tipo_operacion},
         )
         id_venta = cursor.lastrowid
 
@@ -268,8 +241,6 @@ def _registrar_venta():
                 registrar_orden_fleje_desde_venta(conn, id_venta, id_cliente, d['item'], d['nombre'])
 
         etiqueta = f'Para llevar — Pedido #{numero_pedido}' if numero_pedido else 'Entrega en mostrador'
-        if factura_electronica:
-            etiqueta += ' — Factura electrónica solicitada'
         registrar_auditoria(conn, 'crear', 'venta', id_venta, f'Venta de {total_venta:.2f} — {etiqueta}')
         conn.commit()
     except Exception as e:
@@ -277,154 +248,68 @@ def _registrar_venta():
         conn.close()
         return jsonify({"error": str(e)}), 500
 
-    # ── Transmisión OPCIONAL en segundo plano a Siigo ──────────────────────
-    # La venta local ya está guardada: si Siigo falla, no se pierde y puede
-    # reintentarse desde el panel de administración.
-    resultado_siigo = None
-    if factura_electronica:
-        datos_cliente = _datos_cliente_para_siigo(cursor, id_cliente)
-        resultado_siigo = _transmitir_a_siigo(conn, id_venta, datos_cliente, {
-            'fecha': now.strftime('%Y-%m-%d'), 'tipo_pago': tipo_pago,
-            'items': [{'codigo': d['id_producto'], 'nombre': d['nombre'],
-                       'cantidad': d['cantidad'], 'precio_unitario': d['precio']} for d in detalles],
-            'total': total_venta,
-        }, direccion_cliente)
     conn.close()
+
+    aviso_dian = _emitir_si_esta_configurado(id_venta)
 
     msg = f"Venta #{id_venta} registrada con éxito"
     if numero_pedido:
         msg += f" — Pedido #{numero_pedido} creado para despacho"
+    if aviso_dian:
+        msg += f" — {aviso_dian}"
     return jsonify({"mensaje": msg, "id_venta": id_venta,
-                    "tipo_entrega": tipo_entrega, "numero_pedido": numero_pedido,
-                    "factura_electronica": factura_electronica,
-                    "siigo": resultado_siigo}), 201
+                    "tipo_entrega": tipo_entrega, "numero_pedido": numero_pedido}), 201
 
 
-# ── Facturación electrónica opcional (Siigo) ──────────────────
-def _transmitir_a_siigo(conn, id_venta, datos_cliente, venta_local, direccion=''):
-    """Transmite la venta a Siigo y persiste el resultado en la tabla `ventas`.
+def _emitir_si_esta_configurado(id_venta):
+    """Emite el Documento Equivalente POS si el negocio activó la emisión automática.
 
-    Pensada para ejecutarse sin interrumpir el flujo del POS: nunca lanza
-    excepción hacia el llamador. Devuelve un dict con el resultado para que el
-    frontend muestre el comprobante o la alerta de error.
+    DECISIÓN IMPORTANTE: esta función NO puede hacer fallar la venta. El POS tiene
+    que seguir vendiendo aunque la DIAN esté caída, falte el certificado o el
+    software no esté configurado: la venta ya quedó registrada y el stock ya se
+    descontó. Cualquier problema de la emisión se devuelve como un AVISO en el
+    mensaje y el documento queda pendiente para emitirlo desde la factura.
+
+    Returns:
+        Un texto para anexar al mensaje de éxito, o '' si no hay nada que decir
+        (emisión automática apagada).
     """
-    venta_payload = {
-        'id_venta': id_venta,
-        'fecha': venta_local.get('fecha'),
-        'tipo_pago': venta_local.get('tipo_pago'),
-        'total': venta_local.get('total'),
-        'items': venta_local.get('items') or [],
-        'cliente': {**(datos_cliente or {}), 'direccion': direccion or ''},
-    }
-    ahora = _ahora()
     try:
-        resultado = siigo.emitir_factura(venta_payload)
-    except siigo.SiigoError as e:
-        conn.execute(
-            "UPDATE ventas SET siigo_estado = 'error', siigo_error = ?, "
-            "siigo_intentos = COALESCE(siigo_intentos, 0) + 1, siigo_fecha_emision = ? WHERE id = ?",
-            (e.motivo, ahora, id_venta),
-        )
-        registrar_auditoria(conn, 'siigo_error', 'venta', id_venta, e.motivo)
-        conn.commit()
-        return {'ok': False, 'estado': 'error', 'motivo': e.motivo}
-    except Exception as e:  # red, proxy, respuesta inesperada…
-        motivo = f"No se pudo transmitir a Siigo: {e}"
-        conn.execute(
-            "UPDATE ventas SET siigo_estado = 'error', siigo_error = ?, "
-            "siigo_intentos = COALESCE(siigo_intentos, 0) + 1, siigo_fecha_emision = ? WHERE id = ?",
-            (motivo, ahora, id_venta),
-        )
-        registrar_auditoria(conn, 'siigo_error', 'venta', id_venta, motivo)
-        conn.commit()
-        return {'ok': False, 'estado': 'error', 'motivo': motivo}
+        from ..services import dian_emision
 
-    conn.execute(
-        "UPDATE ventas SET siigo_estado = 'aprobada', siigo_numero = ?, siigo_cufe = ?, "
-        "siigo_pdf_url = ?, siigo_xml_url = ?, siigo_error = NULL, "
-        "siigo_fecha_emision = ?, siigo_intentos = COALESCE(siigo_intentos, 0) + 1 "
-        "WHERE id = ?",
-        (resultado['numero'], resultado['cufe'], resultado['pdf_url'], resultado['xml_url'],
-         ahora, id_venta),
-    )
-    registrar_auditoria(conn, 'siigo_factura', 'venta', id_venta,
-                        f"Factura electrónica {resultado['numero']} emitida")
-    conn.commit()
-    return {'ok': True, 'estado': 'aprobada', 'numero': resultado['numero'],
-            'cufe': resultado['cufe'], 'pdf_url': resultado['pdf_url'],
-            'xml_url': resultado['xml_url'], 'email': (datos_cliente or {}).get('email', '')}
+        conn = get_db()
+        try:
+            activa = conn.execute(
+                "SELECT COALESCE(dian_emision_automatica, 0) FROM configuracion WHERE id = 1"
+            ).fetchone()
+            if not activa or not activa[0]:
+                return ''
 
+            resultado = dian_emision.emitir_venta(conn, id_venta)
+        finally:
+            conn.close()
 
-def _cargar_venta_para_siigo(conn, id_venta):
-    """Recupera de la BD una venta y sus datos para reenviarla a Siigo."""
-    venta = conn.execute(
-        """SELECT v.fecha_dia, v.tipo_pago, v.total_venta, v.id_cliente,
-                COALESCE(v.direccion_cliente, ''), v.anulada
-         FROM ventas v WHERE v.id = ?""", (id_venta,)
-    ).fetchone()
-    if not venta:
-        return None, jsonify({"error": "Venta no encontrada"}), 404
-    fecha_dia, tipo_pago, total, id_cliente, direccion, anulada = venta
-    if anulada:
-        return None, jsonify({"error": "No se puede facturar electrónicamente una venta anulada"}), 400
-    cliente = _datos_cliente_para_siigo(conn, id_cliente)
-    if not cliente:
-        return None, jsonify({"error": "Cliente no encontrado"}), 400
-    faltantes = _validar_datos_factura_electronica(cliente)
-    if faltantes:
-        return None, jsonify({
-            "error": "El cliente no tiene datos completos para facturación electrónica. "
-                     "Faltan: " + ", ".join(faltantes),
-            "campos_faltantes": faltantes,
-        }), 400
-    items = conn.execute(
-        "SELECT dv.id_producto, p.nombre, dv.cantidad, dv.precio_unitario "
-        "FROM detalle_ventas dv JOIN productos p ON p.id = dv.id_producto "
-        "WHERE dv.id_venta = ?", (id_venta,)
-    ).fetchall()
-    return {
-        'id_venta': id_venta, 'fecha': fecha_dia, 'tipo_pago': tipo_pago, 'total': total,
-        'cliente': {**cliente, 'direccion': direccion or ''},
-        'items': [{'codigo': r[0], 'nombre': r[1], 'cantidad': r[2], 'precio_unitario': r[3]}
-                  for r in items],
-    }, None, None
-@bp.route('/api/ventas/<int:id_venta>/siigo', methods=['POST'])
-@login_required
-def transmitir_siigo(id_venta):
-    """Transmite (o reintenta) la factura electrónica de una venta a Siigo.
+        if resultado.get('contingencia'):
+            return (f"documento {resultado['numero']} en CONTINGENCIA: se enviará "
+                    "cuando vuelva la conexión con la DIAN")
+        if resultado.get('estado') == 'aceptado':
+            return f"documento electrónico {resultado['numero']} aceptado por la DIAN"
+        return (f"el documento {resultado['numero']} fue RECHAZADO por la DIAN: "
+                f"{resultado.get('mensaje', '')}")
+    except Exception as error:
+        # Se registra el problema pero la venta se responde como exitosa: el
+        # cajero no debe quedarse con una venta a medias por un fallo fiscal.
+        try:
+            from flask import current_app
+            current_app.logger.warning(
+                'No se pudo emitir el documento DIAN de la venta #%s: %s',
+                id_venta, error,
+            )
+        except Exception:
+            pass
+        return (f"no se pudo emitir el documento electrónico ({error}). "
+                "Emitirlo desde la factura.")
 
-    Sirve tanto para el reintento desde el panel de administración como para
-    cuando un cliente pide la factura electrónica minutos después de comprar.
-    """
-    conn = get_db()
-    datos, respuesta_error, status = _cargar_venta_para_siigo(conn, id_venta)
-    if respuesta_error is not None:
-        conn.close()
-        # Se devuelve el cuerpo junto con su código HTTP real (404/400); sin el
-        # status, Flask respondería 200 y el error parecería un éxito.
-        return respuesta_error, status or 400
-    resultado = _transmitir_a_siigo(
-        conn, id_venta, datos['cliente'],
-        {'fecha': datos['fecha'], 'tipo_pago': datos['tipo_pago'],
-         'items': datos['items'], 'total': datos['total']},
-        datos['cliente'].get('direccion', ''),
-    )
-    conn.close()
-
-    if resultado.get('ok'):
-        return jsonify({"mensaje": "Factura Electrónica emitida con éxito", **resultado}), 200
-    return jsonify({
-        "error": f"No se pudo transmitir a Siigo: {resultado.get('motivo', 'motivo desconocido')}",
-        "motivo": resultado.get('motivo', ''),
-        "venta_id": id_venta,
-        "guardado_localmente": True,
-    }), 502
-@bp.route('/api/siigo/estado', methods=['GET'])
-@login_required
-def estado_siigo():
-    """Indica si la integración con Siigo está configurada (para avisar en la UI)."""
-    return jsonify({"configurado": siigo.configurado(),
-                    "proxy_estatico": bool(siigo.FIXIE_URL)})
 
 @bp.route('/api/ventas/despachos', methods=['GET'])
 @login_required
@@ -594,8 +479,11 @@ def registrar_entrega_parcial(id_venta):
             "error": f"El rol '{rol}' no puede registrar entregas de un pedido en '{estado_actual}'"
         }), 403
 
-    ahora = _ahora()
-    entragados_ahora = 0
+    # El cliente puede pagar todo y retirar por partes, así que una misma venta
+    # puede traer varias líneas del mismo producto (lotes distintos) y el mismo
+    # producto puede venir repetido en una entrega. Se agrupa por producto y se
+    # valida TODO antes de escribir: si una línea viene mal, no se entrega nada.
+    agrupados = {}
     for item in items:
         try:
             id_prod = int(item.get('id_producto'))
@@ -603,27 +491,58 @@ def registrar_entrega_parcial(id_venta):
         except (TypeError, ValueError):
             conn.close()
             return jsonify({"error": "Cantidad inválida en una línea"}), 400
-        if cantidad <= 0:
+        if cantidad < 0:
+            conn.close()
+            return jsonify({"error": "La cantidad a entregar no puede ser negativa"}), 400
+        if cantidad == 0:
             continue  # 0 unidades: nada que registrar en esta línea.
-        linea = cursor.execute(
-            "SELECT cantidad, COALESCE(cantidad_entregada, 0) FROM detalle_ventas "
-            "WHERE id_venta = ? AND id_producto = ?", (id_venta, id_prod)
-        ).fetchone()
-        if not linea:
+        agrupados[id_prod] = agrupados.get(id_prod, 0) + cantidad
+
+    # Cuánto se pidió y cuánto se ha entregado por producto, sumando las líneas
+    # repetidas del detalle.
+    pedido_por_producto = {}
+    entregado_por_producto = {}
+    for id_prod, pedida, ya_entregada in cursor.execute(
+        "SELECT id_producto, SUM(cantidad), SUM(COALESCE(cantidad_entregada, 0)) "
+        "FROM detalle_ventas WHERE id_venta = ? GROUP BY id_producto", (id_venta,)
+    ).fetchall():
+        pedido_por_producto[id_prod] = pedida or 0
+        entregado_por_producto[id_prod] = ya_entregada or 0
+
+    for id_prod, cantidad in agrupados.items():
+        if id_prod not in pedido_por_producto:
             conn.close()
             return jsonify({"error": f"El producto {id_prod} no está en esta venta"}), 400
-        pedida, ya_entregada = linea[0], linea[1]
-        pendiente = pedida - ya_entregada
+        pendiente = pedido_por_producto[id_prod] - entregado_por_producto[id_prod]
         if cantidad > pendiente:
             conn.close()
             return jsonify({
                 "error": f"No puede entregar más de lo pendiente (producto {id_prod}: "
                          f"falta {pendiente})"
             }), 400
-        cursor.execute(
-            "UPDATE detalle_ventas SET cantidad_entregada = COALESCE(cantidad_entregada, 0) + ? "
-            "WHERE id_venta = ? AND id_producto = ?", (cantidad, id_venta, id_prod)
-        )
+
+    ahora = _ahora()
+    entragados_ahora = 0
+    for id_prod, cantidad in agrupados.items():
+        # Se reparte lo entregado entre las líneas del producto, respetando lo
+        # que ya tenía cada una, para que el pendiente por línea cuadre.
+        restante = cantidad
+        lineas = cursor.execute(
+            "SELECT id, cantidad, COALESCE(cantidad_entregada, 0) FROM detalle_ventas "
+            "WHERE id_venta = ? AND id_producto = ? ORDER BY id", (id_venta, id_prod)
+        ).fetchall()
+        for id_linea, pedida, ya_entregada in lineas:
+            if restante <= 0:
+                break
+            cupo = pedida - ya_entregada
+            if cupo <= 0:
+                continue
+            aplicar = min(cupo, restante)
+            cursor.execute(
+                "UPDATE detalle_ventas SET cantidad_entregada = COALESCE(cantidad_entregada, 0) + ? "
+                "WHERE id = ?", (aplicar, id_linea)
+            )
+            restante -= aplicar
         cursor.execute(
             "INSERT INTO entregas_venta (id_venta, id_producto, cantidad, usuario, fecha) "
             "VALUES (?, ?, ?, ?, ?)", (id_venta, id_prod, cantidad, usuario, ahora)
@@ -668,12 +587,15 @@ def get_factura_detalle(id_venta):
                COALESCE(v.direccion_cliente, c.direccion, ''),
                v.saldo_pendiente, v.anulada, v.motivo_anulacion, v.tipo_entrega,
                v.numero_pedido,
-               COALESCE(v.siigo_estado, 'no_solicitada'), v.siigo_numero,
-               v.siigo_cufe, v.siigo_pdf_url, v.siigo_error,
                COALESCE(c.email, ''), COALESCE(c.tipo_documento, 'CC'),
                COALESCE(v.subtotal_venta, 0), COALESCE(v.iva_valor, 0),
-               COALESCE(v.iva_porcentaje, 0)
-        FROM ventas v JOIN clientes c ON v.id_cliente = c.id WHERE v.id = ?
+               COALESCE(v.iva_porcentaje, 0),
+               COALESCE(v.numero_dian, ''), COALESCE(v.dian_estado, 'sin_emitir'),
+               COALESCE(v.dian_cuide, ''), COALESCE(v.dian_descripcion, ''),
+               COALESCE(d.qr_url, ''), COALESCE(d.id, 0)
+        FROM ventas v JOIN clientes c ON v.id_cliente = c.id
+        LEFT JOIN documentos_electronicos d ON d.id_venta = v.id
+        WHERE v.id = ?
         """, (id_venta,)
     ).fetchone()
     if not venta:
@@ -706,16 +628,22 @@ def get_factura_detalle(id_venta):
         "motivo_anulacion": venta[12] or "",
         "tipo_entrega": venta[13] or "entrega_inmediata",
         "numero_pedido": venta[14],
-        "siigo_estado": venta[15] or "no_solicitada",
-        "siigo_numero": venta[16] or "",
-        "siigo_cufe": venta[17] or "",
-        "siigo_pdf_url": venta[18] or "",
-        "siigo_error": venta[19] or "",
-        "email": venta[20] or "",
-        "tipo_documento": venta[21] or "CC",
-        "subtotal_venta": venta[22] or 0,
-        "iva_valor": venta[23] or 0,
-        "iva_porcentaje": venta[24] or 0,
+        "email": venta[15] or "",
+        "tipo_documento": venta[16] or "CC",
+        "subtotal_venta": venta[17] or 0,
+        "iva_valor": venta[18] or 0,
+        "iva_porcentaje": venta[19] or 0,
+        # ── Documento Equivalente Electronico POS (DIAN) ─────────────────
+        # Estado fiscal de la venta, para que la tirilla pueda imprimir el
+        # CUIDE y el QR sin una segunda consulta al servidor.
+        "dian": {
+            "numero": venta[20] or "",
+            "estado": venta[21] or "sin_emitir",
+            "cuide": venta[22] or "",
+            "mensaje": venta[23] or "",
+            "qr_url": venta[24] or "",
+            "id_documento": venta[25] or 0,
+        },
         "negocio": {
             "nombre": (negocio[0] if negocio else "Ferretería y Fábrica de Flejes"),
             "nit": (negocio[1] if negocio else "") or "",

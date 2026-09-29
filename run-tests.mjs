@@ -2,6 +2,7 @@
 //   1) asegura que la app este corriendo (la levanta si hace falta)
 //   2) resetea el pedido de prueba a "pendiente_preparar"
 //   3) levanta Chromium y corre _qa_flujo_despacho.mjs con los dos roles
+//   4) corre la QA de entrega parcial (_qa_entrega_parcial.mjs)
 //
 // Se ejecuta desde el propio node (sin depender de que `npm` este en el PATH).
 // Si el servidor NO estaba levantado, este script lo apaga al terminar; si ya
@@ -10,12 +11,19 @@
 //   npm run test:full
 import { execFileSync, spawn } from 'node:child_process';
 import { existsSync, openSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { setTimeout as delay } from 'node:timers/promises';
 
-const PY = process.platform === 'win32' ? '.venv\\Scripts\\python.exe' : '.venv/bin/python';
-const TEST_DETECCION = process.platform === 'win32'
+// Los .mjs de QA se importan dinamicamente y no se pueden pasar como "main":
+// node los ejecuta igual (el cuerpo de _qa_entrega_parcial.mjs corre al cargar
+// el modulo), asi que basta con importarlos. Un fallo dentro de ellos sale como
+// excepcion no capturada, que rompe el import y hace fallar este script.
+const RAIZ = dirname(fileURLToPath(import.meta.url));
+const PY = join(RAIZ, process.platform === 'win32' ? '.venv\\Scripts\\python.exe' : '.venv/bin/python');
+const TEST_DETECCION = join(RAIZ, process.platform === 'win32'
   ? 'tests\\test_deteccion_puerto.py'
-  : 'tests/test_deteccion_puerto.py';
+  : 'tests/test_deteccion_puerto.py');
 const PUERTO = process.env.PORT || '5000';
 const URL_LOGIN = `http://127.0.0.1:${PUERTO}/login`;
 const URL_TITULO = `http://127.0.0.1:${PUERTO}/`;
@@ -84,7 +92,7 @@ async function asegurarServidor() {
   // (p.ej. a los 120s) y Chromium recibe ERR_CONNECTION_REFUSED aunque el
   // servidor si hubiera arrancado. Desacoplado, sobrevive hasta que este
   // script lo apaga en detenerServidor().
-  servidorPropio = spawn(PY, ['app.py'], { stdio: ['ignore', out, err], detached: true });
+  servidorPropio = spawn(PY, ['app.py'], { stdio: ['ignore', out, err], detached: true, cwd: RAIZ });
   servidorPropio.unref();
 
   for (let intento = 1; intento <= 20; intento++) {
@@ -140,7 +148,7 @@ try {
 
   console.log('\n== Reset del pedido de prueba ==');
   try {
-    execFileSync(PY, ['_reset_venta_prueba.py'], { stdio: 'inherit' });
+    execFileSync(PY, ['_reset_venta_prueba.py'], { stdio: 'inherit', cwd: RAIZ });
   } catch (err) {
     throw new Error(
       'no pude resetear el pedido de prueba (_reset_venta_prueba.py): ' + err.message,
@@ -149,6 +157,12 @@ try {
 
   console.log('\n== Flujo de despacho (bodega -> motocarguero) ==');
   await import('./_qa_flujo_despacho_runner.mjs');
+
+  // OJO: el reset de arriba devuelve los pedidos de prueba a 'pendiente_preparar',
+  // asi que la entrega parcial va DESPUES del flujo de despacho para no pisarlo.
+  // Este QA crea su propia venta 'para_llevar', la marca listo y la cierra.
+  console.log('\n== Entrega parcial (para_llevar) ==');
+  await import('./_qa_entrega_parcial_runner.mjs');
 } catch (err) {
   fallo = true;
   console.error('FALLO: ' + err.message);

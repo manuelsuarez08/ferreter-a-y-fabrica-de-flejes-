@@ -7,7 +7,8 @@ from flask import Flask
 
 from .config import SECRET_KEY
 from .db import asegurar_base_de_datos, init_db, respaldar_base_de_datos
-from .blueprints import alquiler, catalogo, core, cotizaciones, fabrica, pedidos, ventas
+from .blueprints import (alquiler, catalogo, core, cotizaciones, dian_pos,
+                         fabrica, pedidos, ventas)
 
 
 def create_app(inicializar_db=True):
@@ -29,6 +30,7 @@ def create_app(inicializar_db=True):
     pedidos.registrar(app)
     alquiler.registrar(app)
     cotizaciones.registrar(app)
+    dian_pos.registrar(app)
 
     if inicializar_db:
         # Si DB_NAME apunta a un disco persistente vacío, se siembra desde el

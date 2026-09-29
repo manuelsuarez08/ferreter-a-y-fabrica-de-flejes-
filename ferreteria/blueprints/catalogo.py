@@ -11,8 +11,44 @@ from flask import Blueprint, jsonify, request, session
 from ..db import get_db
 from ..security import login_required
 from ..services.auditoria import registrar_auditoria
+from ..services.dian import calcular_digito_verificacion, es_nit
 
 bp = Blueprint('catalogo', __name__)
+
+
+# Columnas fiscales del tercero (DIAN). Se centralizan para que GET, INSERT y
+# UPDATE queden siempre alineados: si se agrega una columna, se toca un solo sitio.
+_COLUMNAS_FISCALES_CLIENTE = (
+    'tipo_persona', 'digito_verificacion', 'regimen_fiscal', 'responsabilidades',
+    'codigo_municipio', 'codigo_departamento',
+)
+
+
+def _normalizar_datos_fiscales_cliente(data):
+    """Extrae y limpia los campos fiscales del tercero que llegan del formulario.
+
+    El DV se recalcula automáticamente cuando el tipo de documento es NIT, para
+    no depender de que el usuario lo digite bien (un DV errado hace que la DIAN
+    rechace el documento).
+    """
+    tipo_documento = (str(data.get('tipo_documento', '')).strip() or 'CC').upper()
+    cedula_nit = str(data.get('cedula_nit', '')).strip()
+    dv = str(data.get('digito_verificacion', '')).strip()
+    if es_nit(tipo_documento):
+        dv = calcular_digito_verificacion(cedula_nit) or dv
+    else:
+        dv = ''
+    return {
+        'tipo_documento': tipo_documento,
+        'tipo_persona': (str(data.get('tipo_persona', '')).strip() or 'Natural'),
+        'digito_verificacion': dv,
+        'regimen_fiscal': (str(data.get('regimen_fiscal', '')).strip()
+                           or 'No Responsable de IVA'),
+        'responsabilidades': (str(data.get('responsabilidades', '')).strip()
+                              or 'R-99-PN'),
+        'codigo_municipio': str(data.get('codigo_municipio', '')).strip(),
+        'codigo_departamento': str(data.get('codigo_departamento', '')).strip(),
+    }
 
 
 def _ahora():
@@ -27,28 +63,33 @@ def handle_clientes():
     cursor = conn.cursor()
 
     if request.method == 'GET':
-        rows = cursor.execute(
-            "SELECT id, nombre, cedula_nit, telefono, direccion, "
-            "COALESCE(email, ''), COALESCE(tipo_documento, 'CC') FROM clientes ORDER BY id DESC"
-        ).fetchall()
+        columnas = ', '.join(['id, nombre, cedula_nit, telefono, direccion, '
+                              "COALESCE(email, ''), COALESCE(tipo_documento, 'CC')"]
+                             + [f"COALESCE({c}, '')" for c in _COLUMNAS_FISCALES_CLIENTE])
+        rows = cursor.execute(f"SELECT {columnas} FROM clientes ORDER BY id DESC").fetchall()
         conn.close()
-        return jsonify([{"id": r[0], "nombre": r[1], "cedula_nit": r[2],
-                         "telefono": r[3], "direccion": r[4] or "",
-                         "email": r[5] or "", "tipo_documento": r[6] or "CC"} for r in rows])
+        llaves = ('id', 'nombre', 'cedula_nit', 'telefono', 'direccion', 'email',
+                  'tipo_documento') + _COLUMNAS_FISCALES_CLIENTE
+        return jsonify([{llave: (valor or '') for llave, valor in zip(llaves, r)} for r in rows])
 
     data = request.json
     if not data or not str(data.get('nombre', '')).strip():
         conn.close()
         return jsonify({"error": "El nombre del cliente es obligatorio"}), 400
 
+    fiscal = _normalizar_datos_fiscales_cliente(data)
     try:
         cursor.execute(
-            "INSERT INTO clientes (nombre, cedula_nit, telefono, direccion, email, tipo_documento) "
-            "VALUES (:nombre, :nit, :telefono, :direccion, :email, :tipo_documento)",
+            "INSERT INTO clientes (nombre, cedula_nit, telefono, direccion, email, tipo_documento, "
+            "tipo_persona, digito_verificacion, regimen_fiscal, responsabilidades, "
+            "codigo_municipio, codigo_departamento) "
+            "VALUES (:nombre, :nit, :telefono, :direccion, :email, :tipo_documento, "
+            ":tipo_persona, :digito_verificacion, :regimen_fiscal, :responsabilidades, "
+            ":codigo_municipio, :codigo_departamento)",
             {'nombre': data['nombre'].strip(), 'nit': str(data.get('cedula_nit', '')).strip() or None,
              'telefono': data.get('telefono', '').strip(), 'direccion': data.get('direccion', '').strip(),
              'email': str(data.get('email', '')).strip(),
-             'tipo_documento': (str(data.get('tipo_documento', '')).strip() or 'CC')},
+             **fiscal},
         )
         conn.commit()
         conn.close()
@@ -66,15 +107,20 @@ def actualizar_cliente(id_cliente):
     if not nombre:
         return jsonify({"error": "El nombre del cliente es obligatorio"}), 400
 
+    fiscal = _normalizar_datos_fiscales_cliente(data)
     conn = get_db()
     try:
         conn.execute(
             "UPDATE clientes SET nombre = ?, cedula_nit = ?, telefono = ?, direccion = ?, "
-            "email = ?, tipo_documento = ? WHERE id = ?",
+            "email = ?, tipo_documento = ?, tipo_persona = ?, digito_verificacion = ?, "
+            "regimen_fiscal = ?, responsabilidades = ?, codigo_municipio = ?, "
+            "codigo_departamento = ? WHERE id = ?",
             (nombre, str(data.get('cedula_nit', '')).strip() or None,
              str(data.get('telefono', '')).strip(), str(data.get('direccion', '')).strip(),
              str(data.get('email', '')).strip(),
-             (str(data.get('tipo_documento', '')).strip() or 'CC'), id_cliente),
+             fiscal['tipo_documento'], fiscal['tipo_persona'], fiscal['digito_verificacion'],
+             fiscal['regimen_fiscal'], fiscal['responsabilidades'], fiscal['codigo_municipio'],
+             fiscal['codigo_departamento'], id_cliente),
         )
         if conn.total_changes == 0:
             conn.close()
@@ -174,7 +220,8 @@ def _listar_productos(cursor, conn):
     sql = ("SELECT id, nombre, categoria, dimensiones, codigo_barras, precio_venta, "
            "stock_actual, stock_minimo, auditado, stock_inicial, fecha_auditoria, "
            "COALESCE(precio_base, precio_venta), COALESCE(iva_valor, 0), "
-           "COALESCE(iva_tasa, 0) FROM productos")
+           "COALESCE(iva_tasa, 0), COALESCE(unidad_medida, '94'), "
+           "COALESCE(codigo_dian, ''), COALESCE(iva_naturaleza, 'excluido') FROM productos")
     where, params = [], []
     if not incluir_inactivos:
         where.append("COALESCE(activo, 1) = 1")
@@ -197,6 +244,8 @@ def _listar_productos(cursor, conn):
         "stock_actual": r[6], "stock_minimo": r[7],
         "auditado": bool(r[8]), "stock_inicial": r[9] or 0, "fecha_auditoria": r[10],
         "precio_base": r[11], "iva_valor": r[12], "iva_tasa": r[13],
+        "unidad_medida": r[14] or '94', "codigo_dian": r[15] or "",
+        "iva_naturaleza": r[16] or 'excluido',
     } for r in rows])
 
 
@@ -221,6 +270,16 @@ def _crear_o_reabastecer_producto(cursor, conn):
     #   base = precio_final / (1 + tasa/100)   iva = precio_final - base
     iva_tasa = max(0.0, min(100.0, _leer_flotante(data, 'iva_tasa', 0)))
     precio_base, iva_valor = _desglosar_iva(precio_venta, iva_tasa)
+
+    # Datos que exige el anexo técnico DIAN para cada ítem de la factura.
+    # unidad_medida: código UN/ECE ('94' unidad, 'KGM' kilo, 'MTR' metro).
+    # codigo_dian: código homologado del producto/servicio que viaja al XML.
+    # iva_naturaleza: a tasa 0 distingue 'exento' de 'excluido'.
+    unidad_medida = (str(data.get('unidad_medida', '')).strip() or '94')
+    codigo_dian = str(data.get('codigo_dian', '')).strip() or None
+    iva_naturaleza = (str(data.get('iva_naturaleza', '')).strip() or 'excluido')
+    if iva_naturaleza not in ('exento', 'excluido', 'gravado'):
+        iva_naturaleza = 'excluido'
 
     if not nombre or precio_venta < 0 or precio_costo < 0:
         conn.close()
@@ -253,11 +312,14 @@ def _crear_o_reabastecer_producto(cursor, conn):
             UPDATE productos
             SET categoria = ?, codigo_barras = COALESCE(?, codigo_barras), precio_costo = ?,
                 precio_venta = ?, stock_actual = ?, stock_minimo = ?,
-                precio_base = ?, iva_valor = ?, iva_tasa = ?
+                precio_base = ?, iva_valor = ?, iva_tasa = ?,
+                unidad_medida = ?, codigo_dian = COALESCE(?, codigo_dian),
+                iva_naturaleza = ?
             WHERE id = ?
             """,
             (categoria, codigo_barras, precio_costo, precio_venta, nuevo_stock, stock_minimo,
-             precio_base, iva_valor, iva_tasa, id_prod),
+             precio_base, iva_valor, iva_tasa, unidad_medida, codigo_dian, iva_naturaleza,
+             id_prod),
         )
         cursor.execute(
             "INSERT INTO movimientos_inventario (id_producto, tipo, cantidad, motivo, usuario, fecha) "
@@ -273,13 +335,15 @@ def _crear_o_reabastecer_producto(cursor, conn):
     cursor.execute(
         "INSERT INTO productos (nombre, categoria, dimensiones, codigo_barras, precio_costo, "
         "precio_venta, stock_actual, stock_minimo, stock_inicial, auditado, activo, "
-        "precio_base, iva_valor, iva_tasa) "
+        "precio_base, iva_valor, iva_tasa, unidad_medida, codigo_dian, iva_naturaleza) "
         "VALUES (:nombre, :categoria, :dimensiones, :codigo, :costo, :venta, :stock, :minimo, "
-        ":stock, 0, 1, :base, :iva, :tasa)",
+        ":stock, 0, 1, :base, :iva, :tasa, :unidad, :codigo_dian, :naturaleza)",
         {'nombre': nombre, 'categoria': categoria, 'dimensiones': dimensiones,
          'codigo': codigo_barras, 'costo': precio_costo, 'venta': precio_venta,
          'stock': stock_ingresado, 'minimo': stock_minimo,
-         'base': precio_base, 'iva': iva_valor, 'tasa': iva_tasa},
+         'base': precio_base, 'iva': iva_valor, 'tasa': iva_tasa,
+         'unidad': unidad_medida, 'codigo_dian': codigo_dian,
+         'naturaleza': iva_naturaleza},
     )
     id_producto = cursor.lastrowid
     cursor.execute(
@@ -431,16 +495,29 @@ def eliminar_productos_lote():
 
 def _actualizar_producto(conn, id_producto):
     data = request.json or {}
+    # El formulario de edición manda el precio FINAL y la tasa; si llegan, se
+    # recalcula el desglose base/IVA para que la factura cuadre.
+    precio_venta = float(data.get('precio_venta', 0))
+    iva_tasa = max(0.0, min(100.0, _leer_flotante(data, 'iva_tasa', 0)))
+    precio_base, iva_valor = _desglosar_iva(precio_venta, iva_tasa)
+    unidad_medida = str(data.get('unidad_medida', '')).strip() or '94'
+    codigo_dian = str(data.get('codigo_dian', '')).strip() or None
+    iva_naturaleza = str(data.get('iva_naturaleza', '')).strip() or 'excluido'
+    if iva_naturaleza not in ('exento', 'excluido', 'gravado'):
+        iva_naturaleza = 'excluido'
     try:
         conn.execute(
             """
             UPDATE productos SET nombre = ?, categoria = ?, dimensiones = ?, codigo_barras = ?,
-            precio_costo = ?, precio_venta = ?, stock_minimo = ? WHERE id = ?
+            precio_costo = ?, precio_venta = ?, stock_minimo = ?, precio_base = ?,
+            iva_valor = ?, iva_tasa = ?, unidad_medida = ?, codigo_dian = ?,
+            iva_naturaleza = ? WHERE id = ?
             """,
             (str(data.get('nombre', '')).strip(), str(data.get('categoria', '')).strip(),
              str(data.get('dimensiones', '')).strip(), str(data.get('codigo_barras', '')).strip() or None,
-             float(data.get('precio_costo', 0)), float(data.get('precio_venta', 0)),
-             int(data.get('stock_minimo', 0)), id_producto),
+             float(data.get('precio_costo', 0)), precio_venta,
+             int(data.get('stock_minimo', 0)), precio_base, iva_valor, iva_tasa,
+             unidad_medida, codigo_dian, iva_naturaleza, id_producto),
         )
         if conn.total_changes == 0:
             conn.close()

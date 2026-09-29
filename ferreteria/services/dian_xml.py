@@ -1,0 +1,691 @@
+"""Generador del XML UBL 2.1 del Documento Equivalente Electrónico POS.
+
+Construye el documento que la DIAN exige (Anexo Técnico 1.0 de la Resolución
+000165) con el nombre raíz `Invoice` y el `CustomizationID` de POS:
+
+    urn:oasis:names:specification:ubl:schema:xsd:Invoice-2
+    urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2
+    urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2
+
+Decisión de diseño: el XML se arma como TEXTO con `xml.etree.ElementTree`
+(que viene en la librería estándar), no con plantillas Jinja ni con `lxml`. Tres
+razones:
+
+  1. El proyecto no tiene `lxml` y no se quiere agregar una dependencia con
+     binarios para generar un XML que es esencialmente una plantilla.
+  2. `ElementTree` escapa solo los caracteres peligrosos ('&', '<', '>'), así que
+     un nombre de producto como "Tubo 1/2 & 3/4" no rompe el documento.
+  3. La FIRMA se inserta después con un parser real (`xml.etree`), no con
+     búsquedas de texto: el bloque <ds:Signature> tiene que quedar como último
+     hijo del Invoice, y eso se resuelve con el árbol, no con strings.
+
+El módulo NO firma ni envía nada: solo arma el documento y el ApplicationResponse
+de los eventos de contingencia. Eso lo hace testeable sin certificado ni red.
+"""
+from __future__ import annotations
+
+import xml.etree.ElementTree as ET
+from datetime import datetime
+
+from .dian_pos import (
+    DEPARTAMENTO_POR_DEFECTO,
+    DV_CONSUMIDOR_FINAL,
+    MUNICIPIO_POR_DEFECTO,
+    NIT_CONSUMIDOR_FINAL,
+    NOMBRE_CONSUMIDOR_FINAL,
+    NOMBRES_IMPUESTO,
+    PAIS_POR_DEFECTO,
+    TIPO_IMPUESTO_INC,
+    TIPO_IMPUESTO_IVA,
+    UNIDAD_POR_DEFECTO,
+    formatear_cantidad,
+    formatear_monto,
+    normalizar_fecha,
+    normalizar_hora,
+    solo_digitos,
+    tipo_documento_identidad,
+    url_consulta,
+)
+
+# ── Namespaces del anexo técnico ─────────────────────────────────────────────
+NS_INVOICE = 'urn:oasis:names:specification:ubl:schema:xsd:Invoice-2'
+NS_CREDIT_NOTE = 'urn:oasis:names:specification:ubl:schema:xsd:CreditNote-2'
+NS_CAC = 'urn:oasis:names:specification:ubl:schema:xsd:CommonAggregateComponents-2'
+NS_CBC = 'urn:oasis:names:specification:ubl:schema:xsd:CommonBasicComponents-2'
+NS_EXT = 'urn:oasis:names:specification:ubl:schema:xsd:CommonExtensionComponents-2'
+NS_DS = 'http://www.w3.org/2000/09/xmldsig#'
+NS_STS = 'dian:gov:co:facturaelectronica:Structures-2-1'
+NS_XSI = 'http://www.w3.org/2001/XMLSchema-instance'
+
+# Prefijos del XML tal como los valida la DIAN.
+#
+# OJO (bug real encontrado en QA): ElementTree lleva un mapa "namespace -> prefijo"
+# global. Si el mismo namespace se registra DOS VECES con prefijos distintos,
+# `register_namespace` actualiza el diccionario interno pero deja el prefijo
+# viejo en el mapa inverso, y al serializar emite el `xmlns` DUPLICADO
+# (`<Invoice xmlns="..." ... xmlns="...">`). Eso produce un XML que ni siquiera
+# se puede volver a parsear ('duplicate attribute'), así que se registra cada
+# namespace UNA sola vez. Aplicaba al Invoice, que más abajo aparecía tambión
+# como prefijo por defecto del ApplicationResponse.
+ET.register_namespace('', NS_INVOICE)
+ET.register_namespace('cac', NS_CAC)
+ET.register_namespace('cbc', NS_CBC)
+ET.register_namespace('ext', NS_EXT)
+ET.register_namespace('ds', NS_DS)
+ET.register_namespace('sts', NS_STS)
+ET.register_namespace('xsi', NS_XSI)
+
+# El anexo técnico exige que el CustomizationID identifique la modalidad. La
+# DIAN valida ese texto contra su catálogo, así que no se acentúa ni se traduce.
+CUSTOMIZATION_ID = (
+    'Documento Equivalente electronico POS: Anexo Tecnico 1.0'
+)
+PROFILE_ID = 'DIAN 2.1: Documento Equivalente electronico POS'
+SCHEMA_ID = 'UBL:Invoice-2.1#DocumentoEquivalentePOS'
+
+# Unidad de medida, municipio y departamento por defecto: se importan de
+# `dian_pos` (arriba) para que el catálogo de constantes viva en un solo sitio.
+# El municipio importa: la DIAN valida el código DANE y rechaza el documento si
+# va vacío, así que se usa el de la capital en lugar de dejar el campo en blanco.
+
+
+def _cbc(tag, texto, **atributos):
+    """Crea un nodo `cbc:*` con texto (o vacío si el texto es None)."""
+    nodo = ET.Element(f'{{{NS_CBC}}}{tag}')
+    for clave, valor in atributos.items():
+        nodo.set(clave, str(valor))
+    if texto is not None:
+        nodo.text = str(texto)
+    return nodo
+
+
+def _cac(tag):
+    """Crea un nodo `cac:*` vacío."""
+    return ET.Element(f'{{{NS_CAC}}}{tag}')
+
+
+def _agregar(padre, *hijos):
+    """Agrega varios hijos y devuelve el padre (para encadenar)."""
+    for hijo in hijos:
+        padre.append(hijo)
+    return padre
+
+
+def _monto(valor):
+    """Formatea un monto con 2 decimales (el anexo usa '11900.00')."""
+    return formatear_monto(valor)
+
+
+def _cantidad(valor):
+    return formatear_cantidad(valor)
+
+
+def _fecha(valor):
+    return normalizar_fecha(valor)
+
+
+def _hora(valor):
+    return normalizar_hora(valor)
+
+
+def _solo_digitos(valor):
+    return solo_digitos(valor)
+
+
+def _codigo_tipo_documento(sigla):
+    return tipo_documento_identidad(sigla)
+
+
+# ═════════════════════════════
+# Construcción del documento
+# ═════════════════════════════
+def construir_invoice(documento, emisor, adquirente, items, totales, extras=None):
+    """Arma el árbol XML del Documento Equivalente POS.
+
+    Args:
+        documento: dict con los datos del documento:
+            numero (str, 'POS-1042'), fecha (str/datetime), hora (str),
+            cuide (str), tipo_ambiente ('1'|'2'), moneda ('COP'),
+            tipo_operacion ('10'), notas (str, opcional).
+        emisor: dict con los datos del emisor:
+            nit, digito_verificacion, razon_social, nombre_comercial,
+            direccion, municipio, departamento, pais, email, telefono,
+            regimen_fiscal ('Responsable de IVA'|'No Responsable de IVA'),
+            responsabilidades (lista de códigos, ej. ['O-13']),
+            actividad_economica (código CIIU, opcional).
+        adquirente: dict con los datos del comprador. Si viene vacío se usa el
+            consumidor final (NIT 222222222222). Claves: tipo_documento ('CC'),
+            numero_documento, digito_verificacion, nombre, direccion, municipio,
+            departamento, pais, email, telefono, regimen_fiscal,
+            responsabilidades.
+        items: lista de líneas, cada una con:
+            descripcion, cantidad, precio_unitario (SIN impuestos), unidad,
+            codigo (código DIAN del producto, opcional), descuento (valor),
+            iva_tasa (%), inc_tasa (%), notas (opcional).
+        totales: dict con line_extension_amount (subtotal sin impuestos),
+            tax_exclusive_amount, tax_inclusive_amount, payable_amount,
+            descuento_total (opcional), iva_valor, inc_valor,
+            iva_tasa (para el resumen de impuestos).
+        extras: dict opcional con claves 'software_id',
+            'software_security_code', 'tipo_evento', 'descripcion_evento',
+            'respuesta_dian'.
+
+    Returns:
+        El `ElementTree.Element` raíz (Invoice), SIN firma. La firma se inserta
+        después con `firma_dian.insertar_firma()`.
+
+    Raises:
+        ValueError: si falta el número del documento, el NIT del emisor o no hay
+            líneas. Es mejor fallar aquí (mensaje claro) que dejar que la DIAN
+            rechace un XML incompleto con un código genérico.
+    """
+    numero = str(documento.get('numero') or '').strip()
+    if not numero:
+        raise ValueError('El documento necesita un número (prefijo + consecutivo)')
+    nit_emisor = _solo_digitos(emisor.get('nit'))
+    if not nit_emisor:
+        raise ValueError('El emisor necesita un NIT configurado')
+    if not items:
+        raise ValueError('El documento necesita al menos una línea')
+
+    extras = extras or {}
+    adquirente = adquirente or {}
+
+    invoice = ET.Element(f'{{{NS_INVOICE}}}Invoice')
+    # OJO: NO poner aquí un atributo `xmlns` a mano. El namespace raíz ya quedó
+    # registrado con prefijo por defecto ('', o sea `<Invoice>` sin prefijo) al
+    # inicio del módulo, y `ET.tostring` emite el `xmlns` solo. Añadirlo también
+    # como atributo produce DOS `xmlns` con el mismo valor en el mismo elemento,
+    # que es un XML inválido: el parser falla con 'duplicate attribute' y la DIAN
+    # no puede leerlo. (Bug detectado en QA con `<Invoice>`.)
+    invoice.set(f'{{{NS_XSI}}}schemaLocation',
+                f'{NS_INVOICE} UBL-Invoice-2.1.xsd')
+
+    # ── Encabezado ───────────────────────────────────────────────────────────
+    _agregar(
+        invoice,
+        _cbc('UBLVersionID', 'UBL 2.1'),
+        _cbc('CustomizationID', CUSTOMIZATION_ID),
+        _cbc('ProfileID', PROFILE_ID),
+        _cbc('ID', numero),
+        _cbc('IssueDate', _fecha(documento.get('fecha'))),
+        _cbc('IssueTime', _hora(documento.get('hora'))),
+        _cbc('InvoiceTypeCode', '01'),   # 01 = documento equivalente POS
+        _cbc('DocumentCurrencyCode', documento.get('moneda') or 'COP'),
+        _cbc('LineCountNumeric', str(len(items))),
+    )
+
+    # Notas del documento (opcionales).
+    for nota in (documento.get('notas') or '').split('|'):
+        if str(nota).strip():
+            invoice.append(_cbc('Note', str(nota).strip()))
+
+    # ── Bloque DIAN (SoftwareID / CUIDE / QR) ────────────────────────────────
+    # Va en un grupo <ext:UBLExtensions>, que es donde el anexo técnico ubica la
+    # extensión `sts:DianExtensions` del software propio.
+    invoice.append(_construir_extensiones(documento, extras))
+
+    # ── Partes ───────────────────────────────────────────────────────────────
+    invoice.append(_construir_emisor(emisor))
+    invoice.append(_construir_adquirente(adquirente))
+
+    # ── Entrega (DespatchAdvice) ─────────────────────────────────────────────
+    # El anexo técnico del POS exige la fecha/hora de entrega de la mercancía
+    # en un `cac:DespatchAdvice`. Sin él el documento se rechaza por esquema.
+    invoice.append(_construir_entrega(documento))
+
+    # ── Forma de pago y condiciones de pago ─────────────────────────────────
+    invoice.append(_construir_pagos(documento, totales))
+
+    # ── Impuestos totales del documento ──────────────────────────────────────
+    invoice.append(_construir_impuestos_totales(totales))
+
+    # El INC (bolsas) va en su propio bloque: el anexo lo separa del IVA.
+    if float(totales.get('inc_valor') or 0):
+        invoice.append(_construir_impuestos_adicionales(totales))
+
+    # ── Totales monetarios ───────────────────────────────────────────────────
+    # OJO: en UBL 2.1 estos cuatro valores NO van sueltos en el <Invoice>: deben
+    # ir DENTRO de <cac:LegalMonetaryTotal>, en ese orden. Si se agregan
+    # directamente al Invoice el documento es inválido contra el XSD y la DIAN
+    # lo rechaza antes de revisar nada más.
+    monetary = _cac('LegalMonetaryTotal')
+    _agregar(
+        monetary,
+        _cbc('LineExtensionAmount', _monto(totales.get('line_extension_amount')),
+             currencyID='COP'),
+        _cbc('TaxExclusiveAmount', _monto(totales.get('tax_exclusive_amount')),
+             currencyID='COP'),
+        _cbc('TaxInclusiveAmount', _monto(totales.get('tax_inclusive_amount')),
+             currencyID='COP'),
+        _cbc('PayableAmount', _monto(totales.get('payable_amount')),
+             currencyID='COP'),
+    )
+    invoice.append(monetary)
+
+    # ── Líneas ───────────────────────────────────────────────────────────────
+    for indice, item in enumerate(items, start=1):
+        invoice.append(_construir_linea(indice, item))
+
+    return invoice
+
+
+def _construir_extensiones(documento, extras):
+    """Crea `<ext:UBLExtensions>` con el bloque DIAN (SoftwareID, CUIDE, QR).
+
+    El QR viaja dentro de `<sts:DianExtensions>` para que un lector pueda
+    reconstruir la URL de consulta desde el XML, sin depender de la tirilla.
+    """
+    extensiones = ET.Element(f'{{{NS_EXT}}}UBLExtensions')
+    extension = ET.SubElement(extensiones, f'{{{NS_EXT}}}UBLExtension')
+    contenido = ET.SubElement(extension, f'{{{NS_EXT}}}ExtensionContent')
+    dian = ET.SubElement(contenido, f'{{{NS_STS}}}DianExtensions')
+
+    if extras.get('software_id'):
+        software = ET.SubElement(dian, f'{{{NS_STS}}}SoftwareID')
+        software.text = str(extras['software_id'])
+    if extras.get('software_security_code'):
+        seguridad = ET.SubElement(dian, f'{{{NS_STS}}}SoftwareSecurityCode')
+        seguridad.text = str(extras['software_security_code'])
+
+    # CUIDE: es el identificador fiscal del documento y debe viajar en el XML.
+    if documento.get('cuide'):
+        cuide = ET.SubElement(dian, f'{{{NS_STS}}}CUDE')
+        cuide.text = str(documento['cuide'])
+        # La URL de consulta también se incluye: el anexo la pide explícitamente
+        # para el QR del documento equivalente.
+        qr = ET.SubElement(dian, f'{{{NS_STS}}}QRCode')
+        qr.text = url_consulta(
+            documento['cuide'],
+            fecha=documento.get('fecha'),
+            nit=None,
+            total=documento.get('valor_total'),
+        )
+
+    return extensiones
+
+
+def _construir_emisor(emisor):
+    """Crea `<cac:AccountingSupplierParty>` con la identidad tributaria."""
+    parte = _cac('AccountingSupplierParty')
+    party = _cac('Party')
+
+    # Nombre comercial (opcional) y razón social.
+    if emisor.get('nombre_comercial'):
+        party.append(_cbc('Name', str(emisor['nombre_comercial'])))
+
+    identificacion = _cac('PartyIdentification')
+    identificacion.append(_cbc('ID', _solo_digitos(emisor.get('nit')),
+                               schemeID='31',
+                               schemeName='31',
+                               schemeAgencyID='195'))
+    party.append(identificacion)
+
+    party.append(_construir_direccion(emisor))
+
+    # Régimen fiscal y responsabilidades tributarias del emisor.
+    party.append(_construir_responsabilidades(emisor))
+
+    parte.append(party)
+    return parte
+
+
+def _construir_entrega(documento):
+    """Crea `<cac:DespatchAdvice>` con la fecha de entrega de la mercancía.
+
+    El anexo técnico del Documento Equivalente POS pide, en el bloque de
+    entrega, el `cbc:DespatchDateLine` con la fecha en que se despacha cada
+    línea. Cuando el POS no trae el dato se usa la fecha del propio documento,
+    que para una venta de mostrador ES la fecha de entrega.
+    """
+    entrega = _cac('DespatchAdvice')
+    fecha = _fecha(documento.get('fecha'))
+    entrega.append(_cbc('DespatchDate', fecha))
+    # `DespatchDateLine` es la fecha por línea que el anexo exige. Va con el
+    # namespace `cust`/`cbc` segun el XSD; se declara en `cbc` porque el anexo
+    # lo ubica como dato basico, no como agregado.
+    entrega.append(_cbc('DespatchDateLine', fecha))
+    return entrega
+
+
+def _construir_pagos(documento, totales):
+    """Crea `<cac:PaymentMeans>` y `<cac:PaymentTerms>` con la forma de pago.
+
+    Sin `cac:PaymentMeans` el documento no declara CÓMO se paga, y el anexo
+    técnico lo exige. El codigo se toma de la venta (`tipo_pago`): efectivo,
+    tarjeta, transferencia o credito. Para el credito se anade ademas
+    `cac:PaymentTerms` con la fecha de vencimiento del saldo.
+    """
+    pagos = _cac('PaymentMeans')
+
+    # Codigos del catálogo de la DIAN para forma de pago.
+    CODIGOS_PAGO = {
+        'efectivo': '01',
+        'contado': '01',
+        'tarjeta': '02',
+        'transferencia': '03',
+        'credito': '04',
+        'abono': '04',
+    }
+    tipo = str(documento.get('tipo_pago') or 'efectivo').strip().lower()
+    codigo = CODIGOS_PAGO.get(tipo, '01')
+
+    pagos.append(_cbc('PaymentMeansCode', codigo))
+    # El ID del pago conecta la venta con el documento (numero de la venta).
+    if documento.get('id_venta'):
+        pagos.append(_cbc('ID', 'PAG-' + str(documento['id_venta'])))
+    if documento.get('numero_pago'):
+        pagos.append(_cbc('PaymentID', str(documento['numero_pago'])))
+    pagos.append(_cbc('PaidAmount', _monto(totales.get('payable_amount')),
+                      currencyID='COP'))
+
+    return pagos
+
+
+def _construir_impuestos_adicionales(totales):
+    """Crea `<cac:AdditionalAccountTaxTotal>` para el INC (bolsas plasticas).
+
+    El INC NO va en el `cac:TaxTotal` principal: el anexo lo separa en
+    `cac:AdditionalAccountTaxTotal` con su propio `cbc:ID` y un
+    `cac:AdditionalAccountTaxScheme` con el codigo 04 (INC).
+    """
+    nodo = _cac('AdditionalAccountTaxTotal')
+    nodo.append(_cbc('ID', 'INC'))
+    nodo.append(_cbc('TaxAmount', _monto(totales.get('inc_valor')),
+                     currencyID='COP'))
+
+    esquema = _cac('AdditionalAccountTaxScheme')
+    identificacion = _cac('AdditionalAccountTaxSchemeID')
+    identificacion.append(_cbc('ID', TIPO_IMPUESTO_INC, schemeID='195',
+                               schemeName='01'))
+    esquema.append(identificacion)
+    nodo.append(esquema)
+    return nodo
+
+
+def _construir_adquirente(adquirente):
+    """Crea `<cac:AccountingCustomerParty>`.
+
+    Si no hay datos del comprador se usa el cliente genérico del anexo
+    (NIT 222222222222, 'consumidor final'): la DIAN exige SIEMPRE un adquirente,
+    incluso en la venta de mostrador sin datos.
+    """
+    numero = _solo_digitos(adquirente.get('numero_documento'))
+    if not numero:
+        adquirente = {
+            'tipo_documento': 'NIT',
+            'numero_documento': NIT_CONSUMIDOR_FINAL,
+            'digito_verificacion': DV_CONSUMIDOR_FINAL,
+            'nombre': NOMBRE_CONSUMIDOR_FINAL,
+            'direccion': '',
+            'municipio': MUNICIPIO_POR_DEFECTO,
+            'departamento': DEPARTAMENTO_POR_DEFECTO,
+            'pais': PAIS_POR_DEFECTO,
+            'regimen_fiscal': 'No Responsable de IVA',
+            'responsabilidades': ['R-99-PN'],
+        }
+
+    parte = _cac('AccountingCustomerParty')
+    party = _cac('Party')
+
+    party.append(_construir_direccion(adquirente))
+
+    identificacion = _cac('PartyIdentification')
+    identificacion.append(_cbc('ID', _solo_digitos(adquirente.get('numero_documento')),
+                               schemeID=_codigo_tipo_documento(adquirente.get('tipo_documento')),
+                               schemeName=_codigo_tipo_documento(adquirente.get('tipo_documento')),
+                               schemeAgencyID='195'))
+    party.append(identificacion)
+
+    party.append(_construir_responsabilidades(adquirente))
+
+    parte.append(party)
+    return parte
+
+
+def _construir_direccion(datos):
+    """Crea `<cac:PhysicalLocation>` con la dirección del tercero.
+
+    La DIAN valida municipio y departamento contra el catálogo DANE; si el POS
+    no los tiene configurados se usa el municipio por defecto en lugar de dejar
+    el nodo vacío (que produce rechazo por esquema).
+    """
+    ubicacion = _cac('PhysicalLocation')
+    direccion = _cac('Address')
+    direccion.append(_cbc('StreetName', str(datos.get('direccion') or 'Sin dirección')))
+    direccion.append(_cbc('CityName', str(datos.get('municipio') or MUNICIPIO_POR_DEFECTO)))
+    direccion.append(_cbc('CountrySubentity',
+                          str(datos.get('departamento') or DEPARTAMENTO_POR_DEFECTO)))
+    pais = _cac('Country')
+    pais.append(_cbc('IdentificationCode',
+                     str(datos.get('pais') or PAIS_POR_DEFECTO)))
+    direccion.append(pais)
+    ubicacion.append(direccion)
+    return ubicacion
+
+
+def _construir_responsabilidades(datos):
+    """Crea `<cac:PartyTaxScheme>` con régimen fiscal y responsabilidades.
+
+    El régimen se deduce de `regimen_fiscal` ('Responsable de IVA' ->
+    'O-48' / responsable; 'No Responsable de IVA' -> 'R-99-PN'), pero si el
+    tercero trae `responsabilidades` explícitas se respetan tal cual.
+    """
+    esquema = _cac('PartyTaxScheme')
+    responsabilidades = datos.get('responsabilidades') or []
+    if isinstance(responsabilidades, str):
+        responsabilidades = [r.strip() for r in responsabilidades.split(',') if r.strip()]
+    if not responsabilidades:
+        responsable = 'Responsable de IVA' in str(datos.get('regimen_fiscal') or '')
+        responsabilidades = ['O-48'] if responsable else ['R-99-PN']
+
+    esquema.append(_cbc('TaxLevelCode', ';'.join(responsabilidades),
+                        listAgencyID='195', listID='05'))
+    tributario = _cac('TaxScheme')
+    tributario.append(_cbc('ID', 'ZZ', schemeID='195', schemeName='01'))
+    tributario.append(_cbc('Name', 'No aplica'))
+    esquema.append(tributario)
+    return esquema
+
+
+def _construir_impuestos_totales(totales):
+    """Crea `<cac:TaxTotal>` con el resumen de IVA e INC del documento."""
+    nodo = _cac('TaxTotal')
+    iva = float(totales.get('iva_valor') or 0)
+    inc = float(totales.get('inc_valor') or 0)
+    total_impuestos = iva + inc
+    nodo.append(_cbc('TaxAmount', _monto(total_impuestos), currencyID='COP'))
+
+    # Subtotal de IVA (siempre se declara, aunque sea 0: el anexo lo exige).
+    nodo.append(_subtotal_impuesto(
+        TIPO_IMPUESTO_IVA, NOMBRES_IMPUESTO[TIPO_IMPUESTO_IVA],
+        totales.get('line_extension_amount'), iva, totales.get('iva_tasa') or 0,
+    ))
+    if inc:
+        nodo.append(_subtotal_impuesto(
+            TIPO_IMPUESTO_INC, NOMBRES_IMPUESTO[TIPO_IMPUESTO_INC],
+            totales.get('line_extension_amount'), inc, totales.get('inc_tasa') or 0,
+        ))
+    return nodo
+
+
+def _subtotal_impuesto(tipo, nombre, base, valor, tarifa):
+    """Crea un `<cac:TaxSubtotal>` (base gravable, valor y tarifa)."""
+    subtotal = _cac('TaxSubtotal')
+    subtotal.append(_cbc('TaxableAmount', _monto(base), currencyID='COP'))
+    subtotal.append(_cbc('TaxAmount', _monto(valor), currencyID='COP'))
+    categoria = _cac('TaxCategory')
+    categoria.append(_cbc('Percent', _monto(tarifa)))
+    esquema = _cac('TaxScheme')
+    esquema.append(_cbc('ID', tipo, schemeID='195', schemeName='01'))
+    esquema.append(_cbc('Name', nombre))
+    categoria.append(esquema)
+    subtotal.append(categoria)
+    return subtotal
+
+
+def _construir_linea(indice, item):
+    """Crea una `<cac:InvoiceLine>` con impuestos y descuentos por ítem."""
+    cantidad = float(item.get('cantidad') or 0)
+    precio = float(item.get('precio_unitario') or 0)
+    descuento = float(item.get('descuento') or 0)
+    iva_tasa = float(item.get('iva_tasa') or 0)
+    inc_tasa = float(item.get('inc_tasa') or 0)
+
+    # Base de la línea: cantidad * precio - descuento. Es la base sobre la que se
+    # liquidan los impuestos (el anexo usa precio_unitario SIN impuestos).
+    base = round(cantidad * precio - descuento, 2)
+    iva_valor = round(base * iva_tasa / 100, 2)
+    inc_valor = round(base * inc_tasa / 100, 2)
+
+    linea = _cac('InvoiceLine')
+    linea.append(_cbc('ID', str(indice)))
+    linea.append(_cbc('InvoicedQuantity', _cantidad(cantidad),
+                      unitCode=str(item.get('unidad') or UNIDAD_POR_DEFECTO)))
+    linea.append(_cbc('LineExtensionAmount', _monto(base), currencyID='COP'))
+
+    # Impuestos de la línea (IVA e INC declarados por separado).
+    impuestos = _cac('TaxTotal')
+    impuestos.append(_cbc('TaxAmount', _monto(iva_valor + inc_valor),
+                          currencyID='COP'))
+    impuestos.append(_subtotal_impuesto(TIPO_IMPUESTO_IVA,
+                                        NOMBRES_IMPUESTO[TIPO_IMPUESTO_IVA],
+                                        base, iva_valor, iva_tasa))
+    if inc_tasa:
+        impuestos.append(_subtotal_impuesto(TIPO_IMPUESTO_INC,
+                                            NOMBRES_IMPUESTO[TIPO_IMPUESTO_INC],
+                                            base, inc_valor, inc_tasa))
+    linea.append(impuestos)
+
+    # Precio unitario sin impuestos (el total de la línea se recalcula arriba).
+    precio_nodo = _cac('Price')
+    precio_nodo.append(_cbc('PriceAmount', _monto(precio), currencyID='COP'))
+    linea.append(precio_nodo)
+
+    if descuento:
+        cargos = _cac('AllowanceCharge')
+        cargos.append(_cbc('ChargeIndicator', 'false'))
+        cargos.append(_cbc('AllowanceChargeReason', 'Descuento'))
+        cargos.append(_cbc('Amount', _monto(descuento), currencyID='COP'))
+        linea.append(cargos)
+
+    articulo = _cac('Item')
+    articulo.append(_cbc('Description', str(item.get('descripcion') or 'Producto')))
+    if item.get('codigo'):
+        identificacion = _cac('SellersItemIdentification')
+        identificacion.append(_cbc('ID', str(item['codigo'])))
+        articulo.append(identificacion)
+    linea.append(articulo)
+
+    return linea
+
+
+# ═════════════════════════════════════════════════════
+# Serialización
+# ═════════════════════════════
+def a_bytes(raiz, declaracion=True):
+    """Serializa el árbol a bytes UTF-8, con declaración XML.
+
+    Se emite como bytes (no como str) porque la firma y el SOAP necesitan los
+    bytes exactos: cualquier re-serialización posterior cambiaría el digest y
+    rompería la firma.
+    """
+    return ET.tostring(raiz, encoding='utf-8', xml_declaration=declaracion)
+
+
+def a_texto(raiz):
+    """Serializa el árbol a str UTF-8 (para guardar en la base)."""
+    return a_bytes(raiz).decode('utf-8')
+
+
+def crear_desde_bytes(xml_bytes):
+    """Reconstruye el árbol desde bytes (para firmar un XML ya generado)."""
+    return ET.fromstring(xml_bytes)
+
+
+# ═════════════════════════════════════════════════════
+# ApplicationResponse de eventos (contingencia / retransmisión)
+# ═════════════════════════════════════════════════════
+NS_APP_RESPONSE = (
+    'urn:oasis:names:specification:ubl:schema:xsd:ApplicationResponse-2'
+)
+# OJO: NO se registra como prefijo por defecto. En ElementTree el prefijo por
+# defecto es único por proceso, así que registrar aquí '' volvería a pisar el
+# registro del Invoice y la raíz saldría como `<ns0:Invoice>` (la DIAN valida el
+# nombre del elemento y rechaza el documento). El evento usa su propio prefijo
+# 'ar', que es igual de válido para el esquema y no interfiere con el Invoice.
+ET.register_namespace('ar', NS_APP_RESPONSE)
+
+
+def construir_evento(cuide, numero_documento, tipo_evento, descripcion,
+                     emisor, fecha=None, hora=None, xml_documento=None):
+    """Arma el ApplicationResponse de un evento DIAN (contingencia).
+
+    El anexo técnico exige notificar a la DIAN cuándo un documento se emitió en
+    contingencia y cuándo se retransmitió. El evento viaja como un
+    `ApplicationResponse` que REFERENCIA el CUIDE del documento afectado.
+
+    Args:
+        cuide: CUIDE del documento al que se refiere el evento.
+        numero_documento: número del documento ('POS-1042').
+        tipo_evento: '004' contingencia, '005' retransmisión, '030' acuse...
+        descripcion: texto del evento (obligatorio para 004/005).
+        emisor: dict del emisor (nit, razon_social, ...).
+        fecha, hora: cuándo ocurrió el evento (por defecto, ahora).
+        xml_documento: contenido del documento, si el evento lo referencia.
+
+    Returns:
+        El `Element` raíz del ApplicationResponse, sin firmar.
+    """
+    ahora = datetime.now()
+    raiz = ET.Element(f'{{{NS_APP_RESPONSE}}}ApplicationResponse')
+    # OJO: tampoco aquí se pone `xmlns` a mano (ver la nota en construir_invoice):
+    # el prefijo 'ar' ya está registrado y ET.tostring lo emite solo. Añadirlo
+    # produciría el atributo duplicado y un XML inválido.
+    raiz.set(f'{{{NS_XSI}}}schemaLocation',
+             f'{NS_APP_RESPONSE} UBL-ApplicationResponse-2.1.xsd')
+
+    _agregar(
+        raiz,
+        _cbc('UBLVersionID', 'UBL 2.1'),
+        _cbc('CustomizationID', CUSTOMIZATION_ID),
+        _cbc('ID', str(cuide or numero_documento)),
+        _cbc('IssueDate', _fecha(fecha or ahora)),
+        _cbc('IssueTime', _hora(hora or ahora)),
+    )
+
+    # Identificación del emisor del evento (el propio facturador).
+    parte = _cac('SenderParty')
+    party = _cac('Party')
+    identificacion = _cac('PartyIdentification')
+    identificacion.append(_cbc('ID', _solo_digitos(emisor.get('nit')),
+                               schemeID='31', schemeName='31',
+                               schemeAgencyID='195'))
+    party.append(identificacion)
+    if emisor.get('razon_social'):
+        party.append(_cbc('Name', str(emisor['razon_social'])))
+    parte.append(party)
+    raiz.append(parte)
+
+    # Documento de referencia: el CUIDE es la llave con la que la DIAN cruza el
+    # evento con el documento emitido.
+    referencia = _cac('DocumentResponse')
+    referencia.append(_cbc('ResponseCode', str(tipo_evento)))
+    referencia.append(_cbc('Description', str(descripcion or '')))
+
+    doc_ref = _cac('DocumentReference')
+    doc_ref.append(_cbc('ID', str(numero_documento)))
+    doc_ref.append(_cbc('UUID', str(cuide), schemeName='CUDE-SHA384'))
+    doc_ref.append(_cbc('IssueDate', _fecha(fecha or ahora)))
+    if xml_documento:
+        adjunto = _cac('Attachment')
+        contenido = _cac('ExternalReference')
+        contenido.append(_cbc('MimeCode', 'text/xml'))
+        contenido.append(_cbc('EncodingCode', 'UTF-8'))
+        contenido.append(_cbc('Description', 'Documento Equivalente Electrónico POS'))
+        adjunto.append(contenido)
+        doc_ref.append(adjunto)
+    referencia.append(doc_ref)
+    raiz.append(referencia)
+
+    return raiz

@@ -86,6 +86,28 @@
       border-top: 1px dashed #000;
       padding-top: 6px;
     }
+    /* Bloque del Documento Equivalente Electronico POS: CUIDE + QR obligatorios. */
+    .recibo-termico .recibo-dian {
+      margin-top: 8px;
+      padding-top: 6px;
+      border-top: 1px dashed #000;
+      text-align: center;
+      font-size: 12px;
+      line-height: 1.25;
+    }
+    .recibo-termico .recibo-cuide {
+      font-family: ui-monospace, Consolas, monospace;
+      font-size: 9px;
+      word-break: break-all;
+      line-height: 1.1;
+      margin: 3px 0;
+    }
+    .recibo-termico .recibo-dian canvas {
+      /* La tirilla es monocromatica: el QR debe salir en negro puro para que
+         el lector lo tome. Se desactiva el suavizado para no perder definicion. */
+      image-rendering: pixelated;
+      max-width: 100%;
+    }
     .recibo-termico .recibo-sep {
       border-top: 1px dashed #000;
       margin: 6px 0;
@@ -363,26 +385,6 @@
             </div>
           </div>
 
-          <!-- Facturación Electrónica OPCIONAL (Siigo / DIAN). Por defecto DESACTIVADA:
-               solo se emite cuando el cliente la solicita. -->
-          <div class="card border-info bg-info-subtle mt-3">
-            <div class="card-body py-2">
-              <div class="form-check form-switch mb-0">
-                <input class="form-check-input" type="checkbox" role="switch"
-                       id="check-factura-electronica" onchange="alCambiarFacturaElectronica()">
-                <label class="form-check-label fw-bold" for="check-factura-electronica">
-                  🧾 Generar Factura Electrónica (Siigo / DIAN) — <span class="text-muted">opcional</span>
-                </label>
-              </div>
-              <div id="aviso-factura-electronica" class="small mt-2 d-none">
-                <div id="fe-estado-cliente" class="mb-1"></div>
-                <div class="text-muted">
-                  Si el cliente no tiene datos completos (Tipo de Documento, Cédula/NIT,
-                  Nombre, Correo y Teléfono), el sistema pedirá completarlos antes de facturar.
-                </div>
-              </div>
-            </div>
-          </div>
         </div>
 
         <div class="card p-3 mb-4 border">
@@ -593,6 +595,29 @@
                   <option value="0">0% (exento)</option>
                 </select>
               </div>
+              <div class="col-md-3">
+                <label class="form-label fw-bold">Unidad de Medida (DIAN)</label>
+                <select id="prod-unidad-medida" class="form-select"
+                        title="Código UN/ECE que viaja en el XML de la DIAN">
+                  <option value="94">94 — Unidad</option>
+                  <option value="C62">C62 — Pieza</option>
+                  <option value="KGM">KGM — Kilogramo (flejes/acero)</option>
+                  <option value="MTR">MTR — Metro (flejes lineales)</option>
+                  <option value="MTK">MTK — Metro cuadrado</option>
+                  <option value="LTR">LTR — Litro</option>
+                  <option value="GRM">GRM — Gramo</option>
+                  <option value="TNE">TNE — Tonelada</option>
+                  <option value="BLL">BLL — Bulto</option>
+                  <option value="PAR">PAR — Par</option>
+                  <option value="RO">RO — Rollo</option>
+                </select>
+              </div>
+              <div class="col-md-3">
+                <label class="form-label fw-bold">Código DIAN (opcional)</label>
+                <input type="text" id="prod-codigo-dian" class="form-control"
+                       placeholder="Código interno homologado" spellcheck="false"
+                       title="Código de producto/servicio que viaja al XML. Si se deja vacío se usa el código de barras">
+              </div>
               <div class="col-md-6">
                 <label class="form-label fw-bold d-block">¿Cómo viene la factura del proveedor?</label>
                 <div class="form-check form-check-inline">
@@ -776,7 +801,7 @@
               <label class="form-label fw-bold">Dirección</label>
               <input type="text" id="cli-direccion" class="form-control" spellcheck="true">
             </div>
-            <!-- Datos exigidos para facturación electrónica (Siigo/DIAN). -->
+            <!-- Tipo de documento de identidad del cliente. -->
             <div class="col-md-2">
               <label class="form-label fw-bold">Tipo Documento</label>
               <select id="cli-tipo-documento" class="form-select">
@@ -790,6 +815,48 @@
             <div class="col-md-3">
               <label class="form-label fw-bold">Correo Electrónico</label>
               <input type="email" id="cli-email" class="form-control" placeholder="cliente@correo.com" spellcheck="false">
+            </div>
+            <!-- ── Datos fiscales DIAN del tercero (anexo técnico) ── -->
+            <div class="col-md-2">
+              <label class="form-label fw-bold">Tipo Persona</label>
+              <select id="cli-tipo-persona" class="form-select" onchange="alCambiarTipoDocumentoCliente()">
+                <option value="Natural">Natural</option>
+                <option value="Juridica">Jurídica</option>
+              </select>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-bold">Dígito Verificación</label>
+              <input type="text" id="cli-dv" class="form-control" maxlength="1"
+                     placeholder="0" spellcheck="false" readonly
+                     title="Se calcula automáticamente a partir del NIT">
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold">Régimen Fiscal</label>
+              <select id="cli-regimen" class="form-select">
+                <option value="Responsable de IVA">Responsable de IVA</option>
+                <option value="No Responsable de IVA" selected>No Responsable de IVA</option>
+              </select>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold">Responsabilidades DIAN</label>
+              <select id="cli-responsabilidades" class="form-select" multiple size="3"
+                      title="Mantenga Ctrl para seleccionar varias">
+                <option value="O-13">O-13 Gran contribuyente</option>
+                <option value="O-15">O-15 Autorretenedor</option>
+                <option value="O-23">O-23 Agente retención IVA</option>
+                <option value="O-47">O-47 Régimen simple</option>
+                <option value="R-99-PN" selected>R-99-PN No responsable</option>
+              </select>
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-bold">Cód. Municipio (DANE)</label>
+              <input type="text" id="cli-municipio" class="form-control" maxlength="5"
+                     placeholder="05001" spellcheck="false">
+            </div>
+            <div class="col-md-2">
+              <label class="form-label fw-bold">Cód. Departamento</label>
+              <input type="text" id="cli-departamento" class="form-control" maxlength="2"
+                     placeholder="05" spellcheck="false">
             </div>
             <div class="col-md-2 d-flex align-items-end">
               <button type="submit" id="btn-guardar-cliente" class="btn btn-primary w-100 fw-bold">Guardar</button>
@@ -811,7 +878,6 @@
                 <th>Teléfono</th>
                 <th>Correo</th>
                 <th>Dirección</th>
-                <th>Fact. Electrónica</th>
                 <th>Acciones</th>
               </tr>
             </thead>
@@ -937,11 +1003,10 @@
                 <th>Productos Vendidos</th>
                 <th>Tipo Pago</th>
                 <th>Total</th>
-                <th>Facturación</th>
               </tr>
             </thead>
             <tbody id="tabla-historial-body">
-              <tr><td colspan="8" class="text-center text-muted">Cargando historial...</td></tr>
+              <tr><td colspan="7" class="text-center text-muted">Cargando historial...</td></tr>
             </tbody>
           </table>
         </div>
@@ -969,12 +1034,11 @@
                 <th>Cliente</th>
                 <th>Tipo Pago</th>
                 <th>Total</th>
-                <th>Facturación</th>
                 <th>Acción</th>
               </tr>
             </thead>
             <tbody id="tabla-facturas-body">
-              <tr><td colspan="7" class="text-center text-muted">Cargando facturas...</td></tr>
+              <tr><td colspan="6" class="text-center text-muted">Cargando facturas...</td></tr>
             </tbody>
           </table>
         </div>
@@ -1913,7 +1977,21 @@
               </tbody>
             </table>
             <div id="fac-aviso-anulada" class="text-center fw-bold" style="display:none;">*** VENTA ANULADA ***</div>
-            <div id="fac-info-electronica" class="text-center small mt-2" style="display:none;"></div>
+
+            <!-- ── Documento Equivalente Electronico POS (DIAN) ───────────────
+                 La tirilla debe llevar el CUIDE y el codigo QR: es lo que le
+                 permite al cliente consultar su documento en el catalogo de la
+                 DIAN. Solo se muestra cuando el documento ya se emitio. -->
+            <div id="fac-bloque-dian" class="recibo-dian" style="display:none;">
+              <div id="fac-dian-estado" class="small"></div>
+              <div id="fac-dian-numero" class="small fw-bold"></div>
+              <div id="fac-dian-cuide" class="recibo-cuide"></div>
+              <div class="text-center my-1">
+                <canvas id="fac-dian-qr" width="150" height="150"></canvas>
+              </div>
+              <div class="small text-center">Consulte su documento en<br>catalogo-vpfe.dian.gov.co</div>
+            </div>
+
             <div class="recibo-pie">
               ¡Gracias por su compra!<br>
               Cambios y garantía: presente esta tirilla dentro de los 8 días siguientes.<br>
@@ -1989,26 +2067,6 @@
                      </div>
                    </div>
                  </div>
-               </div>
-            </div>
-
-             <!-- MODAL FACTURA ELECTRÓNICA SIIGO (comprobante oficial) -->
-            <div class="modal fade" id="modalFacturaElectronica" tabindex="-1">
-               <div class="modal-dialog">
-                 <div class="modal-content">
-                   <div class="modal-header bg-success text-white">
-                     <h5 class="modal-title fw-bold">🧾 Factura Electrónica (Siigo / DIAN)</h5>
-                     <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
-                   </div>
-                   <div class="modal-body" id="contenido-fe-exito"></div>
-                   <div class="modal-footer d-flex justify-content-between">
-                     <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
-                     <div>
-                       <button type="button" class="btn btn-outline-primary fw-bold" onclick="enviarFacturaElectronicaPorCorreo()">✉️ Enviar por correo</button>
-                             <a id="btn-fe-ver-pdf" class="btn btn-success fw-bold" href="#" target="_blank" rel="noopener">🔗 Ver/Imprimir Factura Siigo</a>
-                           </div>
-                         </div>
-                       </div>
                </div>
             </div>
 
@@ -2327,6 +2385,8 @@
 
   <script defer src="{{ url_for('static', filename='vendor/bootstrap.bundle.min.js') }}"></script>
   <script defer src="{{ url_for('static', filename='vendor/tom-select.complete.min.js') }}"></script>
+  <!-- Bloque del Documento Equivalente POS (CUIDE + QR) en la tirilla. -->
+  <script defer src="{{ url_for('static', filename='js/dian-pos.js') }}"></script>
 
   <script>
     const ROL_ACTUAL = '{{ rol }}';
@@ -2368,10 +2428,6 @@
     let facturaActualId = null;
     let facturaActual = null;
     let comprobanteAbonoActual = null;
-    // Datos de la última factura electrónica de Siigo emitida (para el modal).
-    let facturaElectronicaActual = null;
-    // ¿La integración con Siigo está configurada en el servidor?
-    let siigoConfigurado = null;
 
     // ── Utilidad de rendimiento: retrasa la ejecución hasta que el usuario
     // deje de escribir (evita una petición por cada tecla). ──────────────
@@ -2437,6 +2493,17 @@
       const tasaSelect = document.getElementById('prod-iva-tasa');
       if (tasaSelect) tasaSelect.addEventListener('change', recalcularPrecioProducto);
       recalcularPrecioProducto();
+
+      // DV del NIT: se recalcula en vivo mientras se escribe la cédula/NIT o se
+      // cambia el tipo de documento (el backend lo vuelve a calcular igual).
+      const cedulaCliente = document.getElementById('cli-cedula');
+      if (cedulaCliente) {
+        cedulaCliente.addEventListener('input', alCambiarTipoDocumentoCliente);
+      }
+      const tipoDocCliente = document.getElementById('cli-tipo-documento');
+      if (tipoDocCliente) {
+        tipoDocCliente.addEventListener('change', alCambiarTipoDocumentoCliente);
+      }
     });
 
     // ── Notificaciones de flejes listos (general + pedidos) ─────────────────
@@ -2483,19 +2550,7 @@
     document.addEventListener('DOMContentLoaded', () => {
       pollNotificacionesFlejes();
       setInterval(pollNotificacionesFlejes, 20000);
-      consultarEstadoSiigo();
     });
-
-    // Consulta una sola vez si la integración con Siigo está configurada.
-    async function consultarEstadoSiigo() {
-      try {
-        const res = await fetch('/api/siigo/estado');
-        const data = await res.json();
-        siigoConfigurado = !!data.configurado;
-      } catch (_) {
-        siigoConfigurado = null;
-      }
-    }
 
     async function cargarNotificaciones() {
       try {
@@ -2963,8 +3018,6 @@
           if (direccionInput) {
             direccionInput.value = cli && cli.direccion ? cli.direccion : '';
           }
-          // Si la casilla de factura electrónica está activa, revalida el cliente.
-          alCambiarFacturaElectronica();
         }
       });
 
@@ -3295,10 +3348,6 @@
       if (tsProducto) tsProducto.clear(true);
       document.getElementById('select-tipo-pago').value = 'efectivo';
       document.getElementById('input-direccion-venta').value = '';
-      // La factura electrónica vuelve a su estado por defecto: DESACTIVADA.
-      const checkFE = document.getElementById('check-factura-electronica');
-      if (checkFE) checkFE.checked = false;
-      document.getElementById('aviso-factura-electronica')?.classList.add('d-none');
       document.getElementById('input-cantidad').value = 1;
       document.getElementById('detalle-producto-seleccionado').classList.add('d-none');
       // Resetear tipo de entrega a "mostrador"
@@ -3346,22 +3395,11 @@
         return;
       }
 
-      // La factura electrónica es OPCIONAL: solo si el cajero marcó la casilla.
-      const facturaElectronica = document.getElementById('check-factura-electronica')?.checked || false;
-      if (facturaElectronica && !clienteTieneDatosFactura()) {
-        alert('Para generar la Factura Electrónica el cliente debe tener registrados: ' +
-              'Tipo de Documento, Cédula/NIT, Nombre completo, Correo electrónico y Teléfono.\n\n' +
-              'Complete los datos del cliente en la pestaña "Clientes", o desactive la casilla ' +
-              'para registrar una venta normal.');
-        return;
-      }
-
       const payload = {
         id_cliente:    parseInt(document.getElementById('select-cliente').value),
         tipo_pago:     document.getElementById('select-tipo-pago').value,
         direccion:     direccion,
         tipo_entrega:  tipoEntrega,
-        factura_electronica: facturaElectronica,
         items: carrito.map(i => ({ id_producto: i.id_producto, cantidad: i.cantidad, precio_unitario: i.precio }))
       };
 
@@ -3377,112 +3415,15 @@
         if (data.numero_pedido) {
           mensaje += `\n\n🚚 Pedido #${data.numero_pedido} enviado a la cola de despacho.`;
         }
-        // Resultado de la transmisión electrónica (opcional).
-        if (data.factura_electronica && data.siigo) {
-          if (data.siigo.ok) {
-            mensaje += `\n\n✅ Factura Electrónica emitida con éxito.\nN° ${data.siigo.numero}`;
-          } else {
-            mensaje += `\n\n⚠️ No se pudo transmitir a Siigo: ${data.siigo.motivo}\n` +
-                       `La venta quedó guardada localmente y puede reintentar el envío desde el Historial de Facturas.`;
-          }
-        }
         alert(mensaje);
         await cargarFormularioVentas();
         limpiarFormularioVenta();
         cargarNotificaciones();
         // Se abre el detalle y, si está activada, la tirilla se imprime sola.
         verFactura(data.id_venta, autoImprimirActivado());
-        // Si se emitió factura electrónica, se ofrece verla/imprimirla oficialmente.
-        if (data.factura_electronica && data.siigo && data.siigo.ok) {
-          mostrarExitoFacturaElectronica(data.id_venta, data.siigo);
-        }
       } else {
         alert('Error: ' + data.error);
       }
-    }
-
-    // ¿El cliente seleccionado tiene todos los datos que exige Siigo/DIAN?
-    function clienteTieneDatosFactura() {
-      const idCliente = document.getElementById('select-cliente')?.value;
-      const cli = (clientesLista || []).find(c => String(c.id) === String(idCliente));
-      if (!cli) return false;
-      return Boolean(
-        (cli.tipo_documento || '').trim() &&
-        (cli.cedula_nit || '').trim() &&
-        (cli.nombre || '').trim() &&
-        (cli.email || '').trim() &&
-        (cli.telefono || '').trim()
-      );
-    }
-
-    // Muestra en el aviso del POS si el cliente actual sirve para factura electrónica.
-    function alCambiarFacturaElectronica() {
-      const check = document.getElementById('check-factura-electronica');
-      const aviso = document.getElementById('aviso-factura-electronica');
-      const estado = document.getElementById('fe-estado-cliente');
-      if (!check || !aviso || !estado) return;
-      if (!check.checked) { aviso.classList.add('d-none'); return; }
-      aviso.classList.remove('d-none');
-      // Advierte si el servidor no tiene credenciales de Siigo configuradas.
-      if (siigoConfigurado === false) {
-        estado.innerHTML = '<span class="badge bg-danger">✗ Siigo no está configurado</span> ' +
-                           '<span class="text-danger">Defina SIIGO_USERNAME y SIIGO_ACCESS_KEY en el archivo .env del servidor.</span>';
-        return;
-      }
-      if (clienteTieneDatosFactura()) {
-        estado.innerHTML = '<span class="badge bg-success">✓ Cliente con datos completos</span>';
-      } else {
-        estado.innerHTML = '<span class="badge bg-danger">✗ Faltan datos del cliente</span> ' +
-                           '<span class="text-danger">Complete Cédula/NIT, Nombre, Correo y Teléfono en la pestaña Clientes.</span>';
-      }
-    }
-
-    // Modal con el comprobante oficial de Siigo (PDF) y botones de acción.
-    function mostrarExitoFacturaElectronica(idVenta, siigo) {
-      const cont = document.getElementById('contenido-fe-exito');
-      if (!cont) return;
-      const pdf = siigo.pdf_url || '';
-      const xml = siigo.xml_url || '';
-      cont.innerHTML = `
-        <div class="alert alert-success"><strong>Factura Electrónica emitida con éxito</strong></div>
-        <p class="mb-1"><strong>Venta local:</strong> #${idVenta}</p>
-        <p class="mb-1"><strong>N° Factura Electrónica:</strong> ${escapeHtml(siigo.numero || '')}</p>
-        <p class="mb-1"><strong>CUFE:</strong> <span class="small">${escapeHtml(siigo.cufe || 'No reportado')}</span></p>
-        ${pdf ? `<p class="mb-1"><a href="${escapeHtml(pdf)}" target="_blank" rel="noopener" class="fw-bold">🔗 Ver / Descargar PDF oficial en Siigo</a></p>` : '<p class="text-muted mb-1">Siigo no devolvió una URL de PDF.</p>'}
-        ${xml ? `<p class="mb-0"><a href="${escapeHtml(xml)}" target="_blank" rel="noopener" class="fw-bold">🔗 Ver / Descargar XML oficial</a></p>` : ''}
-      `;
-      const btnPdf = document.getElementById('btn-fe-ver-pdf');
-      if (btnPdf) {
-        if (pdf) { btnPdf.href = pdf; btnPdf.classList.remove('disabled'); }
-        else { btnPdf.classList.add('disabled'); }
-      }
-      facturaElectronicaActual = { idVenta, ...siigo };
-      new bootstrap.Modal(document.getElementById('modalFacturaElectronica')).show();
-    }
-
-    // Reenvía por correo la factura electrónica (usa el cliente de correo del usuario).
-    // El destinatario es el cliente de ESTA factura (fe.email); si no lo tiene, se
-    // cae al del POS como último recurso.
-    function enviarFacturaElectronicaPorCorreo() {
-      const fe = facturaElectronicaActual || {};
-      let destino = fe.email || '';
-      if (!destino) {
-        const idCliente = document.getElementById('select-cliente')?.value;
-        const cli = (clientesLista || []).find(c => String(c.id) === String(idCliente));
-        destino = cli?.email || '';
-      }
-      if (!destino) {
-        alert('El cliente no tiene correo electrónico registrado. Edítelo en la pestaña Clientes para poder enviarle la factura.');
-        return;
-      }
-      const asunto = encodeURIComponent(`Factura Electrónica ${fe.numero || ''}`);
-      const cuerpo = encodeURIComponent(
-        `Adjuntamos su Factura Electrónica N° ${fe.numero || ''}.\n\n` +
-        (fe.cufe ? `CUFE: ${fe.cufe}\n\n` : '') +
-        (fe.pdf_url ? `PDF oficial: ${fe.pdf_url}\n` : '') +
-        (fe.xml_url ? `XML oficial: ${fe.xml_url}\n` : '')
-      );
-      window.location.href = `mailto:${destino}?subject=${asunto}&body=${cuerpo}`;
     }
 
     // PAGINACIÓN del inventario: se muestran todas las filas del catálogo, en
@@ -3694,6 +3635,11 @@
       // precio base (sin IVA) en el campo de entrada, en modo "factura sin IVA".
       const tasaProd = document.getElementById('prod-iva-tasa');
       if (tasaProd) tasaProd.value = String(producto.iva_tasa || 0);
+      // Unidad de medida y código DIAN del producto (para el XML de la factura).
+      const unidadProd = document.getElementById('prod-unidad-medida');
+      if (unidadProd) unidadProd.value = producto.unidad_medida || '94';
+      const codDianProd = document.getElementById('prod-codigo-dian');
+      if (codDianProd) codDianProd.value = producto.codigo_dian || '';
       const modoSin = document.getElementById('prod-modo-sin');
       if (modoSin) modoSin.checked = true;
       const baseProd = producto.precio_base !== undefined && producto.precio_base !== null
@@ -3799,6 +3745,10 @@
         // Precio de costo ya NO se envía desde la interfaz (opcional en la DB).
         precio_venta: precio.final,
         iva_tasa: precio.tasa,
+        // Datos fiscales DIAN del ítem (viajan al XML de la factura).
+        unidad_medida: document.getElementById('prod-unidad-medida').value,
+        codigo_dian: document.getElementById('prod-codigo-dian').value.trim(),
+        iva_naturaleza: precio.tasa > 0 ? 'gravado' : 'excluido',
         stock_actual: document.getElementById('prod-stock').value,
         stock_minimo: document.getElementById('prod-minimo').value
       };
@@ -4113,7 +4063,15 @@
 			telefono: document.getElementById('cli-telefono').value.trim(),
 				direccion: document.getElementById('cli-direccion').value.trim(),
 			email: document.getElementById('cli-email').value.trim(),
-				tipo_documento: document.getElementById('cli-tipo-documento').value
+				tipo_documento: document.getElementById('cli-tipo-documento').value,
+				// Campos fiscales DIAN del tercero.
+				tipo_persona: document.getElementById('cli-tipo-persona').value,
+				digito_verificacion: document.getElementById('cli-dv').value.trim(),
+				regimen_fiscal: document.getElementById('cli-regimen').value,
+				responsabilidades: Array.from(document.getElementById('cli-responsabilidades').selectedOptions)
+				                         .map(o => o.value).join(','),
+				codigo_municipio: document.getElementById('cli-municipio').value.trim(),
+				codigo_departamento: document.getElementById('cli-departamento').value.trim()
 			};
       const res = await fetch(clienteId ? `/api/clientes/${clienteId}` : '/api/clientes', {
         method: clienteId ? 'PUT' : 'POST',
@@ -4129,6 +4087,31 @@
 			}
 		}
 
+    // El DV solo aplica al NIT. Se calcula solo en el navegador para mostrarlo,
+    // pero el backend lo recalcula siempre (fuente de verdad).
+    function alCambiarTipoDocumentoCliente() {
+      const tipo = document.getElementById('cli-tipo-documento').value;
+      const campoDv = document.getElementById('cli-dv');
+      if (!campoDv) return;
+      campoDv.value = tipo === 'NIT' ? calcularDV(document.getElementById('cli-cedula').value) : '';
+      campoDv.readOnly = true;
+    }
+
+    // Dígito de verificación del NIT (algoritmo oficial DIAN, pesos de derecha a
+    // izquierda). Espejo del cálculo del backend para dar retroalimentación viva.
+    function calcularDV(nit) {
+      const pesos = [3, 7, 13, 17, 19, 23, 29, 37, 41, 43, 47, 53, 59, 67, 71];
+      const digitos = String(nit || '').replace(/\D/g, '');
+      if (!digitos) return '';
+      let suma = 0;
+      const invertido = digitos.split('').reverse();
+      for (let i = 0; i < invertido.length && i < pesos.length; i++) {
+        suma += Number(invertido[i]) * pesos[i];
+      }
+      const residuo = suma % 11;
+      return String(residuo <= 1 ? residuo : 11 - residuo);
+    }
+
     function editarCliente(id) {
       const cliente = clientesLista.find(item => item.id === id);
       if (!cliente) return;
@@ -4139,6 +4122,16 @@
       document.getElementById('cli-direccion').value = cliente.direccion || '';
       document.getElementById('cli-email').value = cliente.email || '';
       document.getElementById('cli-tipo-documento').value = cliente.tipo_documento || 'CC';
+      // Campos fiscales DIAN.
+      document.getElementById('cli-tipo-persona').value = cliente.tipo_persona || 'Natural';
+      document.getElementById('cli-dv').value = cliente.digito_verificacion || '';
+      document.getElementById('cli-regimen').value = cliente.regimen_fiscal || 'No Responsable de IVA';
+      const seleccionadas = String(cliente.responsabilidades || 'R-99-PN').split(',').map(s => s.trim());
+      Array.from(document.getElementById('cli-responsabilidades').options).forEach(op => {
+        op.selected = seleccionadas.includes(op.value);
+      });
+      document.getElementById('cli-municipio').value = cliente.codigo_municipio || '';
+      document.getElementById('cli-departamento').value = cliente.codigo_departamento || '';
       document.getElementById('titulo-form-cliente').innerText = 'Editar Cliente';
       document.getElementById('btn-guardar-cliente').innerText = 'Actualizar';
       document.getElementById('btn-cancelar-cliente').classList.remove('d-none');
@@ -4605,21 +4598,6 @@
 		pintarHistorialVentas(filtradas);
 		}, 250);
 
-			// Badge visual que distingue una Factura Electrónica Siigo de una venta normal.
-			function badgeFacturacion(v) {
-			  if (v.siigo_estado === 'aprobada') {
-			    const num = v.siigo_numero ? ` N° ${escapeHtml(v.siigo_numero)}` : '';
-			    return `<span class="badge bg-success" title="Factura electrónica Siigo/DIAN">🧾 FE Siigo${num}</span>`;
-			  }
-			  if (v.siigo_estado === 'error') {
-			    return `<span class="badge bg-danger" title="${escapeHtml(v.siigo_error || '')}">⚠️ FE con error</span>`;
-			  }
-			  if (v.siigo_estado === 'pendiente') {
-			    return '<span class="badge bg-warning text-dark">⏳ FE pendiente</span>';
-			  }
-			  return '<span class="badge bg-secondary">Venta normal / Remisión</span>';
-			}
-
 		async function cargarFacturasTabla() {
 			const res = await fetch('/api/ventas');
 			let ventas = await res.json();
@@ -4632,34 +4610,9 @@
                ventas.forEach(v => {
                  const estado = v.anulada ? '<span class="badge bg-danger">Anulada</span>' : '<span class="badge bg-success">Vigente</span>';
                  const anular = v.anulada ? '' : `<button class="btn btn-sm btn-outline-danger" onclick="anularVenta(${v.id})">Anular</button>`;
-                 // Botón para (re)transmitir a Siigo: útil si el cliente pide la factura
-                 // electrónica minutos después de la compra, o para reintentar un error.
-                 let transmitir = '';
-                 if (!v.anulada && v.siigo_estado !== 'aprobada') {
-                   const texto = v.siigo_estado === 'error' ? 'Reintentar Siigo' : 'Transmitir a Siigo';
-                   transmitir = `<button class="btn btn-sm btn-outline-success" onclick="transmitirFacturaSiigo(${v.id})">🧾 ${texto}</button>`;
-                 }
-            tbody.innerHTML += `<tr><td>${v.id}</td><td>${escapeHtml(v.fecha_dia)} ${escapeHtml(v.hora)}</td><td>${escapeHtml(v.cliente)}</td><td>${escapeHtml(v.tipo_pago)}</td><td>${monedaCOP(v.total_venta)}</td><td>${badgeFacturacion(v)}</td><td>${estado} <button class="btn btn-sm btn-primary" onclick="verFactura(${v.id})">Ver</button> ${transmitir} ${anular}</td></tr>`;
+            tbody.innerHTML += `<tr><td>${v.id}</td><td>${escapeHtml(v.fecha_dia)} ${escapeHtml(v.hora)}</td><td>${escapeHtml(v.cliente)}</td><td>${escapeHtml(v.tipo_pago)}</td><td>${monedaCOP(v.total_venta)}</td><td>${estado} <button class="btn btn-sm btn-primary" onclick="verFactura(${v.id})">Ver</button> ${anular}</td></tr>`;
         });
         if (ventas.length === 0) tbody.innerHTML = `<tr><td colspan="7" class="text-center text-muted">${filtroCliente ? 'No hay facturas para ese cliente.' : 'No hay facturas registradas.'}</td></tr>`;
-        }
-
-        // Transmite (o reintenta) a Siigo una venta ya registrada.
-        async function transmitirFacturaSiigo(idVenta) {
-          if (!confirm('¿Desea transmitir esta venta a Siigo como Factura Electrónica?')) return;
-          try {
-            const res = await fetch(`/api/ventas/${idVenta}/siigo`, { method: 'POST' });
-            const data = await res.json();
-            if (res.ok) {
-              alert(`✅ ${data.mensaje || 'Factura Electrónica emitida con éxito'}\nN° ${data.numero || ''}`);
-              mostrarExitoFacturaElectronica(idVenta, data);
-            } else {
-              alert(`⚠️ ${data.error || 'No se pudo transmitir a Siigo'}\n\nLa venta sigue guardada localmente; puede reintentar más tarde.`);
-            }
-          } catch (e) {
-            alert('No se pudo transmitir a Siigo: ' + (e.message || e));
-          }
-          cargarFacturasTabla();
         }
 
     async function anularVenta(id) {
@@ -4734,38 +4687,12 @@
 			         setTexto('fac-saldo', monedaCOP(factura.saldo_pendiente || 0));
 			       const filaSaldo = document.getElementById('fac-fila-saldo');
 			       if (filaSaldo) filaSaldo.style.display = (Number(factura.saldo_pendiente || 0) > 0) ? '' : 'none';
-			       	       const aviso = document.getElementById('fac-aviso-anulada');
-			              if (aviso) aviso.style.display = factura.anulada ? '' : 'none';
+			       	        const aviso = document.getElementById('fac-aviso-anulada');
+			       	              if (aviso) aviso.style.display = factura.anulada ? '' : 'none';
 
-			              // Muestra si esta venta se emitió como Factura Electrónica siigo.
-			              const infoFE = document.getElementById('fac-info-electronica');
-			              if (infoFE) {
-			                if (factura.siigo_estado === 'aprobada') {
-			                  infoFE.style.display = '';
-			                  infoFE.innerHTML = `<span class="badge bg-success">🧾 Factura Electrónica Siigo N° ${escapeHtml(factura.siigo_numero || '')}</span>` +
-			                    (factura.siigo_pdf_url ? ` <a href="${escapeHtml(factura.siigo_pdf_url)}" target="_blank" rel="noopener">Ver PDF oficial</a>` : '') +
-			                    (factura.siigo_xml_url ? ` <a href="${escapeHtml(factura.siigo_xml_url)}" target="_blank" rel="noopener">Ver XML</a>` : '') +
-			                    (factura.siigo_cufe ? ` <div class="small text-muted mt-1">CUFE: ${escapeHtml(factura.siigo_cufe)}</div>` : '');
-			                  // Deja los datos listos para el botón «Enviar por correo». El email
-			                  // debe ser el del cliente de ESTA factura, no el del POS.
-			                  facturaElectronicaActual = {
-			                    idVenta: factura.id,
-			                    numero: factura.siigo_numero || '',
-			                    cufe: factura.siigo_cufe || '',
-			                    pdf_url: factura.siigo_pdf_url || '',
-			                    xml_url: factura.siigo_xml_url || '',
-			                    email: factura.email || '',
-			                  };
-			                } else if (factura.siigo_estado === 'error') {
-			                  infoFE.style.display = '';
-			                  infoFE.innerHTML = `<span class="badge bg-danger">⚠️ Factura electrónica con error</span> <span class="text-muted">${escapeHtml(factura.siigo_error || '')}</span>`;
-			                } else {
-			                  infoFE.style.display = 'none';
-			                  infoFE.innerHTML = '';
-			                }
-			              }
-
-			       new bootstrap.Modal(document.getElementById('modalFactura')).show();
+			       	              // El bloque DIAN (CUIDE + QR) lo pinta el modulo dian-pos.js.
+			       	              if (window.DianPos) window.DianPos.pintarBloque(factura);
+			       	       new bootstrap.Modal(document.getElementById('modalFactura')).show();
 			// Impresión automática de la tirilla si el usuario la activó.
 			if (autoPrint) {
 			  setTimeout(() => imprimirRecibo('area-factura-pdf', 'factura'), 400);

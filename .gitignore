@@ -34,8 +34,16 @@ _salida_test.log
 _render_tmp.html
 # Dependencias de Node (Playwright y scripts de QA)
 node_modules/
-# Pruebas de QA con navegador (locales, requieren Playwright)
+# Pruebas de QA con navegador (locales, requieren Playwright).
+# OJO: los *_runner y los flujos que importa run-tests.mjs SI se versionan: la
+# suite `npm run test` depende de ellos, y si quedan ignorados el import revienta
+# en un clon limpio (el fallo solo aparece al ejecutar, no al revisar el diff).
+# Se excluyen del patron con las excepciones de abajo.
 _qa_*.mjs
+!_qa_flujo_despacho.mjs
+!_qa_flujo_despacho_runner.mjs
+!_qa_entrega_parcial.mjs
+!_qa_entrega_parcial_runner.mjs
 _qa_*.py
 _qa_*.png
 # Scripts de un solo uso ya aplicados
@@ -62,3 +70,21 @@ _conteo_*.mjs
 _verif_*.mjs
 # Precios pendientes de cargar (datos de trabajo, no parte de la app)
 precios_pendientes/
+
+# ── Certificados de firma electrónica DIAN ───────────────────────────
+# NUNCA se versionan: un .p12/.pfx es la llave con la que la ferretería firma
+# sus documentos-equivalentes. Subirlo al repo equivale a publicar la firma
+# comercial de la empresa. La app los guarda en `certificados/` (fuera de la
+# BD) y se(configuran desde el panel /dian.
+certificados/
+*.p12
+*.pfx
+*.p12.bak
+_tmp_certs/
+
+# ── Scripts temporales de QA y parcheo ────────────────────────────
+# Son utilidades de una sola vez para probar la app en local; no forman
+# parte de la aplicación.
+_patch_*.py
+_qa_*.mjs
+_qa_*.py
