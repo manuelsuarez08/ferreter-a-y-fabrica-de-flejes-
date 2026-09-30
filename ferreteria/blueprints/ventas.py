@@ -667,9 +667,10 @@ def get_factura_detalle(id_venta):
                COALESCE(cfg.numero_resolucion, ''),
                COALESCE(cfg.prefijo, ''),
                COALESCE(cfg.rango_desde, 0),
-                       COALESCE(cfg.rango_hasta, 0),
-                       COALESCE(v.observaciones, '')
-               FROM ventas v JOIN clientes c ON v.id_cliente = c.id
+                               COALESCE(cfg.rango_hasta, 0),
+                               COALESCE(v.observaciones, ''),
+                               COALESCE(v.tipo_documento_dian, 'POS')
+                       FROM ventas v JOIN clientes c ON v.id_cliente = c.id
         LEFT JOIN documentos_electronicos d ON d.id_venta = v.id
         CROSS JOIN configuracion cfg
         WHERE v.id = ?
@@ -711,6 +712,9 @@ def get_factura_detalle(id_venta):
         "iva_valor": venta[18] or 0,
         "iva_porcentaje": venta[19] or 0,
         "observaciones": venta[30] or "",
+        # POS = Documento Equivalente; FV = Factura Electrónica. La tirilla lo
+        # muestra para que el cliente sepa que documento se le entregó.
+        "tipo_documento_dian": venta[31] or "POS",
         # ── Documento Equivalente Electronico POS (DIAN) ─────────────────
         # Estado fiscal de la venta, para que la tirilla pueda imprimir el
         # CUIDE y el QR sin una segunda consulta al servidor.

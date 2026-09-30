@@ -699,6 +699,13 @@ def init_db():
     conn.close()
 
 
+# Cuántos respaldos de arranque se conservan. Antes no había tope: el código
+# solo borraba el más reciente, así que en una máquina que reinicia seguido
+# los .db se acumulaban (125 copias de la base en este repositorio). Con 5 se
+# conserva un margen para recuperar un incidente sin llenar el disco.
+MAX_RESPALDOS_ARRANQUE = 5
+
+
 def respaldar_base_de_datos():
     '''Guarda una copia de seguridad de la base antes de tocarla.
 
@@ -715,10 +722,18 @@ def respaldar_base_de_datos():
         return None
     carpeta = os.path.dirname(DB_NAME) or '.'
     try:
-        # Si ya existe un respaldo con el mismo tamano y fecha, la base no
-        # cambio: no se genera otro (evita llenar el disco con reinicios).
         import glob
         previos = sorted(glob.glob(os.path.join(carpeta, 'ferreteria-respaldo-arranque-*.db')))
+        # Antes solo se borraba el MÁS RECIENTE y se dejaba el resto. En una
+        # máquina con reinicios(y cada uno con cambios) los .db viejos se
+        # acumularon: 125 copias de la base en la carpeta. Ahora se conservan
+        # los ultimos MAX_RESPALDOS_ARRANQUE y se borra el resto, de modo que
+        # un incidente siempre tiene a donde volver.
+        for viejo in previos[:-MAX_RESPALDOS_ARRANQUE]:
+            try:
+                os.remove(viejo)
+            except OSError:
+                pass
         if previos:
             ultimo = previos[-1]
             try:

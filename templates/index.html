@@ -1996,6 +1996,7 @@
             <!-- Datos en lista vertical: cada dato ocupa su propia linea para
                  que se lea de corrido en la tirilla (sin columnas apretadas). -->
             <div class="recibo-datos">
+              <p id="fac-linea-tipo-documento" style="display:none;"><strong>Documento:</strong> <span id="fac-tipo-documento"></span></p>
               <p><strong>Fecha:</strong> <span id="fac-fecha"></span></p>
               <p><strong>Hora:</strong> <span id="fac-hora"></span></p>
               <p><strong>Medio de Pago:</strong> <span id="fac-pago"></span></p>
@@ -5540,6 +5541,15 @@
 				setTexto('fac-negocio-dir', negocio.direccion || '');
 					setTexto('fac-id', factura.id);
 				setTexto('fac-fecha', fechaCO(factura.fecha_dia));
+				// Tipo de documento entregado: POS (documento equivalente) o FV
+				// (factura electronica). Se muestra para que el cliente sepa que
+				// documento recibi, que es lo que va a necesitar para reclamar.
+				const lineaTipo = document.getElementById('fac-linea-tipo-documento');
+				const esFV = (factura.tipo_documento_dian || 'POS') === 'FV';
+				if (lineaTipo) {
+					lineaTipo.style.display = esFV ? '' : 'none';
+					setTexto('fac-tipo-documento', 'Factura Electrónica de Venta');
+				}
 				setTexto('fac-hora', factura.hora);
 				// Observaciones / notas internas de la venta. Solo se muestran (y se
 				// imprimen) si el cajero escribió algo.
