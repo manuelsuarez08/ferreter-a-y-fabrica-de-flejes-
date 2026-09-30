@@ -100,6 +100,54 @@ def _adquirente_tiene_documento(cedula_nit):
     return digitos not in ('222', '222222222222')
 
 
+def _leer_iva_del_producto(cursor, id_producto):
+    """Tasa de IVA de un producto. 0 es un valor legitimo (tasa cero)."""
+    fila = cursor.execute(
+        'SELECT COALESCE(iva_tasa, 19) FROM productos WHERE id = ?',
+        (id_producto,)).fetchone()
+    return float(fila[0] or 0) if fila else None
+
+
+def _calcular_iva_por_lineas(detalles, subtotal_final, tasa_global, iva_activo):
+    """Reparte el IVA de una venta según la tasa de CADA producto.
+
+    El precio de cada línea es FINAL (con IVA dentro), así que el impuesto se
+    EXTRAE y no se suma: `base = final / (1 + tasa)`.
+
+    Se agrupa por tasa antes de extraer, para no redondear a pesos cada dos
+    centavos de diferencia entre dos líneas del mismo tipo.
+
+    Returns:
+        (base, iva, tasa_dominante)
+    """
+    if not (iva_activo and tasa_global > 0):
+        return redondear_pesos(subtotal_final), 0.0, 0.0
+
+    sumas = {}
+    for linea in detalles:
+        # OJO: NO usar `or`. En Python `0 or 19` es 19, así que un producto de
+        # tasa CERO (cemento de uso arquitectónico, material de extracción)
+        # acabaría cobrando la tasa general. Hay que distinguir "no hay tasa"
+        # (None) de "la tasa ES cero".
+        tasa = linea.get('iva_tasa')
+        if tasa is None:
+            tasa = tasa_global
+        tasa = float(tasa)
+        sumas[tasa] = sumas.get(tasa, 0) + linea['precio'] * linea['cantidad']
+
+    base_total = 0
+    iva_total = 0
+    for tasa, suma in sumas.items():
+        if tasa > 0:
+            base_tasa = redondear_pesos(suma / (1 + tasa / 100))
+            base_total += base_tasa
+            iva_total += suma - base_tasa
+        else:
+            base_total += redondear_pesos(suma)
+    dominante = max(sumas, key=lambda t: sumas[t]) if sumas else 0.0
+    return base_total, iva_total, dominante
+
+
 def _es_producto_fleje(nombre, categoria, item):
     """True si el producto vendido pertenece a la categoria Fleje/Flejes.
 
@@ -128,7 +176,8 @@ def _construir_detalles(cursor, conn, items):
         item_id = item['id_producto']
         prod = cursor.execute(
             "SELECT nombre, categoria, precio_venta, COALESCE(unidad_medida, '94'), "
-            "COALESCE(codigo_dian, ''), COALESCE(iva_naturaleza, 'excluido') "
+            "COALESCE(codigo_dian, ''), COALESCE(iva_naturaleza, 'excluido'), "
+            "COALESCE(iva_tasa, 19) "
             "FROM productos WHERE id = ?", (item_id,)
         ).fetchone()
         if not prod:
@@ -136,6 +185,7 @@ def _construir_detalles(cursor, conn, items):
 
         nombre_producto, categoria_producto, precio_venta = prod[0], prod[1], prod[2]
         unidad_medida, codigo_dian, iva_naturaleza = prod[3], prod[4], prod[5]
+        iva_tasa_producto = prod[6]
         precio_venta = float(precio_venta or 0)
         cantidad = int(item['cantidad'])
         if cantidad <= 0:
@@ -162,6 +212,11 @@ def _construir_detalles(cursor, conn, items):
             # Datos fiscales del ítem (unidad de medida UN/ECE y código DIAN).
             'unidad_medida': unidad_medida, 'codigo_dian': codigo_dian,
             'iva_naturaleza': iva_naturaleza,
+            # Tasa propia del producto. Puede ser 0 (tasa cero del art. 422 ET,
+            # materiales de extracción del art. 424) o 5%. Sin esto la venta
+            # entera se calcularía a una sola tasa y el documento declararía una
+            # tarifa que no es la del artículo.
+            'iva_tasa': float(iva_tasa_producto or 0),
         })
 
     # ── IVA ──────────────────────────────────────────────────────────────
@@ -181,14 +236,19 @@ def _construir_detalles(cursor, conn, items):
     # Asi el total guardado es exactamente el que el cajero escribio, que es lo
     # que el necesita para dar la vuelta y lo que exige la aritmetica del
     # documento electronico.
-    iva_porcentaje, iva_activo = _leer_config_iva(cursor)
-    if iva_activo and iva_porcentaje > 0:
-        factor = 1 + iva_porcentaje / 100
-        base_venta = redondear_pesos(subtotal_venta / factor)
-        iva_valor = subtotal_venta - base_venta
-    else:
-        iva_porcentaje, iva_valor = 0.0, 0
-        base_venta = redondear_pesos(subtotal_venta)
+    #
+    # POR LINEA, con la tasa de CADA producto. Antes se usaba una sola tasa
+    # global para toda la venta, asi que un articulo de tasa cero (cemento de
+    # uso arquitectonico, materiales exentos, art. 422 del Estatuto Tributario)
+    # cobraba igual que uno de 19%: el producto tenia su `iva_tasa` guardado y
+    # la venta lo ignoraba. Ademas el documento electronico declararia una tarifa
+    # que no es la del producto, y la DIAN lo rechaza.
+    #
+    # Si el negocio tiene el IVA desactivado, todas las lineas van a tasa cero
+    # aunque el producto tenga la suya: el interruptor global manda.
+    iva_porcentaje_global, iva_activo = _leer_config_iva(cursor)
+    base_venta, iva_valor, iva_porcentaje = _calcular_iva_por_lineas(
+        detalles, subtotal_venta, iva_porcentaje_global, iva_activo)
     subtotal_venta = base_venta
     # El total es SIEMPRE la suma de los precios finales que puso el cajero:
     # no se recalcula desde la base, o se acumularia el redondeo por linea.
@@ -990,17 +1050,15 @@ def editar_detalle_factura(id_venta):
     # diferencia aquí lo descuadraban con el valor que había calculado la
     # creación de la venta, y el documento electrónico diría una cosa y la venta
     # otra.
-    iva_porcentaje, iva_activo = _leer_config_iva(cursor)
-    # Mismo criterio que en la creación de la venta: el precio es FINAL y el
-    # IVA se EXTRAE de él, no se le suma encima. Si se sumara, editar una
-    # factura inflaria su propio IVA.
-    if iva_activo and iva_porcentaje > 0:
-        factor = 1 + iva_porcentaje / 100
-        base_venta = redondear_pesos(subtotal_venta / factor)
-        iva_valor = subtotal_venta - base_venta
-    else:
-        iva_porcentaje, iva_valor = 0.0, 0
-        base_venta = redondear_pesos(subtotal_venta)
+    iva_porcentaje_global, iva_activo = _leer_config_iva(cursor)
+    # Misma función que en la creación de la venta: si el cálculo viviera dos
+    # veces, editar una factura podría dar un IVA distinto al que se calculó
+    # al crearla, y la caja no cerraría.
+    lineas_iva = [{'precio': f[2], 'cantidad': f[1],
+                   'iva_tasa': _leer_iva_del_producto(cursor, f[0])}
+                  for f in filas]
+    base_venta, iva_valor, iva_porcentaje = _calcular_iva_por_lineas(
+        lineas_iva, subtotal_venta, iva_porcentaje_global, iva_activo)
     subtotal_venta = base_venta
     # El total es la suma de los precios finales que quedaron tras la edición.
     # OJO: `filas` es una lista de tuplas (id_producto, cantidad, precio), no

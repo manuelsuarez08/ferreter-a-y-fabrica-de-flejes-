@@ -3502,19 +3502,33 @@
     }
 
     // Recalcula subtotal, IVA y total del carrito (sin redibujar la tabla).
+    //
+    // El precio del carrito es el PRECIO FINAL (lo que paga el cliente, IVA
+    // incluido), igual que en el backend. Por eso el IVA se EXTRAE del precio
+    // en vez de sumarsele encima: `base = final / (1 + tasa)`.
+    //
+    // Antes se hacía `subtotal * 19%` sobre el precio final y el total salía
+    // inflado en un 19%: el cajero veía $35.700 por productos de $30.000, y
+    // por eso escribía ese precio. Ahora ve el total real y el backend guarda
+    // el mismo número: lo que muestra y lo que se cobra coinciden.
     function actualizarTotalesCarrito() {
-      const subtotal = carrito.reduce((s, i) => s + (i.cantidad * i.precio), 0);
-      const ivaValor = ivaActivo ? Math.round(subtotal * ivaPorcentaje / 100) : 0;
+      const subtotalFinal = carrito.reduce((s, i) => s + (i.cantidad * i.precio), 0);
       const filaIvaPos = document.getElementById('fila-iva-pos');
+      let base = subtotalFinal, ivaValor = 0;
+      if (ivaActivo && ivaPorcentaje > 0) {
+        base = Math.round(subtotalFinal / (1 + ivaPorcentaje / 100));
+        ivaValor = subtotalFinal - base;
+      }
       if (ivaValor > 0) {
-        setTexto('subtotal-venta-texto', monedaCOP(subtotal));
+        setTexto('subtotal-venta-texto', monedaCOP(base));
         setTexto('iva-porcentaje-pos', `(${ivaPorcentaje}%)`);
         setTexto('iva-venta-texto', monedaCOP(ivaValor));
         if (filaIvaPos) filaIvaPos.style.display = '';
-      } else if (filaIvaPos) {
-        filaIvaPos.style.display = 'none';
+      } else {
+        setTexto('subtotal-venta-texto', monedaCOP(subtotalFinal));
+        if (filaIvaPos) filaIvaPos.style.display = 'none';
       }
-      document.getElementById('total-venta-texto').innerText = monedaCOP(subtotal + ivaValor);
+      document.getElementById('total-venta-texto').innerText = monedaCOP(subtotalFinal);
     }
 
     function limpiarFormularioVenta() {
@@ -5693,13 +5707,23 @@
 			}
 
 			// Muestra en vivo subtotal + IVA + total de la factura editada.
+			//
+			// Mismo criterio que el backend y que el carrito: el precio es FINAL
+			// (IVA incluido) y el impuesto se EXTRAE, no se suma. Si aqui se
+			// sumara, el admin veria un total que el servidor no va a guardar y
+			// creeria que el guardado fallo.
 			function previsualizarTotalEditado() {
-			const subtotal = facturaItemsActuales.reduce((s, it) => s + (it.cantidad * it.precio_unitario), 0);
-			const iva = ivaActivo ? Math.round(subtotal * ivaPorcentaje / 100) : 0;
+			const subtotalFinal = facturaItemsActuales.reduce(
+				(s, it) => s + (it.cantidad * it.precio_unitario), 0);
+			let base = subtotalFinal, iva = 0;
+			if (ivaActivo && ivaPorcentaje > 0) {
+				base = Math.round(subtotalFinal / (1 + ivaPorcentaje / 100));
+				iva = subtotalFinal - base;
+			}
 			const el = document.getElementById('edit-items-preview');
 			if (el) {
-			el.innerHTML = `Subtotal: <b>${monedaCOP(subtotal)}</b> &nbsp;|&nbsp; IVA (${ivaPorcentaje}%): ` +
-			`<b>${monedaCOP(iva)}</b> &nbsp;|&nbsp; <span class="text-primary fw-bold">Total: ${monedaCOP(subtotal + iva)}</span>`;
+				el.innerHTML = `Subtotal: <b>${monedaCOP(base)}</b> &nbsp;|&nbsp; IVA (${ivaPorcentaje}%): ` +
+				`<b>${monedaCOP(iva)}</b> &nbsp;|&nbsp; <span class="text-primary fw-bold">Total: ${monedaCOP(subtotalFinal)}</span>`;
 			}
 			}
 
