@@ -30,7 +30,13 @@ venv/
 .env
 # Residuos y archivos de trabajo temporales
 *.obsoleto-*
+# Respaldos que se toman ANTES de una migracion, con el nombre del dia. Son
+# estado local de cada instalacion: sin esta linea reaparecen como untracked en
+# cada `git status` y la tentacion de volver a subirlos es alta.
+ferreteria-antes-*.db
+ferreteria-antes-*.db-journal
 # Scripts locales de verificacion (no son parte de la app)
+_reset_*.py
 _test_*.py
 _ver_*.py
 _probar_*.py
