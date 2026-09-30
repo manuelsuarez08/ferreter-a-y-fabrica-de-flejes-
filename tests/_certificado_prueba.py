@@ -15,6 +15,14 @@ from cryptography.x509.oid import NameOID
 
 def generar_p12(ruta, clave=b'clave-de-prueba', nit='900187391',
                 comun='Ferreteria y Fabrica de Flejes SAS'):
+    """Certificado autofirmado con NIT en el sujeto.
+
+    El NIT va en `serialNumber` a propósito: `dian_firma.nit_titular` lo lee de
+    ahí, igual que hacen los certificados reales, y `verificar_identidad_emisor`
+    compara ese valor contra el NIT del emisor antes de firmar. Un certificado de
+    prueba sin NIT haría fallar la emisión entera, que es justo lo que la
+    validación busca evitar.
+    """
     llave = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     ahora = datetime.now(timezone.utc)
     sujeto = x509.Name([

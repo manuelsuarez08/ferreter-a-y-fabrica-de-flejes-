@@ -359,7 +359,14 @@ def _configurar_certificado(venta, cfg):
     ruta = os.path.join(os.path.dirname(venta['ruta']), 'prueba.p12')
     if not os.path.exists(ruta):
         clave = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-        nombre = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, u'PRUEBA')])
+        # El NIT va en `serialNumber`: es de ahí donde `dian_firma.nit_titular` lo
+        # lee para contrastarlo contra el NIT del emisor antes de firmar. Sin él
+        # la emisión se detiene a propósito (ver `verificar_identidad_emisor`),
+        # así que el certificado de prueba debe parecer uno real.
+        nombre = x509.Name([
+            x509.NameAttribute(NameOID.COMMON_NAME, u'PRUEBA'),
+            x509.NameAttribute(NameOID.SERIAL_NUMBER, u'900187391'),
+        ])
         ahora = datetime.datetime.now(datetime.timezone.utc)
         cert = (x509.CertificateBuilder()
                 .subject_name(nombre).issuer_name(nombre)

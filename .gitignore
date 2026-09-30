@@ -85,6 +85,14 @@ _verif_*.mjs
 # Precios pendientes de cargar (datos de trabajo, no parte de la app)
 precios_pendientes/
 
+# ── Logo del negocio (Personalización) ─────────────────────────────────
+# `static/logos/` lo sube el dueño de CADA ferretería desde su pantalla de
+# Personalización. Son datos de un cliente concreto, no del software, y además
+# el nombre siempre es logo.<extensión>: dos ferreterías se pisarían el mismo
+# archivo en un repositorio compartido. El archivo del sistema
+# (`static/logo_ferreteria.jpeg`) sigue versionándose por ser del software.
+static/logos/
+
 # ── Certificados de firma electrónica DIAN ───────────────────────────
 # NUNCA se versionan: un .p12/.pfx es la llave con la que la ferretería firma
 # sus documentos-equivalentes. Subirlo al repo equivale a publicar la firma

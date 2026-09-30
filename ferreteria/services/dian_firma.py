@@ -223,6 +223,79 @@ def cargar_certificado(ruta, clave, verificar_vigencia=True):
 
 
 # ═════
+# Coherencia entre el certificado y el emisor
+# ═════
+class ErrorIdentidadEmisor(ErrorCertificado):
+    """El NIT del certificado no corresponde al NIT del emisor configurado.
+
+    Hereda de `ErrorCertificado` a propósito: para quien emite, el problema es
+    "el certificado sirve", y así un solo `except ErrorCertificado` lo cubre en
+    los tres módulos que firman. Para el usuario el mensaje es explícito.
+    """
+
+
+def verificar_identidad_emisor(certificado, nit_emisor, exigido=True):
+    """Comprueba que el NIT del certificado .p12 sea el del emisor del documento.
+
+    Por qué este paso es obligatorio: la DIAN rechaza el documento si el firmante
+    no coincide con el emisor declarado en el XML. Sin esta comprobación el
+    rechazo llega como un error remoto, con el CUIDE ya consumido en el número de
+    resolución y sin explicación útil ("El documento no cumple los requisitos").
+    Compararlo antes de firmar convierte un rechazo fiscal opaco en un mensaje
+    local y accionable.
+
+    Args:
+        certificado: un `Certificado` ya cargado.
+        nit_emisor: NIT configurado en `configuracion.nit` (la ferretería).
+        exigido: si es True (por defecto) y el certificado NO trae NIT legible,
+            se falla. Un certificado sin NIT no se puede contrastar, y emitir a
+            ciegas es exactamente lo que esta comprobación evita. En False se
+            permite continuar (solo para pruebas automatizadas).
+
+    Raises:
+        ErrorIdentidadEmisor: si el NIT del certificado no es el del emisor, o si
+            no se puede leer y `exigido` es True.
+    """
+    nit_emisor = ''.join(c for c in str(nit_emisor or '') if c.isdigit())
+    if not nit_emisor:
+        raise ErrorIdentidadEmisor(
+            'No hay NIT de emisor configurado. Cargue el NIT de la ferretería en '
+            'Configuración > Datos del negocio antes de emitir.'
+        )
+
+    nit_certificado = certificado.nit_titular
+
+    if not nit_certificado:
+        # No se puede comparar. Ciertamente hay certificados válidos sin el NIT
+        # en los campos que sabemos leer, así que esto NO significa por sí solo
+        # que el certificado sea inválido; significa que no hay garantía.
+        if exigido:
+            raise ErrorIdentidadEmisor(
+                'No se pudo leer el NIT del titular en el certificado de firma, '
+                'así que no se puede confirmar que sea el de esta ferretería '
+                f'(NIT configurado: {nit_emisor}). Por seguridad la emisión se '
+                'detiene. Verifique que el .p12 sea el certificado de la '
+                'ferretería y que incluya el NIT, o emite en ambiente de '
+                'habilitación para probar.'
+            )
+        return
+
+    # Comparación por los últimos dígitos: algunos certificados incluyen el NIT
+    # con el dígito de verificación separado ("123456789-1" → "1234567891") y
+    # otros con guiones de por medio. Se normaliza a dígitos arriba, lo que suele
+    # bastar; la comparación por sufijo cubre el caso en que el certificado
+    # antepone un prefijo de país o tipo ("CO123456789").
+    if nit_certificado != nit_emisor and not nit_certificado.endswith(nit_emisor):
+        raise ErrorIdentidadEmisor(
+            f'El certificado de firma es de otra persona: el NIT del certificado '
+            f'es {nit_certificado} y el NIT del emisor configurado es '
+            f'{nit_emisor}. La DIAN rechaza el documento cuando el firmante no '
+            'es el emisor. Suba el certificado de la ferretería, o cambie el NIT '
+            'de emisor para que coincidan.'
+        )
+
+
+# ═════
 # Firma del documento
 # ═════
 def _sha384_b64(datos):

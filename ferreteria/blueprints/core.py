@@ -9,7 +9,7 @@ import sqlite3
 import tempfile
 from datetime import datetime
 from flask import (
-    Blueprint, jsonify, redirect, render_template, request,
+    Blueprint, current_app, jsonify, redirect, render_template, request,
     send_file, session, url_for,
 )
 from werkzeug.security import check_password_hash, generate_password_hash
@@ -18,20 +18,57 @@ from ..config import CLIENTE_MOSTRADOR_ID, DB_NAME, NOMBRE_CLIENTE_MOSTRADOR
 from ..db import get_db
 from ..security import admin_required, login_required
 from .catalogo import DEPARTAMENTO_NEGOCIO, MUNICIPIO_NEGOCIO
+from ..services import personalizacion
 from ..services.auditoria import registrar_auditoria
 
 bp = Blueprint('core', __name__)
 
 
 # ── Autenticación ─────────────────────────────
+def _marca_por_defecto():
+    """Marca vacía: el POS arranca igual, solo que sin logo propio."""
+    return {
+        'nombre': '', 'nombre_comercial': '', 'logo_url': '', 'logo_tiene': False,
+        'logo_tamano': 96, 'logo_mostrar': False, 'mensaje_pie': '',
+        'color_primario': '#1F4E79',
+    }
+
+
 @bp.route('/')
 def index():
     if 'usuario' not in session:
         return redirect(url_for('core.login'))
+
+    # Marca del negocio: logo, nombre comercial y mensaje del ticket. Se leen
+    # aquí para que el POS nazca con la ferretería ya personalizada, sin una
+    # llamada extra desde JavaScript. Si la base todavía no tiene las columnas
+    # (una instalación vieja que no reinició), se usan valores vacíos: es
+    # preferible un POS sin logo a una pantalla en blanco.
+    conn = get_db()
+    try:
+        marca = personalizacion.leer(conn)
+    except personalizacion.ErrorPersonalizacion:
+        # La base todavía no tiene las columnas (instalación vieja que no
+        # reinició). Es preferible un POS sin logo a una pantalla en blanco.
+        marca = _marca_por_defecto()
+    except sqlite3.Error:
+        # Error de base de datos: se registra y se sigue con la marca vacía. El
+        # POS debe poderfacturar aunque falle la lectura de la configuración de
+        # marca; la venta es lo importante.
+        current_app.logger.exception('No se pudo leer la marca del negocio')
+        marca = _marca_por_defecto()
+    finally:
+        conn.close()
+
     return render_template(
         'index.html',
         usuario=session['usuario'],
         rol=session.get('rol', 'empleado'),
+        # El logo por defecto del sistema, para cuando la ferretería no sube
+        # ninguno. Se conserva la ruta para no romper el ticket cuando
+        # `marca['logo_tiene']` es falso.
+        logo_defecto='logo_ferreteria.jpeg',
+        negocio=marca,
         # El POS arranca en el cliente mostrador genérico (ver config.py).
         cliente_mostrador_id=CLIENTE_MOSTRADOR_ID,
         nombre_cliente_mostrador=NOMBRE_CLIENTE_MOSTRADOR,

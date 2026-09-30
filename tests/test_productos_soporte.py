@@ -218,9 +218,14 @@ def test_el_documento_soporte_se_emite_como_bloque(conn, db_path):
     db_mod._asegurar_migracion_documento_soporte(cursor)
     db_mod._aplicar_migraciones(cursor)
 
-    # Certificado autofirmado.
+    # Certificado autofirmado. El NIT va en `serialNumber`, que es de donde lo
+    # lee `dian_firma.nit_titular` para contrastarlo con el del emisor antes de
+    # firmar; sin él la emisión se detiene a propósito.
     clave = rsa.generate_private_key(public_exponent=65537, key_size=2048)
-    nombre = x509.Name([x509.NameAttribute(NameOID.COMMON_NAME, u'PRUEBA')])
+    nombre = x509.Name([
+        x509.NameAttribute(NameOID.COMMON_NAME, u'PRUEBA'),
+        x509.NameAttribute(NameOID.SERIAL_NUMBER, u'900187391'),
+    ])
     ahora = datetime.datetime.now(datetime.timezone.utc)
     cert = (x509.CertificateBuilder()
             .subject_name(nombre).issuer_name(nombre)

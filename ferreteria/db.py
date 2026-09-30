@@ -66,6 +66,7 @@ def _crear_tablas_base(cursor):
             rol TEXT NOT NULL
         )
     ''')
+    _crear_tablas_provisionamiento(cursor)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS clientes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -517,9 +518,45 @@ def _aplicar_migraciones(cursor):
         # servidor: no hay gestor de secretos disponible).
         ('certificado_ruta', "TEXT DEFAULT ''"),
         ('certificado_clave', "TEXT DEFAULT ''"),
-        # Software propio: SoftwareID y SoftwareSecurityCode (PIN) que la DIAN
-        # entrega al registrar el software en el catálogo del facturador.
+        # SoftwareSecurityCode (PIN) que la DIAN entrega al registrar el software
+        # en el catálogo del facturador.
+        #
+        # OJO: antes existía también la columna `software_pin`, que guardaba LO
+        # MISMO (el PIN) en otro sitio. Dos columnas para un dato es una fuente
+        # de inconsistencias: se escribía una y se leía la otra. El PIN real vive
+        # en `dian_software_security_code`; `software_pin` se conserva por
+        # compatibilidad con instalaciones antiguas y se normaliza en la
+        # migración de abajo, pero NINGÚN código debe leerla.
         ('dian_software_security_code', "TEXT DEFAULT ''"),
+        # ── Identidad del PROVEEDOR de software (el desarrollador, no la
+        # ferretería). El anexo técnico exige identificarla en el nodo
+        # SoftwareProvider/SoftwareProviderID del XML. Antes esos datos eran
+        # constantes en el código y además llevaban el nombre de la ferretería,
+        # no el del desarrollador. Ahora son datos de la instalación, editables
+        # desde Configuración > Facturación DIAN sin tocar el fuente.
+        ('software_proveedor_nit', "TEXT DEFAULT ''"),
+        ('software_proveedor_nombre', "TEXT DEFAULT ''"),
+        # ── Personalización de marca ──
+        # El logo se guarda como ARCHIVO en disco (no en la base: son bytes, y
+        # meterlos en SQLite engorda la base y no se sirve igual de rápido).
+        # En la base queda solo la ruta, y una copia del anterior en
+        # `negocio_logo_anterior` para poder deshacer: subir un logo equivocado
+        # y quedarse sin ninguno sería un callejón sin salida.
+        ('negocio_logo', "TEXT DEFAULT ''"),
+        ('negocio_logo_anterior', "TEXT DEFAULT ''"),
+        # Nombre comercial, que puede diferir de la razón social (que es lo que
+        # va al XML y lo que exige la DIAN).
+        ('negocio_nombre_comercial', "TEXT DEFAULT ''"),
+        # Mensaje al pie del ticket: garantía, políticas, thanking. Es texto
+        # libre y multilínea.
+        ('negocio_mensaje_pie', "TEXT DEFAULT ''"),
+        # Tamaño y posición del logo en el ticket térmico. Un logo de 500px en
+        # una impresora de 58mm ocupa media página, así que el dueño necesita
+        # poder ajustarlo sin que el programador toque el CSS.
+        ('negocio_logo_tamano', 'INTEGER NOT NULL DEFAULT 96'),
+        ('negocio_logo_mostrar', 'INTEGER NOT NULL DEFAULT 1'),
+        # Color principal de la interfaz. Hex con almohadilla o sin ella.
+        ('negocio_color_primario', "TEXT DEFAULT '#1F4E79'"),
         # Modo de emisión por defecto: 'habilitacion' o 'produccion'.
         ('dian_modo', "TEXT NOT NULL DEFAULT 'habilitacion'"),
         # Última verificación de conectividad con la DIAN (para la contingencia).
@@ -533,6 +570,27 @@ def _aplicar_migraciones(cursor):
         ('dian_emision_automatica', 'INTEGER NOT NULL DEFAULT 0'),
     ):
         migrar_columna(cursor, 'configuracion', columna, definicion)
+
+    # ═════════════════════════════════════════════════════
+    # NORMALIZACIÓN DEL PIN (software_pin -> dian_software_security_code)
+    # ═════════════════════════════════════════════════════
+    # Antes había dos columnas para el mismo dato. Si una instalación antigua
+    # cargó el PIN en `software_pin` y no en `dian_software_security_code`, el
+    # PIN se perdía en silencio: `estado_dian` decía "listo" pero la firma salía
+    # sin SoftwareSecurityCode y la DIAN rechazaba el documento. Se copia el valor
+    # viejo al nuevo solo si el nuevo está vacío, y nunca al revés: el destino
+    # es el que manda y `software_pin` queda como lectura DEPRECADA.
+    columnas_config = {r[1] for r in cursor.execute(
+        'PRAGMA table_info(configuracion)')}
+    if ('software_pin' in columnas_config
+            and 'dian_software_security_code' in columnas_config):
+        cursor.execute('''
+            UPDATE configuracion
+               SET dian_software_security_code = software_pin
+             WHERE id = 1
+               AND TRIM(COALESCE(dian_software_security_code, '')) = ''
+               AND TRIM(COALESCE(software_pin, '')) <> ''
+        ''')
 
     # ═════════════════════════════════════════════════════
     # SERIES DE NUMERACIÓN DIAN (una por tipo de documento)
@@ -670,6 +728,64 @@ def _aplicar_migraciones(cursor):
     )
     cursor.execute(
         "CREATE INDEX IF NOT EXISTS idx_entregas_venta ON entregas_venta (id_venta)"
+    )
+
+
+def _crear_tablas_provisionamiento(cursor):
+    """Tablas del Panel SuperAdmin (solo en la base del desarrollador).
+
+    Estas tablas NO se copian a las instancias de los clientes: viven en la base
+    del desarrollador y describen a quién se le provisioningó el sistema. Por eso
+    se crean aparte y no se siembran.
+
+    `ferreterias` es el padrón de clientes. `estado` NO es decorativo: es lo que
+    el panel usa para suspender el acceso, y se guarda con una restricción
+    CHECK para que no aparezcan estados inventados por error de tipeo (un
+    'suspendido ' con espacio no coincidiría con ninguna comparación y el
+    cliente quedaría activo sin querer).
+    """
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ferreterias (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT NOT NULL,
+            nit TEXT DEFAULT '',
+            -- Nombre del archivo .db de la instancia. Es la llave que conecta el
+            -- registro con el archivo real en disco.
+            archivo TEXT NOT NULL,
+            -- Usuario dueño de ESA instancia (no el de este panel).
+            usuario_dueno TEXT NOT NULL,
+            estado TEXT NOT NULL DEFAULT 'activo'
+                CHECK (estado IN ('activo', 'suspendido', 'cancelado')),
+            -- Datos de contacto, para saber a quién escribirle.
+            telefono TEXT DEFAULT '',
+            email TEXT DEFAULT '',
+            direccion TEXT DEFAULT '',
+            -- Días que lleva suspendida, para el aviso de cobro. NULL si no.
+            dias_suspendida INTEGER DEFAULT 0,
+            -- Nota interna del desarrollador (pagos, pendientes, contrato).
+            notas TEXT DEFAULT '',
+            creado_en TEXT NOT NULL,
+            actualizado_en TEXT NOT NULL
+        )
+    ''')
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS historial_provisionamiento (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_ferreteria INTEGER NOT NULL,
+            -- Qué pasó: creada, suspendida, reactivada, cancelada, eliminada.
+            accion TEXT NOT NULL,
+            detalle TEXT DEFAULT '',
+            fecha TEXT NOT NULL,
+            FOREIGN KEY (id_ferreteria) REFERENCES ferreterias (id)
+        )
+    ''')
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_ferreterias_estado "
+        "ON ferreterias (estado)"
+    )
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_historial_ferreteria "
+        "ON historial_provisionamiento (id_ferreteria, fecha)"
     )
 
 

@@ -409,7 +409,9 @@ def emitir_nota_credito(conn, id_venta, motivo_codigo='1', motivo_descripcion=''
     xml_sin_firma = dian_notas.a_texto(raiz)
 
     # ── 4. Firma ─────────────────────────────────────────────────────────────
-    certificado = _cargar_certificado(ajustes)
+    # Se pasa el NIT del emisor para que el certificado se contraste con él: una
+    # nota crédito firmada por otra persona también la rechaza la DIAN.
+    certificado = _cargar_certificado(ajustes, emisor['nit'])
     xml_firmado = dian_firma.firmar_bytes(
         dian_notas.a_bytes(raiz), certificado, id_documento=numero)
 

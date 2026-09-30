@@ -231,7 +231,7 @@ def emitir_documento_soporte(conn, id_proveedor, items_payload,
         documento, emisor, proveedor, items, totales, extras)
     xml_sin_firma = dian_notas.a_texto(raiz)
 
-    certificado = _cargar_certificado(ajustes)
+    certificado = _cargar_certificado(ajustes, emisor['nit'])
     xml_firmado = dian_firma.firmar_bytes(
         dian_notas.a_bytes(raiz), certificado, id_documento=numero)
 

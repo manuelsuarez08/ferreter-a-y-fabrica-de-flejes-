@@ -1,0 +1,287 @@
+<!DOCTYPE html>
+<html lang="es" translate="no">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="google" content="notranslate">
+    <title>Personalización del Negocio - Sistema Ferretería</title>
+    <link href="{{ url_for('static', filename='vendor/bootstrap.min.css') }}" rel="stylesheet">
+    <style>
+        body { background-color: #f4f6f9; margin: 0;
+               font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        .tarjeta { padding: 20px; }
+        /* Vista previa: se ve el logo como lo verá el cliente, sobre fondo
+           claro, porque la mayoría de los logos son oscuros sobre blanco. */
+        #vista-previa {
+            height: 140px; display: flex; align-items: center; justify-content: center;
+            background: #fbfbfb; border: 1px dashed #ccc; border-radius: 6px;
+            overflow: hidden; margin-bottom: 10px;
+        }
+        #vista-previa img { max-width: 92%; max-height: 132px; object-fit: contain; }
+        /* Así se ve en un ticket térmico de 58mm: angosto y alto. Por eso el
+           vista previa tiene forma de ticket y no de banner. */
+        #ticket {
+            width: 260px; margin: 0 auto; background: #fff; border: 1px solid #ddd;
+            padding: 12px; font-family: monospace; font-size: 12px; color: #000;
+        }
+        #ticket .t-nombre { font-weight: bold; text-align: center; font-size: 13px; }
+        #ticket .t-dato { text-align: center; font-size: 11px; }
+        #ticket .t-linea { border-top: 1px dashed #999; margin: 6px 0; }
+        #ticket .t-pie { font-size: 10px; white-space: pre-wrap; margin-top: 8px; }
+    </style>
+</head>
+<body>
+
+{% if not puede_editar %}
+<div class="container pt-3">
+    <div class="alert alert-info">
+        Está viendo la configuración de la ferretería, pero solo el
+        <strong>administrador</strong> puede cambiarla.
+    </div>
+</div>
+{% endif %}
+
+<div class="card mb-3" style="border-radius:0">
+    <div class="card-body d-flex justify-content-between align-items-center">
+        <div>
+            <strong>Personalización del Negocio</strong>
+            <div class="small text-muted">Su logo, su nombre y su mensaje. Nada de esto
+                cambia lo que se cobra ni lo que se factura.</div>
+        </div>
+        <a href="/" class="btn btn-sm btn-outline-secondary">Volver al POS</a>
+    </div>
+</div>
+
+<div class="container py-4">
+    <div id="mensaje" class="alert" role="alert"></div>
+
+    <div class="row">
+        <!-- ── Logo ──────────────────────────────────────────── -->
+        <div class="col-lg-6 mb-4">
+            <div class="card mb-4">
+                <div class="card-header"><strong>Logotipo</strong></div>
+                <div class="card-body tarjeta">
+                    <div id="vista-previa">
+                        <span class="text-muted small" id="sin-logo">
+                            Sin logo propio. Se usa el del sistema.</span>
+                    </div>
+
+                    <input type="file" id="archivo-logo" accept=".png,.jpg,.jpeg,.gif,.webp"
+                           class="form-control form-control-sm mb-2"
+                           {% if not puede_editar %}disabled{% endif %}>
+                    <div class="small text-muted mb-3">
+                        PNG, JPG, GIF o WebP. Hasta 2 MB.
+                    </div>
+
+                    <button class="btn btn-primary btn-sm" id="btn-subir" {% if not puede_editar %}disabled{% endif %}>Subir logo</button>
+                    <button class="btn btn-outline-secondary btn-sm" id="btn-quitar" {% if not puede_editar %}disabled{% endif %}>Quitar</button>
+                    <button class="btn btn-outline-secondary btn-sm" id="btn-restaurar" {% if not puede_editar %}disabled{% endif %}>
+                        Deshacer cambio
+                    </button>
+
+                    <hr>
+                    <div class="form-check mb-2">
+                        <input class="form-check-input" type="checkbox" id="logo-mostrar"
+                               {% if not puede_editar %}disabled{% endif %}>
+                        <label class="form-check-label" for="logo-mostrar">
+                            Mostrar el logo en el ticket
+                        </label>
+                    </div>
+                    <label class="small">Tamaño en el ticket: <span id="tamano-valor">96</span> px</label>
+                    <input type="range" class="form-range" id="logo-tamano"
+                           min="48" max="200" step="8" {% if not puede_editar %}disabled{% endif %}>
+                    <div class="small text-muted">
+                        Un logo muy grande tapa los totales en una impresora de 58&nbsp;mm.
+                    </div>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header"><strong>Color principal</strong></div>
+                <div class="card-body tarjeta">
+                    <div class="form-group">
+                        <input type="color" id="color" class="form-control form-control-color"
+                               style="height:42px" value="#1F4E79"
+                               {% if not puede_editar %}disabled{% endif %}>
+                        <small class="text-muted">Se aplica a los botones y a la
+                            cabecera. El texto siempre queda oscuro sobre fondo claro,
+                            para que se lea.</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Datos del ticket ───────────────────────────────── -->
+        <div class="col-lg-6 mb-4">
+            <div class="card mb-4">
+                <div class="card-header"><strong>Datos del ticket</strong></div>
+                <div class="card-body tarjeta">
+                    <div class="form-group">
+                        <label>Nombre comercial</label>
+                        <input type="text" class="form-control form-control-sm" id="nombre-comercial"
+                               {% if not puede_editar %}readonly{% endif %}>
+                        <small class="text-muted">Lo que ve el cliente en el ticket y en
+                            la pantalla. Si lo dejas vacío se usa la razón social.</small>
+                    </div>
+                    <div class="form-group">
+                        <label>Mensaje o garantía al pie del ticket</label>
+                        <textarea class="form-control form-control-sm" id="mensaje-pie" rows="5"
+                                  {% if not puede_editar %}readonly{% endif %}
+                                  placeholder="Garantía de 6 meses en herramientas&#10;No se aceptan devoluciones sin recibo"></textarea>
+                        <small class="text-muted">Se imprime tal cual. Una línea por renglón.</small>
+                    </div>
+                    <button class="btn btn-success btn-sm" id="btn-guardar"
+                            {% if not puede_editar %}disabled{% endif %}>Guardar</button>
+                </div>
+            </div>
+
+            <div class="card">
+                <div class="card-header">
+                    <strong>Así se verá el ticket</strong>
+                </div>
+                <div class="card-body tarjeta">
+                    <div id="ticket">
+                        <div class="t-nombre" id="t-nombre">FERRETERÍA</div>
+                        <div class="t-dato" id="t-dato">NIT 900123456-7</div>
+                        <div class="t-linea"></div>
+                        <div class="t-dato">TICKET DE VENTA</div>
+                        <div class="t-linea"></div>
+                        <div class="t-pie" id="t-pie">Su mensaje aparecerá aquí.</div>
+                    </div>
+                    <div class="small text-muted mt-2 text-center">
+                        Vista aproximada de un ticket de 58&nbsp;mm.
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const $ = (s) => document.querySelector(s);
+
+function avisar(texto, tipo = 'success') {
+    const c = $('#mensaje');
+    c.className = 'alert alert-' + tipo;
+    c.textContent = texto;
+    c.style.display = 'block';
+    if (tipo === 'success') setTimeout(() => c.style.display = 'none', 4000);
+}
+
+async function api(ruta, opciones = {}) {
+    const r = await fetch(ruta, {headers: {}, ...opciones});
+    const d = await r.json().catch(() => ({error: 'Respuesta no reconocida'}));
+    if (!r.ok) throw new Error(d.error || ('Error ' + r.status));
+    return d;
+}
+
+let estado = {};
+
+function pintar(datos) {
+    estado = datos;
+    $('#nombre-comercial').value = datos.nombre_comercial || '';
+    $('#mensaje-pie').value = datos.mensaje_pie || '';
+    $('#logo-tamano').value = datos.logo_tamano || 96;
+    $('#tamano-valor').textContent = datos.logo_tamano || 96;
+    $('#logo-mostrar').checked = !!datos.logo_mostrar;
+    $('#color').value = datos.color_primario || '#1F4E79';
+
+    const previa = $('#vista-previa');
+    if (datos.logo_tiene && datos.logo_url) {
+        // Se agrega una marca de tiempo: si el dueño sube el MISMO archivo dos
+        // veces, el navegador lo saca de su caché y no se ve el cambio.
+        previa.innerHTML = `<img src="${datos.logo_url}?t=${Date.now()}">`;
+        $('#sin-logo')?.remove();
+    } else {
+        previa.innerHTML = '<span class="text-muted small">Sin logo propio. '
+            + 'Se usa el del sistema.</span>';
+    }
+
+    // Vista previa del ticket.
+    $('#t-nombre').textContent = datos.nombre_comercial || datos.nombre || 'FERRETERÍA';
+    $('#t-pie').textContent = datos.mensaje_pie || 'Su mensaje aparecerá aquí.';
+
+    const img = previa.querySelector('img');
+    if (img) img.style.maxHeight = (datos.logo_tamano || 96) + 'px';
+}
+
+async function cargar() {
+    try {
+        pintar(await api('/api/personalizacion'));
+    } catch (e) {
+        avisar(e.message, 'danger');
+    }
+}
+
+async function guardarDatos() {
+    const cuerpo = {
+        negocio_nombre_comercial: $('#nombre-comercial').value,
+        negocio_mensaje_pie: $('#mensaje-pie').value,
+        negocio_logo_tamano: $('#logo-tamano').value,
+        negocio_logo_mostrar: $('#logo-mostrar').checked,
+        negocio_color_primario: $('#color').value,
+    };
+    try {
+        pintar(await api('/api/personalizacion', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify(cuerpo),
+        }));
+        avisar('Cambios guardados.');
+    } catch (e) {
+        avisar(e.message, 'danger');
+    }
+}
+
+$('#btn-subir').addEventListener('click', async () => {
+    const entrada = $('#archivo-logo').files[0];
+    if (!entrada) {
+        avisar('Primero elija un archivo.', 'warning');
+        return;
+    }
+    const datos = new FormData();
+    datos.append('logo', entrada);
+    try {
+        pintar(await api('/api/personalizacion/logo', {method: 'POST', body: datos}));
+        avisar('Logo actualizado.');
+    } catch (e) {
+        avisar(e.message, 'danger');
+    }
+});
+
+$('#btn-quitar').addEventListener('click', async () => {
+    if (!confirm('¿Quitar el logo y volver al del sistema?')) return;
+    try {
+        pintar(await api('/api/personalizacion/logo', {method: 'DELETE'}));
+        avisar('Logo quitado.');
+    } catch (e) {
+        avisar(e.message, 'danger');
+    }
+});
+
+$('#btn-restaurar').addEventListener('click', async () => {
+    try {
+        pintar(await api('/api/personalizacion/logo/restaurar', {method: 'POST'}));
+        avisar('Se restauró el logo anterior.');
+    } catch (e) {
+        avisar(e.message, 'warning');
+    }
+});
+
+$('#btn-guardar').addEventListener('click', guardarDatos);
+$('#logo-tamano').addEventListener('input', (e) => {
+    $('#tamano-valor').textContent = e.target.value;
+    const img = $('#vista-previa img');
+    if (img) img.style.maxHeight = e.target.value + 'px';
+});
+$('#mensaje-pie').addEventListener('input', (e) => {
+    $('#t-pie').textContent = e.target.value || 'Su mensaje aparecerá aquí.';
+});
+$('#nombre-comercial').addEventListener('input', (e) => {
+    $('#t-nombre').textContent = e.target.value || estado.nombre || 'FERRETERÍA';
+});
+
+cargar();
+</script>
+</body>
+</html>

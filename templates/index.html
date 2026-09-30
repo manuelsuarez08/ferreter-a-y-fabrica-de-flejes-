@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="es" translate="no" spellcheck="true">
 <head>
  <meta charset="UTF-8">
@@ -23,13 +23,13 @@
       max-width: 650px;
       margin: 0 auto;
     }
-    /* Logo del negocio en facturas, recibos y cotizaciones. El archivo trae
-       fondo oscuro propio; al imprimir en papel termico blanco un recorte
-       circular deja un borde sucio, asi que se muestra tal cual, sin circulo. */
+    /* Logo del negocio en facturas, recibos y cotizaciones. El ancho lo fija el
+       dueño desde Personalización, porque el tamaño correcto depende de la
+       impresora: un logo de 200px en una de 58mm tapa media página. */
     .logo-documento {
-      width: 96px;
+      width: {{ negocio.logo_tamano or 96 }}px;
       height: auto;
-      max-height: 96px;
+      max-height: {{ negocio.logo_tamano or 96 }}px;
       object-fit: contain;
       background: transparent;
       display: block;
@@ -244,9 +244,9 @@
   <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4 shadow-sm">
     <div class="container-fluid">
       <a class="navbar-brand fw-bold fs-4 d-flex align-items-center gap-2" href="#">
-        <img src="{{ url_for('static', filename='logo_ferreteria.jpeg') }}"
-             alt="Logo Ferretería y Fábrica de Flejes" class="logo-navbar">
-        <span>FERRETERÍA Y FÁBRICA DE FLEJES</span>
+        <img src="{% if negocio.logo_tiene %}{{ negocio.logo_url }}{% else %}{{ url_for('static', filename=logo_defecto) }}{% endif %}"
+             alt="Logo del negocio" class="logo-navbar">
+        <span>{{ negocio.nombre_comercial or negocio.nombre or 'FERRETERÍA Y FÁBRICA DE FLEJES' }}</span>
       </a>
 
       <div class="d-flex align-items-center gap-3">
@@ -277,7 +277,11 @@
         {% endif %}
 
         <span class="navbar-text text-white">
-          Usuario: <strong>{{ usuario }}</strong> ({{ rol }}) | <a href="/logout" class="text-white text-decoration-underline">Cerrar Sesión</a>
+          Usuario: <strong>{{ usuario }}</strong> ({{ rol }}) |
+          {% if rol in ['admin', 'superadmin'] %}
+            <a href="/personalizacion" class="text-white text-decoration-underline">Mi Negocio</a> |
+          {% endif %}
+          <a href="/logout" class="text-white text-decoration-underline">Cerrar Sesión</a>
         </span>
       </div>
     </div>
@@ -2007,9 +2011,9 @@
           <div class="columna-tirilla">
           <div id="area-factura-pdf" class="factura-box">
             <div class="text-center mb-2">
-              <img src="{{ url_for('static', filename='logo_ferreteria.jpeg') }}"
-                   alt="Logo Ferretería y Fábrica de Flejes" class="logo-documento">
-              <h3 class="fw-bold mb-0" id="fac-negocio-nombre">FERRETERÍA Y FÁBRICA DE FLEJES</h3>
+              <img src="{% if negocio.logo_tiene %}{{ negocio.logo_url }}{% else %}{{ url_for('static', filename=logo_defecto) }}{% endif %}"
+                   alt="Logo del negocio" class="logo-documento">
+              <h3 class="fw-bold mb-0" id="fac-negocio-nombre">{{ negocio.nombre_comercial or negocio.nombre or 'FERRETERÍA Y FÁBRICA DE FLEJES' }}</h3>
               <p class="text-muted mb-0">Venta de Materiales de Construcción y Flejes a Medida</p>
               <p class="text-muted mb-0" id="fac-negocio-nit"></p>
               <p class="text-muted mb-0" id="fac-negocio-dir"></p>
@@ -2090,9 +2094,17 @@
             </div>
 
             <div class="recibo-pie">
-              ¡Gracias por su compra!<br>
-              Cambios y garantía: presente esta tirilla dentro de los 8 días siguientes.<br>
-              No se aceptan cambios de material cortado o a la medida.
+              <!-- El mensaje del pie lo escribe el dueño del negocio desde
+                   Personalización. Si no puso ninguno, queda el texto del
+                   sistema: es preferible una política por defecto conocida a un
+                   espacio en blanco que el cliente no sabe interpretar. -->
+              {% if negocio.mensaje_pie %}
+                {{ negocio.mensaje_pie }}
+              {% else %}
+                ¡Gracias por su compra!<br>
+                Cambios y garantía: presente esta tirilla dentro de los 8 días siguientes.<br>
+                No se aceptan cambios de material cortado o a la medida.
+              {% endif %}
             </div>
           </div>
           </div>
@@ -2313,9 +2325,9 @@
         <div class="modal-body">
           <div id="area-comprobante-abono" class="factura-box">
             <div class="text-center mb-2">
-              <img src="{{ url_for('static', filename='logo_ferreteria.jpeg') }}"
-                   alt="Logo Ferretería y Fábrica de Flejes" class="logo-documento">
-              <h3 class="fw-bold mb-0" id="abono-negocio-nombre">FERRETERÍA Y FÁBRICA DE FLEJES</h3>
+              <img src="{% if negocio.logo_tiene %}{{ negocio.logo_url }}{% else %}{{ url_for('static', filename=logo_defecto) }}{% endif %}"
+                   alt="Logo del negocio" class="logo-documento">
+              <h3 class="fw-bold mb-0" id="abono-negocio-nombre">{{ negocio.nombre_comercial or negocio.nombre or 'FERRETERÍA Y FÁBRICA DE FLEJES' }}</h3>
               <p class="text-muted mb-0" id="abono-negocio-nit"></p>
               <p class="text-muted mb-0" id="abono-negocio-dir"></p>
               <p class="fw-bold mb-0">RECIBO DE ABONO N° <span id="abono-id"></span></p>
@@ -2467,9 +2479,9 @@
          <div class="modal-body">
            <div id="area-cotizacion-pdf" class="factura-box">
              <div class="text-center mb-2">
-               <img src="{{ url_for('static', filename='logo_ferreteria.jpeg') }}"
-                    alt="Logo Ferretería y Fábrica de Flejes" class="logo-documento">
-               <h3 class="fw-bold mb-0" id="cot-negocio-nombre">FERRETERÍA Y FÁBRICA DE FLEJES</h3>
+               <img src="{% if negocio.logo_tiene %}{{ negocio.logo_url }}{% else %}{{ url_for('static', filename=logo_defecto) }}{% endif %}"
+                    alt="Logo del negocio" class="logo-documento">
+               <h3 class="fw-bold mb-0" id="cot-negocio-nombre">{{ negocio.nombre_comercial or negocio.nombre or 'FERRETERÍA Y FÁBRICA DE FLEJES' }}</h3>
                <p class="text-muted mb-0" id="cot-negocio-nit"></p>
                <p class="text-muted mb-0" id="cot-negocio-dir"></p>
                <p class="fw-bold mb-0">COTIZACIÓN N° <span id="cot-ver-consecutivo"></span></p>
@@ -5954,8 +5966,17 @@
 		const saldo = Number(f.saldo_pendiente || 0);
 		if (saldo > 0) lineas.push('*Saldo pendiente: ' + moneda(saldo) + '*');
 		lineas.push('');
-		lineas.push('¡Gracias por su compra!');
-		lineas.push('Cambios y garantía presentando esta factura dentro de los 8 días.');
+					{% if negocio.mensaje_pie %}
+						{# El mensaje del dueño, línea por línea. Se parte por saltos de
+						   línea porque la tirilla térmica es de ancho fijo: un texto largo
+						   en una sola línea se corta por la mitad y queda ilegible. #}
+						{% for linea in negocio.mensaje_pie.split('\n') %}
+							lineas.push({{ linea | tojson }});
+						{% endfor %}
+					{% else %}
+						lineas.push('¡Gracias por su compra!');
+						lineas.push('Cambios y garantía presentando esta factura dentro de los 8 días.');
+					{% endif %}
 		return lineas.join('\n');
 		}
 

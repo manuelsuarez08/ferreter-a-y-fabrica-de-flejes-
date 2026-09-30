@@ -145,6 +145,13 @@ def qr():
 def configuracion():
     """Ajustes del emisor y del software propio (sin exponer secretos)."""
     conn = get_db()
+    # Sobre el PIN: solo se lee `dian_software_security_code`. La columna
+    # `software_pin` guardaba el mismo dato y queda deprecada (ver la migracion
+    # en `db.py`): preguntar por las dos hacia que el panel dijera "PIN
+    # configurado" cuando el PIN no viajaba al XML.
+    #
+    # Nota: los indices de `fila[...]` de abajo dependen del orden EXACTO de las
+    # columnas de este SELECT. Si se agrega o quita una, hay que recorrer todos.
     fila = conn.execute(
         """
         SELECT COALESCE(dian_ambiente, '2'), COALESCE(dian_prefijo, 'POS'),
@@ -155,11 +162,13 @@ def configuracion():
                COALESCE(certificado_ruta, ''),
                CASE WHEN COALESCE(certificado_clave, '') != '' THEN 1 ELSE 0 END,
                COALESCE(dian_modo, 'habilitacion'),
-               CASE WHEN COALESCE(software_pin, '') != '' THEN 1 ELSE 0 END,
+               CASE WHEN COALESCE(dian_software_security_code, '') != '' THEN 1 ELSE 0 END,
                COALESCE(dian_software_security_code, ''),
                COALESCE(fecha_vencimiento_resolucion, ''), nit, nombre, telefono,
                direccion, COALESCE(codigo_municipio, ''),
-               COALESCE(codigo_departamento, ''), COALESCE(regimen_fiscal, '')
+               COALESCE(codigo_departamento, ''), COALESCE(regimen_fiscal, ''),
+               COALESCE(software_proveedor_nit, ''),
+               COALESCE(software_proveedor_nombre, '')
         FROM configuracion WHERE id = 1
         """
     ).fetchone()
@@ -196,10 +205,16 @@ def configuracion():
         'tiene_pin': bool(fila[13]),
         'software_security_code': fila[14],
         'fecha_vencimiento_resolucion': fila[15],
-        # Datos del emisor (los mismos de Configuración > Negocio).
+        # Datos del emisor (los mismos de Configuración > Negocio). Son los
+        # índices 16-20, en el orden del SELECT de arriba.
         'emisor': {'nit': fila[16], 'nombre': fila[17], 'telefono': fila[18],
                    'direccion': fila[19], 'municipio': fila[20],
                    'departamento': fila[21], 'regimen_fiscal': fila[22]},
+        # Identidad del PROVEEDOR de software (el desarrollador). Se edita aquí
+        # para poder corregirla cuando la DIAN cambia el registro, sin tocar el
+        # código fuente. Es distinto del emisor: son dos actores.
+        'software_proveedor_nit': fila[23],
+        'software_proveedor_nombre': fila[24],
     })
 
 
@@ -231,8 +246,12 @@ def guardar_configuracion():
         'dian_prefijo': ('prefijo', str),
         'clave_tecnica': ('clave_tecnica', str),
         'software_id': ('software_id', str),
-        'software_pin': ('software_pin', str),
+        # `software_pin` ya no se escribe. La columna queda en la base por
+        # compatibilidad, pero escribir en ella solo generaba confusión: el PIN
+        # que se envía al XML es `dian_software_security_code`.
         'dian_software_security_code': ('software_security_code', str),
+        'software_proveedor_nit': ('software_proveedor_nit', str),
+        'software_proveedor_nombre': ('software_proveedor_nombre', str),
         'dian_test_set_id': ('test_set_id', str),
         'dian_modo': ('modo', str),
         'numero_resolucion': ('numero_resolucion', str),

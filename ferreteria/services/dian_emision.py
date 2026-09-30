@@ -65,12 +65,22 @@ from .dian_pos import (
 MAX_INTENTOS_DEFECTO = 8
 
 # ── Leyenda del software de facturación ─────────────────────────────────────
-# El anexo técnico exige identificar el software propio que generó el
-# documento electrónico. Se imprime tambien en la tirilla para que el cliente
-# pueda identificar el software emisor del documento.
+# El anexo técnico exige identificar el software propio que generó el documento
+# electrónico (nombre, versión y empresa proveedora).
+#
+# ANTES eran constantes fijas y además estaban mal: EMPRESA_SOFTWARE traía el
+# nombre de la FERRETERÍA, no el del desarrollador del software. Con eso, la
+# DIAN no podía trazar el documento hasta su emisor de software, que es
+# justamente el objetivo del dato.
+#
+# Ahora la identidad del proveedor se lee de la base de datos
+# (`configuracion.software_proveedor_*`), porque es un dato de la instalación:
+# si el desarrollador cambia su razón social o su NIT, se corrige en la
+# configuración sin tocar el código. Los valores de abajo son solo el respaldo
+# para una instalación que aún no haya cargado esos datos.
 NOMBRE_SOFTWARE = 'POS Ferreteria DIAN'
 VERSION_SOFTWARE = '1.0'
-EMPRESA_SOFTWARE = 'Ferreteria y Fabrica de Flejes'
+EMPRESA_SOFTWARE = ''
 
 
 class ErrorEmision(Exception):
@@ -210,13 +220,15 @@ def _leer_ajustes_dian(cursor):
         """
         SELECT COALESCE(dian_ambiente, '2'), COALESCE(dian_prefijo, 'POS'),
                COALESCE(dian_consecutivo, 1), COALESCE(clave_tecnica, ''),
-               COALESCE(software_id, ''), COALESCE(software_pin, ''),
+               COALESCE(software_id, ''),
                COALESCE(dian_software_security_code, ''),
                COALESCE(certificado_ruta, ''), COALESCE(certificado_clave, ''),
                COALESCE(dian_test_set_id, ''), COALESCE(dian_modo, 'habilitacion'),
                COALESCE(numero_resolucion, ''), COALESCE(prefijo, ''),
                COALESCE(rango_desde, 1), COALESCE(rango_hasta, 0),
-               COALESCE(dian_max_intentos, 8)
+               COALESCE(dian_max_intentos, 8),
+               COALESCE(software_proveedor_nit, ''),
+               COALESCE(software_proveedor_nombre, '')
         FROM configuracion WHERE id = 1
         """
     ).fetchone()
@@ -226,17 +238,27 @@ def _leer_ajustes_dian(cursor):
         'consecutivo': int(fila[2] or 1),
         'clave_tecnica': str(fila[3] or '').strip(),
         'software_id': str(fila[4] or '').strip(),
-        'software_pin': str(fila[5] or '').strip(),
-        'software_security_code': str(fila[6] or '').strip(),
-        'certificado_ruta': str(fila[7] or '').strip(),
-        'certificado_clave': str(fila[8] or ''),
-        'test_set_id': str(fila[9] or '').strip(),
-        'modo': str(fila[10] or 'habilitacion').strip(),
-        'numero_resolucion': str(fila[11] or '').strip(),
-        'prefijo_resolucion': str(fila[12] or '').strip(),
-        'rango_desde': int(fila[13] or 1),
-        'rango_hasta': int(fila[14] or 0),
-        'max_intentos': int(fila[15] or MAX_INTENTOS_DEFECTO),
+        # El PIN viaja desde UNA sola columna. Antes se leían las dos
+        # (`software_pin` y `dian_software_security_code`) y se publicaba la
+        # segunda: si una instalación antigua tenía el PIN solo en la primera, el
+        # panel lo daba por configurado y la firma salía sin PIN. La migración
+        # en `db.py` copia el valor viejo al destino.
+        'software_security_code': str(fila[5] or '').strip(),
+        'certificado_ruta': str(fila[6] or '').strip(),
+        'certificado_clave': str(fila[7] or ''),
+        'test_set_id': str(fila[8] or '').strip(),
+        'modo': str(fila[9] or 'habilitacion').strip(),
+        'numero_resolucion': str(fila[10] or '').strip(),
+        'prefijo_resolucion': str(fila[11] or '').strip(),
+        'rango_desde': int(fila[12] or 1),
+        'rango_hasta': int(fila[13] or 0),
+        'max_intentos': int(fila[14] or MAX_INTENTOS_DEFECTO),
+        # Identidad del PROVEEDOR de software. Son datos del desarrollador, NO
+        # de la ferretería que factura: el anexo técnico los exige en el nodo
+        # SoftwareProvider del XML para poder trazar el documento hasta el
+        # software que lo generó.
+        'software_proveedor_nit': dian_pos.solo_digitos(fila[15]),
+        'software_proveedor_nombre': str(fila[16] or '').strip(),
     }
 
 
@@ -739,8 +761,13 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
         # Forma de pago y referencia de la venta: los necesita
         # `cac:PaymentMeans` en el XML (el anexo la exige siempre).
         'tipo_pago': venta[10], 'id_venta': id_venta,
+        # Leyenda del software: el nombre y la versión son del producto (fijos en
+        # el código), pero la EMPRESA proveedora es del desarrollador y se lee de
+        # la configuración. Antes era una constante con el nombre de la
+        # ferretería, lo que impedía a la DIAN trazar el documento.
         'nombre_software': NOMBRE_SOFTWARE, 'version_software': VERSION_SOFTWARE,
-        'empresa_software': EMPRESA_SOFTWARE,
+        'empresa_software': ajustes['software_proveedor_nombre'] or EMPRESA_SOFTWARE,
+        'nit_proveedor_software': ajustes['software_proveedor_nit'],
     }
     totales = {
         'line_extension_amount': base_total,
@@ -767,7 +794,7 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
     xml_sin_firma = dian_xml.a_texto(raiz)
 
     # ── Firma ────────────────────────────────────────────────────────────────
-    certificado = _cargar_certificado(ajustes)
+    certificado = _cargar_certificado(ajustes, emisor['nit'])
     xml_firmado = dian_firma.firmar_bytes(
         dian_xml.a_bytes(raiz), certificado, id_documento=numero
     )
@@ -814,19 +841,34 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
                              xml_firmado, ajustes, qr)
 
 
-def _cargar_certificado(ajustes):
-    """Carga el certificado de firma desde la configuración."""
+def _cargar_certificado(ajustes, nit_emisor=None):
+    """Carga el certificado de firma desde la configuración y lo CONTRASTA.
+
+    Cargar el .p12 no basta: además hay que confirmar que sea el de esta
+    ferretería. Si el certificado es de otra persona, la DIAN rechaza el
+    documento aunque la firma sea criptográficamente válida, y el rechazo llega
+    tarde y opaco. Por eso la comprobación va aquí, en el único punto por donde
+    pasan los tres tipos de documento (venta, nota crédito y documento soporte).
+    """
     if not ajustes['certificado_ruta']:
         raise ErrorEmision(
             'No hay certificado de firma configurado. Suba el archivo .p12/.pfx '
             'en Configuración > Facturación electrónica DIAN.'
         )
     try:
-        return dian_firma.cargar_certificado(
+        certificado = dian_firma.cargar_certificado(
             ajustes['certificado_ruta'], ajustes['certificado_clave']
         )
     except dian_firma.ErrorCertificado as error:
         raise ErrorEmision(str(error)) from error
+
+    if nit_emisor is not None:
+        try:
+            dian_firma.verificar_identidad_emisor(certificado, nit_emisor)
+        except dian_firma.ErrorIdentidadEmisor as error:
+            raise ErrorEmision(str(error)) from error
+
+    return certificado
 
 
 def _pasar_a_contingencia(cursor, conn, id_documento, id_venta, numero, cuide,
@@ -1111,7 +1153,7 @@ def _enviar_evento(conn, id_documento, datos):
 
     raiz = dian_xml.construir_evento(cuide, numero, tipo_evento, descripcion, emisor)
     try:
-        certificado = _cargar_certificado(ajustes)
+        certificado = _cargar_certificado(ajustes, emisor['nit'])
     except ErrorEmision as error:
         return False, str(error)
 

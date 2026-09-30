@@ -6,6 +6,7 @@ viven en un único punto, cumpliendo el principio de responsabilidad única
 (SRP) y facilitando el testeo.
 """
 import os
+import posixpath
 # Directorio raíz del proyecto (un nivel arriba de este paquete).
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
@@ -90,6 +91,119 @@ if EN_PRODUCCION and not os.environ.get('FERRETERIA_DB'):
         RuntimeWarning,
         stacklevel=2,
     )
+
+# ── Directorio de las instancias de los clientes ───────────────────
+# Con la arquitectura de una base por ferretería (Opción A), el panel del
+# desarrollador crea un archivo .db por cliente. Esos archivos son DATOS, y en
+# Render cualquier ruta fuera del disco montado es efímera: se pierden en cada
+# despliegue.
+#
+# Por eso, en producción, el directorio se pone bajo /var/data (el disco
+# persistente) y NO junto a la base de trabajo: si FERRETERIA_DB ya está
+# apuntando al disco, se reutiliza ese mismo directorio, que es lo coherente
+# (la instancia tiene que sobrevivir exactamente donde vive el resto).
+#
+# El orden de decisión es:
+#   1. FERRETERIA_INSTANCIAS, si está definida (permite cambiar de infraestructura).
+#   2. El directorio de la base de trabajo, si NO es una ruta efímera típica.
+#   3. /var/data/instancias.
+#
+# Importante: la resolución es una función, no una constante, porque las variables
+# de entorno se fijan antes de importar el módulo en el arranque pero en los
+# tests se cambian en caliente. `DIRECTORIO_INSTANCIAS` se fija al importar y es
+# lo que consume el panel.
+DISCO_PERSISTENTE_RENDER = '/var/data'
+
+
+def _normalizar(ruta):
+    """Deja una ruta comparable sin depender del sistema operativo.
+
+    OJO: no se usa `os.path.abspath`. En Windows convierte `/var/data` en
+    `C:\\var\\data`, que deja de coincidir con la ruta persistente y hace que el
+    panel crea que está en un directorio efímero cuando en realidad no lo está.
+    `normpath` normaliza separadores y `..` sin inventar una unidad.
+    """
+    return os.path.normpath(str(ruta or '')).replace('\\', '/').rstrip('/').lower()
+
+
+def _es_ruta_efimera(ruta):
+    """True si la ruta está dentro del contenedor de Render (y se pierde al desplegar)."""
+    if not EN_PRODUCCION:
+        return False
+    return not _normalizar(ruta).startswith(_normalizar(DISCO_PERSISTENTE_RENDER))
+
+
+def resolver_directorio_instancias():
+    """Directorio donde se crean las bases de datos de los clientes.
+
+    Se evalúa en el arranque y en cada provisionamiento, no solo al importar:
+    así una corrección de configuración no exige reiniciar.
+    """
+    explicita = os.environ.get('FERRETERIA_INSTANCIAS')
+    if explicita:
+        return explicita
+
+    # Junto a la base de trabajo, que es lo natural en local. Se devuelve con su
+    # forma NATIVA (separadores y mayúsculas originales): es la ruta que se le
+    # muestra al usuario y la que se le pasa a `os.path`. La normalizada solo se
+    # usa para COMPARAR, nunca para devolver.
+    #
+    # OJO: comparar contra la ruta NORMALIZADA y no con `os.path.dirname`. En
+    # Windows `dirname('/var/data/ferreteria.db')` devuelve '/var/data\\', con
+    # separador mixto, y la comparación con /var/data falla: el panel creería que
+    # está en un directorio efímero cuando en realidad es el disco persistente.
+    if _es_ruta_efimera(DB_NAME):
+        # Estamos en Render y la base de trabajo NO está en el disco persistente:
+        # poner aquí las instancias garantiza perderlas. Se va al disco.
+        return f'{DISCO_PERSISTENTE_RENDER}/instancias'
+
+    # La ruta se devuelve tal como el sistema la entiende, pero sin perder el
+    # estilo POSIX. `posixpath` entra en juego cuando la ruta empieza por '/': en
+    # Linux es lo mismo que `os.path`, y evita que al probar en Windows (donde
+    # `os.path.dirname('/var/data/x.db')` devuelve '\var\data') la ruta del disco
+    # persistente se convierta en una de Windows que no existe en el servidor.
+    if str(DB_NAME).startswith('/'):
+        return posixpath.dirname(str(DB_NAME)) or '/'
+
+    return os.path.dirname(os.path.abspath(DB_NAME))
+
+
+DIRECTORIO_INSTANCIAS = resolver_directorio_instancias()
+
+
+def aviso_persistencia_instancias(directorio=None):
+    """Texto de advertencia si el directorio de instancias se pierde al desplegar.
+
+    No lanza nada: la app debe arrancar igual para que el desarrollador pueda entrar y
+    corregir la configuración. Solo devuelve el texto (o None si todo está bien)
+    para que quien llama lo muestre en los logs y en el panel.
+
+    Returns:
+        str o None. El texto explica dónde quedó el directorio y qué se pierde.
+    """
+    ruta = directorio or resolver_directorio_instancias()
+
+    if _es_ruta_efimera(ruta):
+        return (
+            f'ATENCION: el directorio de instancias es "{ruta}", que en Render '
+            f'es efimero. Las bases de datos de los clientes se perderian en '
+            f'cada despliegue. Configure un disco persistente en '
+            f'{DISCO_PERSISTENTE_RENDER} y apunte '
+            'FERRETERIA_INSTANCIAS (o FERRETERIA_DB) ahi.'
+        )
+
+    # Fuera de Render puede seguir siendo un contenedor o una ruta temporal.
+    # Solo se avisa si además parece efímero por estar en un temporal conocido.
+    if not EN_PRODUCCION and any(
+        ruta.startswith(prefijo) for prefijo in ('/tmp', '/var/folders', 'C:\\Temp')
+    ):
+        return (
+            f'ATENCION: el directorio de instancias es "{ruta}", que parece '
+            'temporal. Las bases de los clientes se perderian al limpiar el '
+            'sistema. Configure FERRETERIA_INSTANCIAS con una ruta permanente.'
+        )
+
+    return None
 
 # Clave secreta de Flask para firmar la sesión.
 SECRET_KEY = os.environ.get('SECRET_KEY', 'clave_secreta_ferreteria')

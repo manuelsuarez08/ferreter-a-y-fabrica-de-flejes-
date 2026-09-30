@@ -322,6 +322,14 @@ def _construir_extensiones(documento, extras):
         if documento.get('empresa_software'):
             empresa = ET.SubElement(software_ext, f'{{{NS_STS}}}SoftwareProvider')
             empresa.text = str(documento['empresa_software'])
+        # El NIT del proveedor es lo que permite a la DIAN trazar el documento
+        # hasta el desarrollador del software. El anexo lo exige dentro del
+        # bloque SoftwareInfo; sin él la leyenda queda incompleta y el
+        # documento puede ser rechazado.
+        if documento.get('nit_proveedor_software'):
+            nit_proveedor = ET.SubElement(software_ext,
+                                          f'{{{NS_STS}}}SoftwareProviderID')
+            nit_proveedor.text = str(documento['nit_proveedor_software'])
 
     return extensiones
 

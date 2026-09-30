@@ -42,3 +42,30 @@ def admin_required(view):
             return jsonify({'error': 'Acceso denegado. Solo el administrador puede realizar esta acción.'}), 403
         return view(*args, **kwargs)
     return wrapped_view
+
+
+# El rol del desarrollador. Deliberadamente NO es 'admin': un admin de ferretería
+# administra SU negocio, no el padrón de clientes de los demás. Mezclarlos haría
+# que un cliente pudiera suspender o leer los datos de otro cliente, que es
+# justamente lo que la arquitectura de una base por ferretería evita.
+ROL_SUPERADMIN = 'superadmin'
+
+
+def superadmin_required(view):
+    """Exige rol de desarrollador (SuperAdmin).
+
+    A diferencia de `login_required` y `admin_required`, no basta con tener
+    sesión: un usuario sin sesión recibe 401 y un rol incorrecto recibe 403. La
+    diferencia importa en la auditoría: "no estaba conectado" y "estaba
+    conectado pero no le correspondía" son hechos distintos.
+    """
+    @wraps(view)
+    def wrapped_view(*args, **kwargs):
+        if 'usuario' not in session:
+            return jsonify({'error': 'Debe iniciar sesión'}), 401
+        if session.get('rol') != ROL_SUPERADMIN:
+            return jsonify({
+                'error': 'Acceso denegado. Esta pantalla es del desarrollador del software.',
+            }), 403
+        return view(*args, **kwargs)
+    return wrapped_view

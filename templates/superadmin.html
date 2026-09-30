@@ -1,0 +1,417 @@
+<!DOCTYPE html>
+<html lang="es" translate="no">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <meta name="google" content="notranslate">
+    <title>Panel del Desarrollador - Sistema Ferretería</title>
+    <link href="{{ url_for('static', filename='vendor/bootstrap.min.css') }}" rel="stylesheet">
+    <!-- El bundle va en el <head>, NO al final del body: el script de esta página
+         usa `bootstrap.Modal` para abrir el detalle, y si la librería se cargara
+         después el modal no existiría todavía en el momento de invocarlo. -->
+    <script src="{{ url_for('static', filename='vendor/bootstrap.bundle.min.js') }}"></script>
+    <style>
+        body {
+            background-color: #f4f6f9;
+            margin: 0;
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+        }
+        /* Cabecera oscura: esta pantalla no es de una ferretería, es del
+           desarrollador. El color la distingue de un vistazo para no confundirla
+           con la pantalla de un cliente. */
+        .cabecera-panel {
+            background-color: #1F4E79;
+            color: #ffffff;
+            padding: 18px 0;
+        }
+        .cabecera-panel h1 { font-size: 20px; margin: 0; }
+        .tarjeta { padding: 20px; }
+        .cifra { font-size: 30px; font-weight: bold; line-height: 1; }
+        .cifra-label { font-size: 12px; color: #6c757d; text-transform: uppercase; }
+        table td, table th { vertical-align: middle; }
+        /* Una fila que no puede operar se marca en rojo claro. Se lee sin
+           leer una columna: el color es la alerta. */
+        .fila-problema { background-color: #FFF2F2; }
+        .estado-badge { font-size: 11px; padding: 4px 8px; border-radius: 10px; }
+        .estado-activo { background: #E2EFDA; color: #1E6B2E; }
+        .estado-suspendido { background: #FFF2CC; color: #8A6100; }
+        .estado-cancelado { background: #F8D7DA; color: #9C0006; }
+        .marca-ok { color: #1E6B2E; }
+        .marca-falta { color: #9C0006; }
+        #mensaje { display: none; }
+        .contrasena-generada {
+            font-family: monospace;
+            background: #f4f6f9;
+            padding: 2px 6px;
+            border-radius: 4px;
+        }
+    </style>
+</head>
+<body>
+
+<div class="cabecera-panel">
+    <div class="container">
+        <div class="d-flex justify-content-between align-items-center">
+            <div>
+                <h1>Panel del Desarrollador</h1>
+                <small style="opacity:.8">Clientes, instancias y licencias</small>
+            </div>
+            <div class="text-right">
+                <small style="opacity:.8">Sesión de</small><br>
+                <strong>{{ usuario }}</strong>
+            </div>
+        </div>
+    </div>
+</div>
+
+<div class="container py-4">
+
+    <div id="mensaje" class="alert" role="alert"></div>
+
+    <!-- Aviso de persistencia. Aparece solo cuando el directorio de instancias
+         se perderia al desplegar. Va arriba de todo porque si aparece, hay una
+         base de cliente que puede desaparecer sin avisar. -->
+    <div id="aviso-persistencia" class="alert alert-danger" style="display:none"
+         role="alert"></div>
+
+    <!-- ── Cifras ────────────────────────────────────────────── -->
+    <div class="row mb-4" id="fila-cifras">
+        <div class="col-md-3 mb-3">
+            <div class="card tarjeta h-100">
+                <div class="cifra" id="cifra-total">—</div>
+                <div class="cifra-label">Clientes</div>
+            </div>
+        </div>
+        <div class="col-md-3 mb-3">
+            <div class="card tarjeta h-100">
+                <div class="cifra marca-ok" id="cifra-operativos">—</div>
+                <div class="cifra-label">Operativos</div>
+            </div>
+        </div>
+        <div class="col-md-3 mb-3">
+            <div class="card tarjeta h-100">
+                <div class="cifra" style="color:#8A6100" id="cifra-suspendidos">—</div>
+                <div class="cifra-label">Suspendidos</div>
+            </div>
+        </div>
+        <div class="col-md-3 mb-3">
+            <div class="card tarjeta h-100">
+                <div class="cifra marca-falta" id="cifra-atencion">—</div>
+                <div class="cifra-label">Requieren atención</div>
+            </div>
+        </div>
+    </div>
+
+    <div class="row">
+        <!-- ── Listado ────────────────────────────────────────── -->
+        <div class="col-lg-8 mb-4">
+            <div class="card">
+                <div class="card-header d-flex justify-content-between align-items-center">
+                    <strong>Ferreterías</strong>
+                    <select id="filtro-estado" class="form-control form-control-sm" style="width:auto">
+                        <option value="">Todas</option>
+                        <option value="activo">Activas</option>
+                        <option value="suspendido">Suspendidas</option>
+                        <option value="cancelado">Canceladas</option>
+                    </select>
+                </div>
+                <div class="card-body">
+                    <p class="text-muted small mb-0">
+                        Las que no pueden operar aparecen arriba: son las que necesitan una acción.
+                    </p>
+                </div>
+                <div class="table-responsive">
+                    <table class="table table-sm mb-0" id="tabla-ferreterias">
+                        <thead class="table-light">
+                            <tr>
+                                <th>Nombre</th>
+                                <th>NIT</th>
+                                <th>Dueño</th>
+                                <th>Estado</th>
+                                <th>Archivo</th>
+                                <th style="width:1%"></th>
+                            </tr>
+                        </thead>
+                        <tbody></tbody>
+                    </table>
+                </div>
+            </div>
+        </div>
+
+        <!-- ── Alta ───────────────────────────────────────────── -->
+        <div class="col-lg-4 mb-4">
+            <div class="card mb-4">
+                <div class="card-header"><strong>Nueva ferretería</strong></div>
+                <div class="card-body">
+                    <p class="small text-muted">
+                        Copia la base semilla, siembra los datos del negocio y deja creado el
+                        usuario del dueño. Las claves de la DIAN quedan vacías: las carga el
+                        cliente desde su propio panel.
+                    </p>
+                    <form id="form-nueva">
+                        <div class="form-group">
+                            <label>Nombre comercial *</label>
+                            <input type="text" class="form-control form-control-sm" id="n-nombre"
+                                   required placeholder="Ferretería El Tornillo">
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group col-8">
+                                <label>NIT</label>
+                                <input type="text" class="form-control form-control-sm" id="n-nit"
+                                       placeholder="900123456">
+                            </div>
+                            <div class="form-group col-4">
+                                <label>DV</label>
+                                <input type="text" class="form-control form-control-sm" id="n-dv"
+                                       maxlength="1">
+                            </div>
+                        </div>
+                        <div class="form-group">
+                            <label>Dirección</label>
+                            <input type="text" class="form-control form-control-sm" id="n-direccion">
+                        </div>
+                        <div class="form-row">
+                            <div class="form-group col-6">
+                                <label>Teléfono</label>
+                                <input type="text" class="form-control form-control-sm" id="n-telefono">
+                            </div>
+                            <div class="form-group col-6">
+                                <label>Correo</label>
+                                <input type="email" class="form-control form-control-sm" id="n-email">
+                            </div>
+                        </div>
+                        <hr>
+                        <div class="form-group">
+                            <label>Usuario del dueño *</label>
+                            <input type="text" class="form-control form-control-sm" id="n-usuario" required>
+                        </div>
+                        <div class="form-group">
+                            <label>Contraseña inicial *</label>
+                            <input type="text" class="form-control form-control-sm" id="n-clave" required
+                                   placeholder="El cliente la cambia al entrar">
+                            <small class="text-muted">Se muestra en claro a propósito: es una
+                                contraseña temporal de un solo uso.</small>
+                        </div>
+                        <div class="form-group">
+                            <label>Nota interna</label>
+                            <textarea class="form-control form-control-sm" id="n-notas" rows="2"></textarea>
+                        </div>
+                        <button type="submit" class="btn btn-primary btn-sm btn-block">
+                            Crear instancia
+                        </button>
+                    </form>
+                </div>
+            </div>
+
+            <div class="card" id="tarjeta-huerfanos" style="display:none">
+                <div class="card-header"><strong>Instancias sin registrar</strong></div>
+                <div class="card-body">
+                    <p class="small text-muted mb-2">
+                        Archivos <code>.db</code> que no están en el padrón. No se adoptan
+                        automáticamente: puede que ya estén facturando.
+                    </p>
+                    <div id="lista-huerfanos" class="small"></div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- ── Detalle / verificación ───────────────────────────────── -->
+<div class="modal fade" id="modal-detalle" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="detalle-titulo">Detalle</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal"></button>
+            </div>
+            <div class="modal-body" id="detalle-cuerpo"></div>
+        </div>
+    </div>
+</div>
+
+<script>
+const $ = (sel) => document.querySelector(sel);
+
+function avisar(texto, tipo = 'info') {
+    const caja = $('#mensaje');
+    caja.className = 'alert alert-' + tipo;
+    caja.textContent = texto;
+    caja.style.display = 'block';
+    window.scrollTo(0, 0);
+    if (tipo === 'success') setTimeout(() => caja.style.display = 'none', 5000);
+}
+
+async function api(ruta, opciones = {}) {
+    const r = await fetch(ruta, {
+        headers: {'Content-Type': 'application/json'},
+        ...opciones,
+    });
+    const datos = await r.json().catch(() => ({error: 'Respuesta no reconocida'}));
+    if (!r.ok) throw new Error(datos.error || ('Error ' + r.status));
+    return datos;
+}
+
+function badge(estado) {
+    return `<span class="estado-badge estado-${estado}">${estado}</span>`;
+}
+
+async function cargar() {
+    const filtro = $('#filtro-estado').value;
+    const url = '/api/superadmin/ferreterias' + (filtro ? '?estado=' + filtro : '');
+    const datos = await api(url);
+    const r = datos.resumen;
+
+    $('#cifra-total').textContent = r.total;
+    $('#cifra-operativos').textContent = r.operativos;
+    $('#cifra-suspendidos').textContent = r.por_estado.suspendido || 0;
+    $('#cifra-atencion').textContent = r.requiere_atencion;
+
+    // El aviso de persistencia se muestra aunque el listado esté bien: es una
+    // amenaza para el futuro, no un fallo actual.
+    if (r.aviso_persistencia) {
+        const caja = $('#aviso-persistencia');
+        caja.innerHTML = r.aviso_persistencia
+            + `<br><small>Directorio actual: <code>${r.directorio_instancias}</code></small>`;
+        caja.style.display = 'block';
+    } else {
+        $('#aviso-persistencia').style.display = 'none';
+    }
+
+    const cuerpo = $('#tabla-ferreterias tbody');
+    if (!datos.ferreterias.length) {
+        cuerpo.innerHTML = '<tr><td colspan="6" class="text-muted text-center py-3">'
+            + 'No hay ferreterías en este filtro.</td></tr>';
+    } else {
+        cuerpo.innerHTML = datos.ferreterias.map(f => {
+            // La fila se pinta roja cuando el cliente figura activo pero su
+            // archivo no está: es un cliente que no puede entrar y no se ve
+            // solo leyendo el estado.
+            const problema = !f.archivo_existe;
+            const archivo = problema
+                ? '<span class="marca-falta">falta el archivo</span>'
+                : `<code class="small">${f.archivo}</code>`;
+            return `<tr class="${problema ? 'fila-problema' : ''}">
+                <td>${f.nombre}</td>
+                <td>${f.nit || '—'}</td>
+                <td>${f.usuario_dueno}</td>
+                <td>${badge(f.estado)}</td>
+                <td>${archivo}</td>
+                <td class="text-nowrap">
+                    <button class="btn btn-sm btn-outline-secondary"
+                            onclick="verDetalle(${f.id})">Ver</button>
+                    ${f.estado === 'activo'
+                        ? `<button class="btn btn-sm btn-outline-warning ml-1"
+                               onclick="cambiarEstado(${f.id}, 'suspendido')">Suspender</button>`
+                        : `<button class="btn btn-sm btn-outline-success ml-1"
+                               onclick="cambiarEstado(${f.id}, 'activo')">Reactivar</button>`}
+                </td>
+            </tr>`;
+        }).join('');
+    }
+
+    if (r.huerfanos.length) {
+        $('#tarjeta-huerfanos').style.display = '';
+        $('#lista-huerfanos').innerHTML = r.huerfanos
+            .map(h => `<div><code>${h.archivo}</code> <span class="text-muted">${h.tamano_kb} KB</span></div>`)
+            .join('');
+    } else {
+        $('#tarjeta-huerfanos').style.display = 'none';
+    }
+}
+
+async function cambiarEstado(id, estado) {
+    const verbos = {
+        'suspendido': 'Suspender el acceso impide que el dueño entre, pero NO borra sus datos ni su base. ¿Suspender?',
+        'activo': '¿Reactivar el acceso?',
+    };
+    if (!confirm(verbos[estado])) return;
+    try {
+        const d = await api('/api/superadmin/ferreterias/' + id, {
+            method: 'PUT',
+            body: JSON.stringify({estado}),
+        });
+        avisar(d.mensaje, 'success');
+        cargar();
+    } catch (e) {
+        avisar(e.message, 'danger');
+    }
+}
+
+async function verDetalle(id) {
+    const cuerpo = $('#detalle-cuerpo');
+    cuerpo.innerHTML = '<p class="text-muted">Verificando…</p>';
+    $('#detalle-titulo').textContent = 'Detalle';
+    new bootstrap.Modal('#modal-detalle').show();
+
+    try {
+        const v = await api('/api/superadmin/ferreterias/' + id + '/verificar');
+        const h = await api('/api/superadmin/ferreterias/' + id + '/historial');
+
+        const pendientes = v.pendiente_dian.length
+            ? '<ul class="mb-0">' + v.pendiente_dian
+                .map(p => `<li>${p}</li>`).join('') + '</ul>'
+            : '<span class="marca-ok">Todo configurado.</span>';
+
+        cuerpo.innerHTML = `
+            <dl class="row mb-0 small">
+                <dt class="col-3">Ferretería</dt><dd class="col-9">${v.ferreteria}</dd>
+                <dt class="col-3">Archivo</dt><dd class="col-9"><code>${v.archivo}</code></dd>
+                <dt class="col-3">Integridad</dt>
+                <dd class="col-9">${v.integridad === 'ok'
+                    ? '<span class="marca-ok">Correcta</span>'
+                    : '<span class="marca-falta">' + v.integridad + '</span>'}</dd>
+                <dt class="col-3">Licencia</dt><dd class="col-9">${badge(v.estado_licencia)}</dd>
+                <dt class="col-3">Ambiente DIAN</dt>
+                <dd class="col-9">${v.ambiente === '2' ? 'Habilitación (pruebas)' : 'PRODUCCIÓN'}</dd>
+                <dt class="col-3">Proveedor software</dt>
+                <dd class="col-9">${v.proveedor_software || '<span class="marca-falta">sin configurar</span>'}</dd>
+                <dt class="col-3">Usuarios</dt>
+                <dd class="col-9">${v.usuarios.map(u => u.usuario + ' (' + u.rol + ')').join(', ') || '—'}</dd>
+                <dt class="col-3">Pendiente DIAN</dt><dd class="col-9">${pendientes}</dd>
+            </dl>
+            <hr>
+            <strong class="small">Historial</strong>
+            <div class="small mt-1">${h.historial.length
+                ? h.historial.map(x => `<div>${x.fecha} — ${x.accion}${x.detalle ? ': ' + x.detalle : ''}</div>`).join('')
+                : '<span class="text-muted">Sin movimientos.</span>'}</div>`;
+    } catch (e) {
+        cuerpo.innerHTML = `<div class="alert alert-warning mb-0">${e.message}</div>`;
+    }
+}
+
+$('#form-nueva').addEventListener('submit', async (evento) => {
+    evento.preventDefault();
+    const cuerpo = {
+        nombre: $('#n-nombre').value,
+        nit: $('#n-nit').value,
+        digito_verificacion: $('#n-dv').value,
+        direccion: $('#n-direccion').value,
+        telefono: $('#n-telefono').value,
+        email: $('#n-email').value,
+        usuario_dueno: $('#n-usuario').value,
+        clave_dueno: $('#n-clave').value,
+        notas: $('#n-notas').value,
+    };
+    try {
+        const d = await api('/api/superadmin/ferreterias', {
+            method: 'POST',
+            body: JSON.stringify(cuerpo),
+        });
+        avisar(d.mensaje, 'success');
+        // Los avisos de una siembra incompleta se muestran aparte: no impiden
+        // operar, pero el NIT del proveedor sin escribir significa que el XML
+        // saldría incompleto.
+        (d.avisos || []).forEach(a => avisar(a, 'warning'));
+        event.target.reset();
+        cargar();
+    } catch (e) {
+        avisar(e.message, 'danger');
+    }
+});
+
+$('#filtro-estado').addEventListener('change', cargar);
+cargar();
+</script>
+</body>
+</html>
