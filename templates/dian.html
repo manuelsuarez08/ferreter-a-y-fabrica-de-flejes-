@@ -1,4 +1,4 @@
-<!DOCTYPE html>
+﻿<!DOCTYPE html>
 <html lang="es">
 <head>
   <meta charset="UTF-8">
@@ -187,6 +187,34 @@
           </button>
         </form>
       </div>
+    </div>
+  </div>
+
+  <!-- ── Series de numeración (una por tipo de documento) ───────────────── -->
+  <!--
+    La DIAN autoriza cada tipo de documento con su propia resolución y su propio
+    rango. Un POS de ferretería necesita DOS a la vez: el Documento Equivalente
+    del mostrador y la Factura Electrónica que pide un maestro de obra. Por eso
+    la numeración no puede ser un solo prefijo global.
+
+    Mientras no exista resolución real se configura aquí un prefijo de pruebas
+    (SETP + su TestSetId) y se deja el rango en 0 para que no limite. Cuando la
+    DIAN entregue la resolución por el portal (MUISCA), se reemplazan estos
+    mismos datos: no hay que tocar el código.
+  -->
+  <div class="tarjeta-dato p-3 mb-3">
+    <div class="d-flex flex-wrap justify-content-between align-items-center gap-2 mb-2">
+      <h6 class="mb-0">Series de numeración (POS / FV / NC)</h6>
+      <button type="button" class="btn btn-outline-primary btn-sm"
+              onclick="cargarSeries()">🔄 Actualizar</button>
+    </div>
+    <p class="small text-muted" id="series-nota">
+      Cada tipo de documento tiene su prefijo, resolución y rango. En pruebas use
+      un prefijo <code>SETP</code> seguido de su TestSetId; deje el rango en 0
+      mientras no tenga resolución.
+    </p>
+    <div id="series-panel" class="row g-3">
+      <div class="col-12 text-muted small">Cargando series…</div>
     </div>
   </div>
 
@@ -494,9 +522,133 @@ async function probarConexion() {
   }
 }
 
+// ── Series de numeración (una por tipo de documento) ─────────────────────
+function pintarSeries(series) {
+  const panel = document.getElementById('series-panel');
+  if (!panel) return;
+  if (!series.length) {
+    panel.innerHTML = '<div class="col-12 text-muted small">'
+      + 'No hay series configuradas.</div>';
+    return;
+  }
+  const soloAdmin = ROL_ACTUAL === 'admin';
+  panel.innerHTML = series.map(s => {
+    const badge = s.operativa
+      ? '<span class="badge bg-success">Lista</span>'
+      : `<span class="badge bg-danger" title="${escapar(s.motivo_bloqueo)}">Bloqueada</span>`;
+    const restante = s.rango_hasta
+      ? `${s.numeros_restantes} números disponibles`
+      : '<span class="text-muted">sin límite (rango 0)</span>';
+    const disabled = soloAdmin ? '' : 'disabled';
+    return `
+      <div class="col-md-4">
+        <div class="card h-100">
+          <div class="card-header d-flex justify-content-between align-items-center py-2">
+            <strong class="small">${escapar(s.descripcion)}</strong>
+            ${badge}
+          </div>
+          <div class="card-body p-2">
+            <div class="small mb-1">Prefijo
+              <input class="form-control form-control-sm d-inline-block w-50 ms-1"
+                     id="ser-${s.tipo_documento}-prefijo" value="${escapar(s.prefijo)}" ${disabled}>
+            </div>
+            <div class="small mb-1">Resolución
+              <input class="form-control form-control-sm d-block mt-1"
+                     id="ser-${s.tipo_documento}-numero_resolucion"
+                     value="${escapar(s.numero_resolucion)}" placeholder="Ej. 18764021500001" ${disabled}>
+            </div>
+            <div class="row g-1 small mb-1">
+              <div class="col-6">Desde
+                <input type="number" class="form-control form-control-sm"
+                       id="ser-${s.tipo_documento}-rango_desde" value="${s.rango_desde}" ${disabled}>
+              </div>
+              <div class="col-6">Hasta
+                <input type="number" class="form-control form-control-sm"
+                       id="ser-${s.tipo_documento}-rango_hasta" value="${s.rango_hasta}"
+                       title="0 = sin límite" ${disabled}>
+              </div>
+            </div>
+            <div class="small mb-1">Vencimiento
+              <input type="date" class="form-control form-control-sm"
+                     id="ser-${s.tipo_documento}-fecha_vencimiento"
+                     value="${escapar(s.fecha_vencimiento)}" ${disabled}>
+            </div>
+            <div class="small mb-1">Clave técnica
+              <input type="password" class="form-control form-control-sm"
+                     id="ser-${s.tipo_documento}-clave_tecnica"
+                     placeholder="${s.clave_tecnica ? '•••••• (guardada)' : 'Sin configurar'}"
+                     value="" ${disabled}>
+            </div>
+            <div class="small text-muted mt-2">
+              Siguiente: <strong>${escapar(s.siguiente_numero)}</strong><br>${restante}
+            </div>
+            <div class="form-check form-switch mt-2">
+              <input class="form-check-input" type="checkbox"
+                     id="ser-${s.tipo_documento}-activa"
+                     ${s.activa ? 'checked' : ''} ${disabled}>
+              <label class="form-check-label small" for="ser-${s.tipo_documento}-activa">
+                Serie activa
+              </label>
+            </div>
+            <button type="button" class="btn btn-primary btn-sm w-100 mt-2"
+                    onclick="guardarSerie('${s.tipo_documento}')" ${disabled}>
+              Guardar ${s.tipo_documento}
+            </button>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+}
+
+async function cargarSeries() {
+  const panel = document.getElementById('series-panel');
+  try {
+    const r = await api('/api/dian/series');
+    pintarSeries(r.series || []);
+    if (r.nota) {
+      const n = document.getElementById('series-nota');
+      if (n) n.innerHTML = escapar(r.nota) + ' Prefijo sugerido: <code>'
+        + escapar(r.sugerencia_pruebas) + '</code>';
+    }
+  } catch (error) {
+    if (panel) {
+      panel.innerHTML = `<div class="col-12 text-danger small">${escapar(error.message)}</div>`;
+    }
+  }
+}
+
+async function guardarSerie(tipo) {
+  const v = (campo) => {
+    const el = document.getElementById(`ser-${tipo}-${campo}`);
+    return el ? el.value : '';
+  };
+  const activa = document.getElementById(`ser-${tipo}-activa`);
+  try {
+    await api(`/api/dian/series/${tipo}`, {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        prefijo: v('prefijo'),
+        numero_resolucion: v('numero_resolucion'),
+        rango_desde: v('rango_desde') || 1,
+        rango_hasta: v('rango_hasta') || 0,
+        fecha_vencimiento: v('fecha_vencimiento'),
+        clave_tecnica: v('clave_tecnica'),
+        // La clave técnica solo se envía si se escribió algo: si el usuario no
+        // la digita, no se borra la que ya estaba configurada.
+        activa: activa ? activa.checked : false,
+      }),
+    });
+    avisar(`Serie ${tipo} guardada.`);
+    await cargarSeries();
+  } catch (error) {
+    avisar(error.message, true);
+  }
+}
+
 async function cargarTodo() {
   try {
-    await Promise.all([cargarEstado(), cargarConfiguracion(), cargarDocumentos()]);
+    await Promise.all([cargarEstado(), cargarConfiguracion(), cargarSeries(), cargarDocumentos()]);
   } catch (error) {
     avisar(error.message, true);
   }

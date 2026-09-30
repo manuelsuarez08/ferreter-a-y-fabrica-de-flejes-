@@ -418,6 +418,19 @@
                 <option value="credito">Crédito</option>
               </select>
             </div>
+            <div class="col-md-5">
+              <label for="select-tipo-documento-dian" class="form-label fw-bold">
+                Tipo de Documento DIAN:
+              </label>
+              <select id="select-tipo-documento-dian" class="form-select"
+                      onchange="avanzarTipoDocumentoDian()">
+                <option value="POS" selected>Documento Equivalente POS (consumidor final)</option>
+                <option value="FV">Factura Electrónica de Venta (empresa / maestro de obra)</option>
+              </select>
+              <small class="text-muted" id="nota-tipo-documento-dian">
+                Para la venta de mostrador. No requiere datos del cliente.
+              </small>
+            </div>
             <div class="col-md-3" id="bloque-direccion-venta">
               <label for="input-direccion-venta" class="form-label fw-bold">Dirección de Entrega:</label>
               <input type="text" id="input-direccion-venta" class="form-control" placeholder="Dirección de envío/obra" spellcheck="true">
@@ -3522,6 +3535,10 @@
         tsCliente.setValue(String(CLIENTE_MOSTRADOR_ID), true);
         document.getElementById('input-direccion-venta').value = '';
       }
+      // Y vuelve al documento equivalente, que es el caso mayoritario.
+      const selDoc = document.getElementById('select-tipo-documento-dian');
+      if (selDoc) selDoc.value = 'POS';
+      avanzarTipoDocumentoDian();
     }
 
     // ── Selector tipo de entrega ──────────────────────────────────────────────
@@ -3615,6 +3632,50 @@
       }
     }
 
+    // ══ Tipo de documento DIAN: POS o Factura Electrónica ══════════
+    // El POS emite Documento Equivalente (POS) para la venta de mostrador y
+    // Factura Electrónica (FV) cuando el comprador es un maestro de obra o una
+    // empresa y necesita el documento para deducir impuestos.
+    //
+    // La diferencia no es solo el nombre: cada una tiene su propia serie de
+    // numeración (prefijo, resolución y rango autorizados por la DIAN), y la FV
+    // exige identificar al adquirente. El backend valida esto y rechaza con un
+    // mensaje claro si el cliente no tiene cédula o NIT.
+    const NIT_CONSUMIDOR_FINAL = '222';
+
+    function esConsumidorFinal(cliente) {
+      if (!cliente) return true;
+      const digitos = String(cliente.cedula_nit || '').replace(/\D/g, '');
+      return !digitos || digitos === NIT_CONSUMIDOR_FINAL || digitos === '222222222222';
+    }
+
+    // Aviso inmediato al cambiar el selector, antes de cobrar. Es mucho mejor
+    // que descubrirlo cuando la DIAN rechaza el documento.
+    function avanzarTipoDocumentoDian() {
+      const tipo = document.getElementById('select-tipo-documento-dian')?.value || 'POS';
+      const nota = document.getElementById('nota-tipo-documento-dian');
+      if (!nota) return;
+
+      if (tipo === 'FV') {
+        const idCliente = document.getElementById('select-cliente')?.value;
+        const cliente = clientesLista.find(c => String(c.id) === String(idCliente));
+        if (esConsumidorFinal(cliente)) {
+          nota.className = 'text-danger fw-bold';
+          nota.innerHTML = '⚠️ Factura Electrónica requiere que el cliente tenga '
+            + '<strong>cédula o NIT</strong>. Seleccione un cliente registrado '
+            + 'o use Documento POS.';
+        } else {
+          nota.className = 'text-success';
+          nota.innerHTML = 'Factura Electrónica para <strong>'
+            + escapeHtml(cliente.nombre) + '</strong>. Se emitirá con su NIT y '
+            + 'el número de la serie FV.';
+        }
+      } else {
+        nota.className = 'text-muted';
+        nota.textContent = 'Para la venta de mostrador. No requiere datos del cliente.';
+      }
+    }
+
     async function procesarVenta() {
       if (carrito.length === 0) {
         alert('Agregue al menos un producto a la venta.');
@@ -3635,10 +3696,24 @@
         tipo_pago:     document.getElementById('select-tipo-pago').value,
         direccion:     direccion,
         tipo_entrega:  tipoEntrega,
+        // POS (documento equivalente) o FV (factura electrónica).
+        tipo_documento_dian: document.getElementById('select-tipo-documento-dian')?.value || 'POS',
         // Notas internas: formaletas, entregas parciales, acuerdos con el cliente.
         observaciones: (document.getElementById('input-observaciones-venta')?.value || '').trim(),
         items: carrito.map(i => ({ id_producto: i.id_producto, cantidad: i.cantidad, precio_unitario: i.precio }))
       };
+
+      // Se avisa antes de enviar si la Factura Electrónica no tiene adquirente:
+      // el servidor lo rechaza, pero avisar aquí evita el viaje de ida y vuelta.
+      if (payload.tipo_documento_dian === 'FV') {
+        const cliente = clientesLista.find(c => String(c.id) === String(payload.id_cliente));
+        if (esConsumidorFinal(cliente)) {
+          alert('Para emitir Factura Electrónica el cliente debe tener cédula o NIT.\n\n'
+            + 'Registre sus datos con el botón "+ Cliente" o use Documento POS.');
+          document.getElementById('select-cliente')?.focus();
+          return;
+        }
+      }
 
       const res = await fetch('/api/ventas', {
         method: 'POST',

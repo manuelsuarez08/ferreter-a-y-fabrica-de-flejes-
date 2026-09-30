@@ -1,0 +1,50 @@
+Selector POS / Factura Electrónica con series de numeración independientes
+
+Una ferretería necesita emitir DOS tipos de documento desde el mismo mostrador:
+el Documento Equivalente POS para la venta de mostrador, y la Factura
+Electrónica de Venta cuando el comprador es un maestro de obra o una empresa
+y necesita el documento para descontar impuestos. Eso era imposible: la
+numeración vivía en columnas sueltas de `configuracion` (dian_prefijo,
+dian_consecutivo, prefijo, rango_desde...), con un solo prefijo y un solo
+consecutivo. Con un consecutivo global, emitir un POS movía el número de las
+facturas, y la DIAN rechaza dos documentos con el mismo número.
+
+TODO ES DATO, NO CÓDIGO. No hay resolución real todavía, así que:
+
+- Tabla `series_dian`: una fila por tipo de documento (POS, FV, NC) con su
+  prefijo, consecutivo, número de resolución, rango autorizado, fecha de
+  vencimiento y clave técnica.
+- Panel en la página DIAN para editarlas. Con prefijo de pruebas (SETP +
+  TestSetId) y rango 0 se opera sin resolución; cuando la DIAN entregue la
+  real por el portal (MUISCA) se cambian esos mismos datos.
+- Se seedearon las tres series, de modo que cambiar de tipo de documento no
+  requiere configurar nada más.
+
+`ferreteria/services/dian_series.py` centraliza leer, reservar y actualizar.
+La clave técnica puede vivir en la serie (lo correcto: es la del ambiente en
+que se habilitó esa numeración) con respaldo en la configuración global.
+
+El POS
+- Selector junto al tipo de pago. Si se elige FV con un cliente sin cédula o
+  NIT, se avisa en pantalla ANTES de cobrar y el backend rechaza con 400. El
+  cliente mostrador (documento 222) es el consumidor final genérico: una FV a
+  su nombre no sirve para deducir.
+- Nueva columna `ventas.tipo_documento_dian`; decide la serie, el prefijo, el
+  InvoiceTypeCode del XML y el tipo que entra en el CUIDE. Las ventas
+  antiguas son POS.
+- Al cobrar se devuelve a POS, que es el caso mayoritario.
+
+Nota crédito
+- El filtro del documento original era `tipo_documento = 'POS'`, lo que
+  dejaba fuera las facturas electrónicas: la NC de una FV no encontraba qué
+  corregir. Ahora acepta POS y FV, y sigue excluyendo la propia NC (una nota
+  no se corrige con otra nota).
+
+Verificación
+- 216 pruebas en verde (18 nuevas en tests/test_series_dian.py).
+- En navegador: el selector aparece, avisa al elegir FV sin NIT, el panel
+  muestra las 3 series, configurar SETP990000000 responde 200 con el siguiente
+  número ya calculado, y un prefijo inventado se rechaza con 400.
+- tests/conftest.py nuevo: fija la base temporal antes de que cualquier módulo
+  de ferreteria resuelva DB_NAME. Sin eso, según el orden de recolección, un
+  módulo podía apuntar a la base real del proyecto y escribir sobre ella.

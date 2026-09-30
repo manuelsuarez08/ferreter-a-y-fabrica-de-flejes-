@@ -44,7 +44,7 @@ def _listar_ventas():
                COALESCE(v.direccion_cliente, c.direccion, ''), v.anulada, v.motivo_anulacion,
                v.tipo_entrega, v.numero_pedido,
                COALESCE(v.numero_dian, ''), COALESCE(v.dian_estado, 'sin_emitir'),
-               COALESCE(v.observaciones, '')
+               COALESCE(v.observaciones, ''), COALESCE(v.tipo_documento_dian, 'POS')
         FROM ventas v
         JOIN clientes c ON v.id_cliente = c.id
         LEFT JOIN detalle_ventas dv ON v.id = dv.id_venta
@@ -67,6 +67,8 @@ def _listar_ventas():
         # Estado fiscal del documento electronico (para el badge del historial).
         "numero_dian": r[15] or "", "dian_estado": r[16] or "sin_emitir",
         "observaciones": r[17] or "",
+        # POS = Documento Equivalente; FV = Factura Electrónica de Venta.
+        "tipo_documento_dian": r[18] or "POS",
     } for r in rows])
 
 
@@ -84,6 +86,18 @@ def _listar_ventas():
 # "Flejes tubulares" o "No-fleje" y les crearia una orden que el taller no
 # espera.
 CATEGORIAS_FLEJE = ('fleje', 'flejes')
+
+
+def _adquirente_tiene_documento(cedula_nit):
+    """El cliente mostrador es el 'consumidor final' genérico (documento 222).
+
+    Con ese valor la DIAN no puede identificar a un adquirente real, así que
+    no sirve para una Factura Electrónica que el comprador quiere descontar.
+    """
+    digitos = ''.join(ch for ch in str(cedula_nit or '') if ch.isdigit())
+    if not digitos:
+        return False
+    return digitos not in ('222', '222222222222')
 
 
 def _es_producto_fleje(nombre, categoria, item):
@@ -173,7 +187,7 @@ def _registrar_venta():
     cursor = conn.cursor()
 
     cliente = cursor.execute(
-        "SELECT direccion FROM clientes WHERE id = ?", (id_cliente,)
+        "SELECT direccion, COALESCE(cedula_nit, '') FROM clientes WHERE id = ?", (id_cliente,)
     ).fetchone()
     if not cliente:
         conn.close()
@@ -182,6 +196,9 @@ def _registrar_venta():
     direccion_cliente = direccion_ingresada or (cliente[0] or '')
     if direccion_ingresada:
         cursor.execute("UPDATE clientes SET direccion = ? WHERE id = ?", (direccion_ingresada, id_cliente))
+
+    # Se lee aquí porque la validación de la Factura Electrónica la necesita.
+    cliente_para_factura = cliente[1] or ''
 
     if not items:
         conn.close()
@@ -209,6 +226,23 @@ def _registrar_venta():
         from datetime import timedelta
         fecha_vencimiento = (now + timedelta(days=plazo_dias)).strftime('%Y-%m-%d')
     tipo_operacion = str(data.get('tipo_operacion') or '10').strip() or '10'
+    # Tipo de documento DIAN: 'POS' (documento equivalente, mostrador) o 'FV'
+    # (factura electrónica, para el comprador que necesita soporte fiscal).
+    # Lo elige el cajero con un clic en el POS; decide la serie de numeración.
+    tipo_documento_dian = str(data.get('tipo_documento_dian') or 'POS').strip().upper()
+    if tipo_documento_dian not in ('POS', 'FV'):
+        tipo_documento_dian = 'POS'
+
+    # Una Factura Electrónica SIN datos del adquirente es un documento que la
+    # DIAN no sirve para deducir impuestos. Se avisa antes de cobrar: es más
+    # útil que rechazarla después de haberla emitido.
+    if tipo_documento_dian == 'FV':
+        if not _adquirente_tiene_documento(cliente_para_factura):
+            conn.close()
+            return jsonify({
+                "error": "Para emitir Factura Electrónica el cliente debe tener "
+                         "cédula o NIT. Registre sus datos o use Documento POS."
+            }), 400
     # Notas internas del mostrador: formaletas, entregas parciales, acuerdos. Se
     # guardan tal cual y salen en la factura impresa y en el historial.
     observaciones = str(data.get('observaciones') or '').strip()
@@ -232,10 +266,11 @@ def _registrar_venta():
                                 tipo_pago, direccion_cliente, tipo_entrega, numero_pedido,
                                 subtotal_venta, iva_valor, iva_porcentaje,
                                 retencion_fuente, retencion_ica, total_neto, plazo_dias,
-                                fecha_vencimiento, tipo_operacion, observaciones)
+                                fecha_vencimiento, tipo_operacion, observaciones,
+                                tipo_documento_dian)
             VALUES (:cliente, :dia, :hora, :total, :saldo, :pago, :direccion, :entrega, :pedido,
                     :subtotal, :iva, :iva_pct, :ret_fuente, :ret_ica, :neto,
-                    :plazo, :vencimiento, :tipo_op, :observaciones)
+                    :plazo, :vencimiento, :tipo_op, :observaciones, :tipo_doc)
             """,
             {'cliente': id_cliente, 'dia': now.strftime('%Y-%m-%d'), 'hora': now.strftime('%H:%M:%S'),
              'total': total_venta, 'saldo': saldo_pendiente, 'pago': tipo_pago,
@@ -243,7 +278,7 @@ def _registrar_venta():
              'subtotal': subtotal_venta, 'iva': iva_valor, 'iva_pct': iva_porcentaje,
              'ret_fuente': retencion_fuente, 'ret_ica': retencion_ica, 'neto': total_neto,
              'plazo': plazo_dias, 'vencimiento': fecha_vencimiento, 'tipo_op': tipo_operacion,
-             'observaciones': observaciones},
+             'observaciones': observaciones, 'tipo_doc': tipo_documento_dian},
         )
         id_venta = cursor.lastrowid
 

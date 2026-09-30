@@ -13,6 +13,8 @@ Expone la emisión y el seguimiento del Documento Equivalente Electrónico POS:
     GET    /api/dian/documentos/<id>/xml    descarga el XML firmado
     POST   /api/dian/probar-conexion        comprueba si la DIAN responde
     POST   /api/dian/procesar-cola          reintenta los envíos pendientes
+    GET    /api/dian/series                 series de numeración (POS/FV/NC)
+    PUT    /api/dian/series/<tipo>          guarda una serie (solo admin)
 
 Solo el administrador puede EMITIR y cambiar configuración; cualquier usuario
 con sesión puede consultar el estado y descargar un XML (es información que el
@@ -26,7 +28,7 @@ from flask import (Blueprint, jsonify, render_template, request, send_file,
 from ..config import BASE_DIR
 from ..db import get_db
 from ..security import admin_required, login_required
-from ..services import dian_emision, dian_soap
+from ..services import dian_emision, dian_series, dian_soap
 from ..services.auditoria import registrar_auditoria
 from ..services.dian_firma import ErrorCertificado, cargar_certificado
 from ..services.dian_emision import ErrorEmision
@@ -465,6 +467,70 @@ def panel():
     return render_template('dian.html',
                            usuario=session.get('usuario'),
                            rol=session.get('rol', 'empleado'))
+
+
+@bp.route('/api/dian/series', methods=['GET'])
+@login_required
+def api_series():
+    """Series de numeración: una por tipo de documento (POS, FV, NC).
+
+    Cada una tiene su prefijo, consecutivo y resolución. Es lo que permite
+    emitir a la vez el Documento Equivalente del mostrador y la Factura
+    Electrónica que pide un maestro de obra, que son numeraciones distintas.
+    """
+    conn = get_db()
+    try:
+        series = dian_series.leer_series(conn)
+    finally:
+        conn.close()
+    return jsonify({
+        'series': dian_series.estado_para_panel(series),
+        # Prefijos sugeridos para empezar a trabajar en habilitación sin
+        # resolución real. La DIAN exige SETP + dígitos del TestSetId.
+        'sugerencia_pruebas': 'SETP990000000',
+        'nota': ('Mientras no haya resolución real, configure un prefijo de '
+                'pruebas (SETP + su TestSetId) y deje el rango en 0 para que '
+                'no limite la numeración.'),
+    })
+
+
+@bp.route('/api/dian/series/<tipo_documento>', methods=['PUT'])
+@admin_required
+def api_actualizar_serie(tipo_documento):
+    """Guarda los datos de una serie: prefijo, resolución, rango y clave técnica.
+
+    Es el punto donde se ingresan los datos que entrega la DIAN por el portal
+    (MUISCA). No hace falta tocar el código cuando llegue la resolución real.
+    """
+    data = request.json or {}
+    tipo = (tipo_documento or '').strip().upper()
+
+    # El prefijo del anexo técnico para el set de pruebas empieza por SETP.
+    prefijo = str(data.get('prefijo') or '').strip().upper()
+    if prefijo and not (prefijo.startswith('SETP') or prefijo.startswith('FV')
+                        or prefijo.startswith('POS') or prefijo.startswith('NC')):
+        return jsonify({
+            'error': ('El prefijo debe empezar por SETP (pruebas), POS, FV o NC. '
+                      f'Recibido: {prefijo}')
+        }), 400
+
+    conn = get_db()
+    try:
+        try:
+            dian_series.actualizar_serie(conn, tipo, data)
+        except dian_series.ErrorSerie as e:
+            return jsonify({'error': str(e)}), 400
+        registrar_auditoria(conn, 'configurar', 'serie_dian', None,
+                            f'Serie {tipo}: prefijo={prefijo}, '
+                            f'resolución={data.get("numero_resolucion", "")}')
+        conn.commit()
+        series = dian_series.leer_series(conn)
+    finally:
+        conn.close()
+    return jsonify({
+        'mensaje': f'Serie {tipo} actualizada',
+        'series': dian_series.estado_para_panel(series),
+    })
 
 
 def registrar(app):

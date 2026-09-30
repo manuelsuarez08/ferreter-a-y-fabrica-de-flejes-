@@ -462,6 +462,12 @@ def _aplicar_migraciones(cursor):
         # pantalla de facturas lista cientos de ventas y no debe hacer JOIN con
         # la tabla de documentos solo para pintar un badge.
         ('ventas', 'dian_estado', "TEXT NOT NULL DEFAULT 'sin_emitir'"),
+        # Tipo de documento que eligió el cajero al cobrar:
+        #   'POS' → Documento Equivalente Electrónico (mostrador, consumidor final)
+        #   'FV'  → Factura Electrónica de Venta (empresa / maestro de obra)
+        # Decide la SERIE de numeración (prefijo, resolución y rango) y el
+        # InvoiceTypeCode del XML. Las ventas antiguas no lo traían y son POS.
+        ('ventas', 'tipo_documento_dian', "TEXT NOT NULL DEFAULT 'POS'"),
         ('ventas', 'dian_cuide', 'TEXT'),
         ('ventas', 'dian_descripcion', 'TEXT'),
         ('ventas', 'dian_fecha_emision', 'TEXT'),
@@ -527,6 +533,51 @@ def _aplicar_migraciones(cursor):
         ('dian_emision_automatica', 'INTEGER NOT NULL DEFAULT 0'),
     ):
         migrar_columna(cursor, 'configuracion', columna, definicion)
+
+    # ═════════════════════════════════════════════════════
+    # SERIES DE NUMERACIÓN DIAN (una por tipo de documento)
+    # ═════════════════════════════════════════════════════
+    # Antes la numeración vivía en columnas sueltas de `configuracion`
+    # (dian_prefijo, dian_consecutivo, prefijo, rango_desde...). Eso obliga a
+    # UN solo prefijo y UN solo consecutivo, así que no se puede tener a la vez
+    # un Documento Equivalente POS y una Factura Electrónica de venta: cada una
+    # necesita su propia resolución de la DIAN y su propio rango autorizado.
+    #
+    # `series_dian` es una fila por tipo de documento. Cuando llegue la
+    # resolución real solo se editan estos datos desde el panel; el código no
+    # se toca.
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS series_dian (
+            tipo_documento TEXT PRIMARY KEY,
+            -- Prefijo autorizado, p. ej. 'POS', 'FV' o el de pruebas 'SETP990000000'.
+            prefijo TEXT NOT NULL,
+            -- Último consecutivo usado. El siguiente es este + 1.
+            consecutivo INTEGER NOT NULL DEFAULT 1,
+            -- Datos de la resolución que autoriza esa serie. Vacíos mientras se
+            -- trabaja en habilitación.
+            numero_resolucion TEXT DEFAULT '',
+            rango_desde INTEGER NOT NULL DEFAULT 1,
+            rango_hasta INTEGER NOT NULL DEFAULT 0,
+            fecha_vencimiento TEXT,
+            -- Clave técnica de la serie. En pruebas se usa la de habilitación.
+            clave_tecnica TEXT DEFAULT '',
+            -- 1 = la serie está lista para emitir; 0 = aún no se configura.
+            activa INTEGER NOT NULL DEFAULT 0,
+            descripcion TEXT DEFAULT '',
+            actualizado TEXT
+        )
+    ''')
+
+    # Series base, idempotentes. INSERT OR IGNORE no pisa lo que el usuario ya
+    # haya configurado desde el panel.
+    for tipo, prefijo, descripcion in (
+        ('POS', 'POS', 'Documento Equivalente Electrónico POS (mostrador)'),
+        ('FV', 'FV', 'Factura Electrónica de Venta (maestros de obra, empresas)'),
+        ('NC', 'NC', 'Nota Crédito Electrónica'),
+    ):
+        cursor.execute(
+            'INSERT OR IGNORE INTO series_dian (tipo_documento, prefijo, descripcion) '
+            'VALUES (?, ?, ?)', (tipo, prefijo, descripcion))
 
     # IVA configurable desde la app (porcentaje sobre el subtotal). Se guarda en
     # configuracion para poder cambiarlo sin tocar codigo. Por defecto 19%.

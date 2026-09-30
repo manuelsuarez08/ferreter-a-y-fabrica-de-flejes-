@@ -88,12 +88,19 @@ def _documento_original(conn, id_venta):
     if not venta:
         raise ErrorEmision(f'La venta #{id_venta} no existe')
 
+    # Se busca el documento que corrige la venta, sea POS o FV.
+    #
+    # OJO: antes el filtro era `tipo_documento = 'POS'`, lo que dejaba fuera las
+    # Facturas Electrónicas de Venta: la nota crédito de una FV no encontraba su
+    # documento original y no se podía emitir. Ahora se aceptan los dos tipos
+    # que generan una venta; se sigue EXCLUYENDO la propia nota crédito ('NC'),
+    # porque una NC no se corrige con otra NC.
     doc = conn.execute(
         """
         SELECT id, numero, cuide, fecha_generacion, valor_total, estado,
                tipo_documento
         FROM documentos_electronicos
-        WHERE id_venta = ? AND tipo_documento = 'POS'
+        WHERE id_venta = ? AND tipo_documento IN ('POS', 'FV')
         ORDER BY id DESC LIMIT 1
         """,
         (id_venta,),

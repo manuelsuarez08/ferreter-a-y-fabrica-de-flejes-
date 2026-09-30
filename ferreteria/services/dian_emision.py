@@ -42,6 +42,7 @@ from datetime import datetime, timedelta
 
 from . import dian_firma
 from . import dian_pos
+from . import dian_series
 from . import dian_soap
 from . import dian_xml
 from .dian_pos import (
@@ -585,7 +586,8 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
                COALESCE(v.iva_valor, 0), COALESCE(v.iva_porcentaje, 0),
                COALESCE(v.tipo_operacion, '10'), COALESCE(v.numero_dian, ''),
                COALESCE(v.dian_estado, 'sin_emitir'),
-               COALESCE(v.tipo_pago, 'efectivo')
+               COALESCE(v.tipo_pago, 'efectivo'),
+               COALESCE(v.tipo_documento_dian, 'POS')
         FROM ventas v WHERE v.id = ?
         """,
         (id_venta,),
@@ -637,19 +639,37 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
     hora = normalizar_hora(venta[2])
 
     # ── Numeración y CUIDE ───────────────────────────────────────────────────
+    # El tipo de documento lo eligió el cajero al cobrar: 'POS' para la venta de
+    # mostrador, 'FV' para el comprador que necesita Factura Electrónica. Cada
+    # uno tiene su propia serie (prefijo, resolución y rango), de modo que el
+    # número se toma de `series_dian` y no del consecutivo global.
+    tipo_documento = (venta[13] or 'POS').strip().upper()
+    if tipo_documento not in dian_series.TIPOS_DOCUMENTO:
+        tipo_documento = 'POS'
+
+    serie = dian_series.leer_serie(conn, tipo_documento)
     if forzar and existente:
         # Reemisión del mismo número: conserva el consecutivo ya asignado para
         # poder anular el documento anterior con el mismo identificador.
-        prefijo = existente[1].rsplit('-', 1)[0] if '-' in existente[1] else ajustes['prefijo']
         numero = existente[1]
-        consecutivo = int(numero.rsplit('-', 1)[-1]) if '-' in numero else ajustes['consecutivo']
+        prefijo = numero.rsplit('-', 1)[0] if '-' in numero else (serie['prefijo'] if serie else tipo_documento)
+        consecutivo = int(numero.rsplit('-', 1)[-1]) if '-' in numero else 1
     else:
-        prefijo, numero, consecutivo = asignar_numero(cursor, ajustes)
+        reserva = dian_series.reservar_numero(conn, tipo_documento)
+        prefijo = reserva['prefijo']
+        numero = reserva['numero']
+        consecutivo = reserva['consecutivo']
 
-    if not ajustes['clave_tecnica']:
+    # La clave técnica puede venir de la serie (una por resolución) o de la
+    # configuración global. La de la serie manda: es la que corresponde al
+    # ambiente en el que se habilitó esa numeración.
+    clave_tecnica = (serie or {}).get('clave_tecnica') or ajustes['clave_tecnica']
+
+    if not clave_tecnica:
         raise ErrorEmision(
             'Falta la clave técnica del software propio (la entrega la DIAN al '
-            'registrar el software). Configúrela antes de emitir.'
+            'registrar el software). Configúrela en la serie '
+            f'{tipo_documento} o en Administración antes de emitir.'
         )
 
     cuide = calcular_cuide(
@@ -660,8 +680,11 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
         val_imp2=inc_total,
         val_total=total,
         nit=emisor['nit'],
-        tipo_documento=TIPO_DOCUMENTO_POS,
-        clave_tecnica=ajustes['clave_tecnica'],
+        # OJO: el tipo de documento entra en el CUIDE. Un POS y una FV con el
+        # mismo número NO pueden compartir CUIDE, y el anexo técnico exige que
+        # la clave técnica usada sea la de la serie que autorizó ese documento.
+        tipo_documento=tipo_documento,
+        clave_tecnica=clave_tecnica,
         tipo_ambiente=ajustes['ambiente'],
     )
     qr = url_consulta(cuide, fecha=fecha, nit=emisor['nit'], total=total)
@@ -673,6 +696,13 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
         'numero': numero, 'fecha': fecha, 'hora': hora, 'cuide': cuide,
         'tipo_ambiente': ajustes['ambiente'], 'moneda': 'COP',
         'tipo_operacion': venta[9], 'valor_total': total,
+        # El cajero elige POS o FV al cobrar. Viaja al XML como el
+        # InvoiceTypeCode, con sus datos de numeración y resolución.
+        'tipo_documento': tipo_documento,
+        'numero_resolucion': (serie or {}).get('numero_resolucion') or ajustes['numero_resolucion'],
+        'prefijo_resolucion': (serie or {}).get('prefijo') or ajustes['prefijo_resolucion'],
+        'rango_desde': (serie or {}).get('rango_desde') or ajustes['rango_desde'],
+        'rango_hasta': (serie or {}).get('rango_hasta') or ajustes['rango_hasta'],
         # Forma de pago y referencia de la venta: los necesita
         # `cac:PaymentMeans` en el XML (el anexo la exige siempre).
         'tipo_pago': venta[10], 'id_venta': id_venta,
@@ -715,7 +745,10 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
     # firmarlo (y sin que el CUIDE cambie, que es lo que lo hace válido).
     id_documento = _guardar_documento(cursor, {
         'id_venta': id_venta,
-        'tipo': TIPO_DOCUMENTO_POS,
+        # El tipo de documento que eligió el cajero (POS o FV). Guardarlo en la
+        # tabla es lo que permite que la nota crédito encuentre después el
+        # documento exacto que corrige, sea del tipo que sea.
+        'tipo': tipo_documento,
         'prefijo': prefijo,
         'numero': numero,
         'cuide': cuide,
