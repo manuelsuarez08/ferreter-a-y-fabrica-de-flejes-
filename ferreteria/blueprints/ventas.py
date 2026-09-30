@@ -164,15 +164,35 @@ def _construir_detalles(cursor, conn, items):
             'iva_naturaleza': iva_naturaleza,
         })
 
-    # IVA sobre el subtotal. Se redondea a pesos (sin centavos) para que la
-    # tirilla cuadre exacto: total = subtotal + iva.
+    # ── IVA ──────────────────────────────────────────────────────────────
+    # BUG (corregido). `precio_venta` es el PRECIO FINAL: lo que paga el
+    # cliente, IVA incluido. Es lo que el cajero ve en la pantalla y lo que
+    # escribe en la venta, y asi lo documenta el catalogo ("el precio que se
+    # guarda SIEMPRE es el FINAL").
+    #
+    # Antes se tomaba ese precio como si fuera la base sin impuesto y se le
+    # sumaba el IVA encima: un producto de $15.000 se cobraba $17.850. No era un
+    # desvio de centavos, era un recargo del 19% en TODAS las ventas, y la caja
+    # del dia no cuadraba con la suma de las facturas.
+    #
+    # El IVA se extrae del precio final:
+    #     base   = final / (1 + tasa)
+    #     iva    = final - base
+    # Asi el total guardado es exactamente el que el cajero escribio, que es lo
+    # que el necesita para dar la vuelta y lo que exige la aritmetica del
+    # documento electronico.
     iva_porcentaje, iva_activo = _leer_config_iva(cursor)
     if iva_activo and iva_porcentaje > 0:
-        iva_valor = redondear_pesos(subtotal_venta * iva_porcentaje / 100)
+        factor = 1 + iva_porcentaje / 100
+        base_venta = redondear_pesos(subtotal_venta / factor)
+        iva_valor = subtotal_venta - base_venta
     else:
         iva_porcentaje, iva_valor = 0.0, 0
-    subtotal_venta = redondear_pesos(subtotal_venta)
-    total_venta = subtotal_venta + iva_valor
+        base_venta = redondear_pesos(subtotal_venta)
+    subtotal_venta = base_venta
+    # El total es SIEMPRE la suma de los precios finales que puso el cajero:
+    # no se recalcula desde la base, o se acumularia el redondeo por linea.
+    total_venta = redondear_pesos(sum(d['precio'] * d['cantidad'] for d in detalles))
     return (subtotal_venta, iva_valor, iva_porcentaje, total_venta, detalles), None
 
 
@@ -971,12 +991,23 @@ def editar_detalle_factura(id_venta):
     # creación de la venta, y el documento electrónico diría una cosa y la venta
     # otra.
     iva_porcentaje, iva_activo = _leer_config_iva(cursor)
+    # Mismo criterio que en la creación de la venta: el precio es FINAL y el
+    # IVA se EXTRAE de él, no se le suma encima. Si se sumara, editar una
+    # factura inflaria su propio IVA.
     if iva_activo and iva_porcentaje > 0:
-        iva_valor = redondear_pesos(subtotal_venta * iva_porcentaje / 100)
+        factor = 1 + iva_porcentaje / 100
+        base_venta = redondear_pesos(subtotal_venta / factor)
+        iva_valor = subtotal_venta - base_venta
     else:
-        iva_valor = 0
-    subtotal_venta = redondear_pesos(subtotal_venta)
-    total_venta = subtotal_venta + iva_valor
+        iva_porcentaje, iva_valor = 0.0, 0
+        base_venta = redondear_pesos(subtotal_venta)
+    subtotal_venta = base_venta
+    # El total es la suma de los precios finales que quedaron tras la edición.
+    # OJO: `filas` es una lista de tuplas (id_producto, cantidad, precio), no
+    # una lista de diccionarios. Con la forma equivocada la función reventaba
+    # al editar cualquier factura.
+    total_venta = redondear_pesos(
+        sum(f[1] * f[2] for f in filas))
     # Si era a credito, el saldo sigue al nuevo total (menos los abonos hechos).
     tipo_pago = cursor.execute("SELECT tipo_pago FROM ventas WHERE id = ?", (id_venta,)).fetchone()[0]
     if tipo_pago == 'credito':
