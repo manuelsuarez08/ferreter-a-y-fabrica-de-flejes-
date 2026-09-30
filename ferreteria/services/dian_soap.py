@@ -47,12 +47,19 @@ SOAP_ACTION_BASE = 'http://wcf.dian.colombia/IWcfDianCustomerServices/'
 
 # ── Timeouts ──────────────────────────────
 # El POS no puede quedarse colgado esperando a la DIAN: si el servicio no
-# responde en este tiempo, el documento se marca como contingencia y se sigue
-# vendiendo. 30 s es holgado para un documento individual (la DIAN responde en
-# 1-5 s cuando está sana) y se queda corto frente a los 90 s por defecto de
-# muchas librerías, que dejarían al cajero mirando la pantalla.
-TIMEOUT_CONEXION = 30
-TIMEOUT_RESPUESTA = 60
+# responde, el documento pasa a contingencia y se sigue vendiendo.
+#
+# La DIAN responde en 1-5 s cuando está sana. Estos valores cubren una red
+# lenta sin convertir la venta en una espera interminable:
+#   - Conexión: 8 s. Si no abre el socket, la red del local está caída y no
+#     tiene sentido esperar más.
+#   - Respuesta: 25 s. Margen amplio para un documento individual.
+#
+# El total peor caso pasa de 90 s (30+60) a 33 s. Antes, con internet
+# intermitente, cada venta se congelaba minuto y medio antes de avisar que el
+# documento quedó en contingencia, y el cajero veía la aplicación colgada.
+TIMEOUT_CONEXION = 8
+TIMEOUT_RESPUESTA = 25
 TIMEOUT_SET_PRUEBAS = 180     # el set de pruebas es un ZIP grande: tarda más
 
 
