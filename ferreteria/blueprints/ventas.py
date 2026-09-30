@@ -971,16 +971,22 @@ def get_creditos():
     conn = get_db()
     rows = conn.execute(
         """
-        SELECT c.id, c.nombre, c.telefono, SUM(v.saldo_pendiente) as deuda_total, c.direccion,
-               c.cedula_nit
+        SELECT c.id, c.nombre, c.telefono,
+               COALESCE(SUM(v.saldo_pendiente), 0) AS deuda_total,
+               c.direccion, c.cedula_nit
         FROM clientes c
         LEFT JOIN ventas v ON c.id = v.id_cliente AND v.saldo_pendiente > 0
         GROUP BY c.id
+        ORDER BY deuda_total DESC, c.nombre COLLATE NOCASE
         """
     ).fetchall()
     conn.close()
-    return jsonify([{"id_cliente": r[0], "nombre": r[1], "telefono": r[2],
-                     "deuda_total": r[3], "direccion": r[4] or "",
+    # OJO: sin COALESCE, SUM() de un LEFT JOIN sin coincidencias devuelve NULL
+    # (no 0). El JS hacia `c.deuda_total > 0`, que con null da false, y el
+    # cliente con saldo caia fuera del desplegable: la seccion de creditos se
+    # veia vacia. Ahi `deuda_total` SIEMPRE es numero.
+    return jsonify([{"id_cliente": r[0], "nombre": r[1], "telefono": r[2] or "",
+                     "deuda_total": r[3] or 0, "direccion": r[4] or "",
                      "cedula_nit": r[5] or ""} for r in rows])
 
 

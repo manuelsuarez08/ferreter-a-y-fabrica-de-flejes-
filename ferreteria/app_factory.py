@@ -3,9 +3,10 @@
 Patrón Application Factory: centraliza el cableado (config + blueprints) sin
 que los módulos se conozcan entre sí. app.py solo delega aquí.
 """
-from flask import Flask
+from datetime import timedelta
 
-from .config import SECRET_KEY
+from flask import Flask
+from .config import SECRET_KEY, SESION_HORAS
 from .db import asegurar_base_de_datos, init_db, respaldar_base_de_datos
 from .blueprints import (alquiler, catalogo, core, cotizaciones, dian_notas,
                          dian_pos, fabrica, pedidos, ventas)
@@ -21,6 +22,20 @@ def create_app(inicializar_db=True):
     """
     app = Flask(__name__, template_folder='../templates', static_folder='../static')
     app.secret_key = SECRET_KEY
+
+    # ── Sesión duradera ──────────────────────────────────────────────────────
+    # Sin esto, la cookie de sesión es de navegador: al cerrarlo, o al reiniciar
+    # el servidor, el usuario pierde la sesión y TODO fetch() se queda con el
+    # HTML del login en vez de JSON. Como los datos del POS se piden por fetch,
+    # la pantalla se ve "en blanco" o vacía sin que se note la causa: es el POS
+    # entero, no una vista.
+    # Con `PERMANENT_SESSION_LIFETIME` la sesión sobrevive al cierre del
+    # navegador durante 12 horas, que es lo que dura un turno de mostrador.
+    app.permanent_session_lifetime = timedelta(hours=SESION_HORAS)
+    app.config.update(
+        SESSION_COOKIE_HTTPONLY=True,
+        SESSION_COOKIE_SAMESITE='Lax',
+    )
 
     # Un blueprint por dominio de negocio.
     core.registrar(app)

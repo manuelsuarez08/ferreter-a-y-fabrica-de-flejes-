@@ -58,6 +58,12 @@ def login():
             session['usuario'] = row[1]
             session['rol'] = row[3]
             session['id_usuario'] = row[0]
+            # `permanent=True` marca la sesión para que sobreviva al cierre del
+            # navegador (dura `PERMANENT_SESSION_LIFETIME`). Sin esto la cookie
+            # se borra al cerrar y el cajero tiene que entrar otra vez; peor, si
+            # caduca a mitad de uso, todos los fetch() del POS se quedan con el
+            # HTML del login y las vistas salen vacías sin avisar.
+            session.permanent = True
             return redirect(url_for('core.index'))
         return render_template('login.html', error='Credenciales incorrectas.')
 

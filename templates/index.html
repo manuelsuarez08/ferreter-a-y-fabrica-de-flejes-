@@ -4387,6 +4387,7 @@
 
 		function pintarCartera(creditos) {
 		  const tbody = document.getElementById('tabla-creditos-body');
+		  if (!tbody) return;
 		  if (!creditos.length) {
 		    tbody.innerHTML = '<tr><td colspan="6" class="text-center text-success">No hay deudores que coincidan.</td></tr>';
 		    return;
@@ -4428,17 +4429,30 @@
 		}, 300);
 
 		async function cargarCreditosTabla() {
-		  const res = await fetch('/api/creditos');
-		  const creditos = await res.json();
-		  carteraLista = creditos;
-		  const select = document.getElementById('select-credito-cliente');
-		  select.innerHTML = '<option value="">Seleccione un cliente</option>';
-		  creditos.filter(c => c.deuda_total > 0).forEach(c => {
-		    select.innerHTML += `<option value="${c.id_cliente}">${escapeHtml(c.nombre)} - ${monedaCOP(c.deuda_total)}</option>`;
-		  });
-		  // Respeta el filtro activo si el usuario ya había escrito algo.
-		  const input = document.getElementById('filtro-cartera');
-		  filtrarCartera(input ? input.value : '');
+		  try {
+		    const creditos = await fetchJson('/api/creditos');
+		    if (creditos === null) return;   // sesión caducada: ya se avisó
+		    carteraLista = Array.isArray(creditos) ? creditos : [];
+
+		    const select = document.getElementById('select-credito-cliente');
+		    if (!select) return;
+		    select.innerHTML = '<option value="">Seleccione un cliente</option>';
+		    // `deuda_total` llega como numero (el backend aplica COALESCE), pero
+		    // se normaliza igual: con null, `null > 0` es false y el deudor
+		    // desaparecia del desplegable sin avisar.
+		    carteraLista.filter(c => Number(c.deuda_total) > 0).forEach(c => {
+		      select.innerHTML += `<option value="${c.id_cliente}">${escapeHtml(c.nombre)} - ${monedaCOP(c.deuda_total)}</option>`;
+		    });
+		    // Respeta el filtro activo si el usuario ya había escrito algo.
+		    const input = document.getElementById('filtro-cartera');
+		    filtrarCartera(input ? input.value : '');
+		  } catch (err) {
+		    const cuerpo = document.getElementById('tabla-creditos-body');
+		    if (cuerpo) {
+		      cuerpo.innerHTML = '<tr><td colspan="6" class="text-center text-danger">'
+		        + 'No se pudo cargar la cartera: ' + escapeHtml(err.message) + '</td></tr>';
+		    }
+		  }
 		}
 
     async function verHistorialCliente(id) {
@@ -4537,18 +4551,55 @@
       }
     }
 
+    // ══ Red de seguridad: sesión caducada ════════════════════════════
+    // Cuando la sesión de Flask expira, el servidor NO devuelve 401: devuelve
+    // el HTML del login con 200. El `res.json()` de un fetch revienta, y si
+    // eso cae dentro de una función async el error se pierde como promesa
+    // rechazada: la vista queda vacía sin explanation y el cajero cree que se
+    // perdió la venta.
+    //
+    // `fetchJson` centraliza la comprobación: si lo que llega no es JSON,
+    // es la página de login, así que se avisa y se manda a entrar de nuevo.
+    async function fetchJson(url, opciones) {
+      const res = await fetch(url, opciones);
+      const texto = await res.text();
+      const esJson = texto.trim().startsWith('{') || texto.trim().startsWith('[');
+      if (!esJson) {
+        // Un 401/403 es claro; un 200 con HTML es la sesión caducada.
+        sesionExpirada(res.status);
+        return null;
+      }
+      return JSON.parse(texto);
+    }
+
+    let _avisandoSesion = false;
+    function sesionExpirada(status) {
+      if (_avisandoSesion) return;
+      _avisandoSesion = true;
+      const cuerpo = status === 401 || status === 403
+        ? 'No tiene permiso para ver esta información.'
+        : 'Su sesión expiró. Vuelva a entrar para continuar; los datos NO se han perdido.';
+      alert(cuerpo);
+      setTimeout(() => { window.location.href = '/login'; }, 1200);
+    }
+
     // ══ Consolidado mensual del cliente (punto 3) ═════════════════
     // Hoja de vida del mes en curso: todas sus compras, todos sus abonos y
     // el saldo global. Es el "estado de cuenta" que pide el cliente.
     async function imprimirConsolidadoCliente() {
-      const idCliente = document.getElementById('select-credito-cliente')?.value;
+      // Si no hay cliente en el desplegable pero sí hay uno en la ficha
+      // abierta, se usa ese. Antes solo miraba el <select> y, si estaba
+      // vacio, solo mostraba un alert: el boton parecia no hacer nada.
+      const idCliente = document.getElementById('select-credito-cliente')?.value
+        || (clienteCreditoActual ? clienteCreditoActual.id : '');
       if (!idCliente) {
-        alert('Seleccione primero un cliente.');
+        alert('Seleccione primero un cliente (fila de la cartera o el desplegable).');
         return;
       }
-      const res = await fetch(`/api/creditos/${idCliente}/consolidado`);
-      const d = await res.json();
-      if (!res.ok) { alert('Error: ' + (d.error || 'no se pudo cargar')); return; }
+      try {
+        const d = await fetchJson(`/api/creditos/${idCliente}/consolidado`);
+        if (d === null) return;   // sesión caducada: ya se avisó
+        if (d.error) { alert('Error: ' + d.error); return; }
 
       const negocio = window.datosNegocio || {};
       const filaVenta = (v) => `<tr><td>#${v.id}</td><td>${escapeHtml(v.fecha_dia)}</td>`
@@ -4587,6 +4638,12 @@
         <div class="recibo-pie">Documento informativo de cartera. No es factura electrónica.</div>`;
 
       await imprimirFragmento(html, 'consolidado');
+      } catch (err) {
+        // Antes no habia try/catch: cualquier fallo de red dejaba la funcion
+        // muerta y el boton parecia no responder.
+        console.error('Error al generar el consolidado:', err);
+        alert('No se pudo generar el consolidado: ' + (err.message || 'error desconocido'));
+      }
     }
 
     // Imprime HTML arbitrario con el formato de tirilla (80 mm).
@@ -5217,10 +5274,45 @@
 		// navegador (igual que el inventario de productos).
 		let historialVentasLista = [];
 
+		// ── Badge de estado de facturación DIAN ─────────────────────────────
+		// ESTA FUNCIÓN SE PERDIÓ: el commit c6d034a (facturación DIAN propia)
+		// eliminó la versión que existía para Siigo, pero dejó la llamada en
+		// pintarHistorialVentas. Como el badge va DENTRO de la plantilla que
+		// arma la fila, un ReferenceError ahi aborta TODO el forEach: la tabla
+		// se quedaba con la cabecera y sin ninguna fila, sin error en consola
+		// (la excepción muere dentro de una función async).
+		//
+		// Se reescribe contra el estado DIAN actual (`dian_estado` /
+		// `numero_dian` que devuelve GET /api/ventas), no contra Siigo.
+		function badgeFacturacion(v) {
+			const estado = (v.dian_estado || 'sin_emitir');
+			const numero = v.numero_dian ? ` N° ${escapeHtml(v.numero_dian)}` : '';
+			if (estado === 'aceptado') {
+				return `<span class="badge bg-success" title="Documento electrónico aceptado por la DIAN">🧾 FE DIAN${numero}</span>`;
+			}
+			if (estado === 'aceptado_con_notas') {
+				return `<span class="badge bg-success" title="Aceptado con notas de la DIAN">🧾 FE + notas${numero}</span>`;
+			}
+			if (estado === 'rechazado') {
+				return `<span class="badge bg-danger" title="La DIAN rechazó el documento">⚠️ FE rechazado</span>`;
+			}
+			if (estado === 'contingencia') {
+				return `<span class="badge bg-warning text-dark" title="Emitido por contingencia, pendiente de enviar">⏳ FE contingencia${numero}</span>`;
+			}
+			if (estado === 'enviado') {
+				return `<span class="badge bg-info text-dark" title="Enviado, esperando respuesta">⏳ FE enviado${numero}</span>`;
+			}
+			if (estado === 'error') {
+				return `<span class="badge bg-danger" title="Falló la emisión">⚠️ FE con error</span>`;
+			}
+			return '<span class="badge bg-secondary">Sin emitir</span>';
+		}
+
 		async function cargarHistorialVentas() {
 		const fecha = document.getElementById('filtro-fecha-historial').value;
-		const res = await fetch(`/api/ventas${fecha ? `?fecha=${encodeURIComponent(fecha)}` : ''}`);
-			historialVentasLista = await res.json();
+		const lista = await fetchJson(`/api/ventas${fecha ? `?fecha=${encodeURIComponent(fecha)}` : ''}`);
+		if (lista === null) return;   // sesión caducada: ya se avisó
+		historialVentasLista = Array.isArray(lista) ? lista : [];
 		pintarHistorialVentas(historialVentasLista);
 		}
 
@@ -5252,8 +5344,9 @@
 		}, 250);
 
 		async function cargarFacturasTabla() {
-			const res = await fetch('/api/ventas');
-			let ventas = await res.json();
+			let ventas = await fetchJson('/api/ventas');
+			if (ventas === null) return;
+			if (!Array.isArray(ventas)) ventas = [];
 			const filtroCliente = (document.getElementById('filtro-cliente-facturas')?.value || '').trim().toLowerCase();
 			if (filtroCliente) {
 			  ventas = ventas.filter(v => (v.cliente || '').toLowerCase().includes(filtroCliente));
@@ -5357,9 +5450,13 @@
     }
 
 			async function verFactura(id, autoPrint) {
-		const res = await fetch(`/api/ventas/${id}`);
-		const factura = await res.json();
-		if (!res.ok) { alert(`Error: ${factura.error}`); return; }
+		// try/catch con aviso: si algo falla a mitad del pintado, el cajero
+		// ve un mensaje en vez de un boton que no hace nada. Antes una
+		// excepción dentro de esta async se perdia como promesa rechazada.
+		try {
+		const factura = await fetchJson(`/api/ventas/${id}`);
+		if (factura === null) return;   // sesión caducada: ya se avisó
+		if (factura.error) { alert(`Error: ${factura.error}`); return; }
 					facturaActualId = id;
 				facturaActual = factura;
 				const negocio = factura.negocio || {};
@@ -5444,6 +5541,10 @@
 			if (autoPrint) {
 			  setTimeout(() => imprimirRecibo('area-factura-pdf', 'factura'), 400);
 			}
+		} catch (err) {
+		  console.error('Error al abrir la factura', id, err);
+		  alert('No se pudo abrir la factura #' + id + ':\n' + (err && err.message ? err.message : String(err)));
+		}
 			}
 
 			async function guardarEdicionClienteFactura() {
@@ -5840,33 +5941,62 @@
       const dif = contado - (caja.efectivo_esperado || 0);
       const negocio = (document.getElementById('config-nombre').value || 'FERRETERÍA').toUpperCase();
 
-      const filas = (d.productos_vendidos || []).map(p =>
-        `${p.cantidad} x ${p.nombre} = ${monedaCOP(p.subtotal)}`).join('<br>') || 'Sin ventas';
-
-      const win = window.open('', '_blank', 'width=380,height=650');
+      const win = window.open('', '_blank', 'width=420,height=800');
+      // TIRILLA DE CIERRE (punto 4).
+      // Antes: `monospace` de 12px y `width:300px`. En una térmica de 80 mm
+      // eso sale diminuto y, con la tipografía de palo seco, los miles
+      // quedan como rayas grises ilegibles.
+      // Ahora se usa la MISMA estrategia que la factura de venta: ancho real
+      // de 80 mm (@page), tipografía sans-serif, cuerpo 15px y TODO en negrita.
+      // 15px es el mínimo que necesita una térmica de 203 dpi para que un
+      // número de 6 cifras más el signo $ se lea sin esfuerzo.
       win.document.write(
         '<html><head><title>Cierre ' + d.fecha + '</title><style>' +
-        'body{font-family:monospace;font-size:12px;margin:6px;width:300px}' +
-        'h3{text-align:center;margin:4px 0}hr{border-top:1px dashed #000}' +
-        '.fila{display:flex;justify-content:space-between}' +
+        '@page { size: 80mm auto; margin: 3mm; }' +
+        'html,body{margin:0;padding:0;background:#fff;width:80mm;box-sizing:border-box}' +
+        'body{font-family:Arial,Helvetica,sans-serif;font-size:15px;line-height:1.35;' +
+        '  color:#000;font-weight:bold;-webkit-print-color-adjust:exact;print-color-adjust:exact}' +
+        'h1{font-size:18px;text-align:center;margin:0 0 2px 0;line-height:1.15}' +
+        '.sub{text-align:center;font-size:13px;margin:0 0 4px 0}' +
+        'hr{border:0;border-top:1px dashed #000;margin:5px 0}' +
+        'hr.solido{border-top:2px solid #000}' +
+        '.fila{display:flex;justify-content:space-between;gap:6px;align-items:baseline}' +
+        '.fila span:last-child{white-space:nowrap;font-weight:bold}' +
+        '.etiqueta{font-size:12px;letter-spacing:0.5px;margin:3px 0 2px 0}' +
+        '.total{font-size:18px;-webkit-text-stroke:0.4px #000}' +
+        '.centro{text-align:center;font-size:13px}' +
+        '.firma{margin-top:26px;border-top:1px solid #000;padding-top:4px;text-align:center;font-size:13px}' +
+        '.prod{font-size:12px;font-weight:normal;word-break:break-word;padding:1px 0}' +
         '</style></head><body>' +
-        '<h3>' + negocio + '</h3>' +
-        '<div style="text-align:center">CIERRE DE CAJA<br>' + d.fecha + '</div><hr>' +
-        '<div class="fila"><b>TOTAL VENTAS</b><span>' + monedaCOP(r.total_ventas || 0) + '</span></div>' +
-        '<div class="fila"><b>ABONOS</b><span>' + monedaCOP(r.total_abonos || 0) + '</span></div>' +
-        '<div class="fila"><b>GASTOS</b><span>' + monedaCOP(r.total_gastos || 0) + '</span></div>' +
-        '<div class="fila"><b>GANANCIA NETA</b><span>' + monedaCOP(r.ganancia_neta || 0) + '</span></div>' +
-        '<hr><b>CUADRE DE CAJA</b>' +
+        '<h1>' + escapeHtml(negocio) + '</h1>' +
+        '<p class="sub">CIERRE DE CAJA</p>' +
+        '<p class="sub" style="margin:0 0 4px 0">' + escapeHtml(d.fecha) + '</p>' +
+        '<hr class="solido">' +
+        '<div class="fila total"><span>TOTAL VENTAS</span><span>' + monedaCOP(r.total_ventas || 0) + '</span></div>' +
+        '<div class="fila"><span>ABONOS</span><span>' + monedaCOP(r.total_abonos || 0) + '</span></div>' +
+        '<div class="fila"><span>GASTOS</span><span>' + monedaCOP(r.total_gastos || 0) + '</span></div>' +
+        '<div class="fila total"><span>GANANCIA NETA</span><span>' + monedaCOP(r.ganancia_neta || 0) + '</span></div>' +
+        '<hr class="solido">' +
+        '<div class="etiqueta">CUADRE DE CAJA</div>' +
         '<div class="fila"><span>Base inicial</span><span>' + monedaCOP(caja.base_inicial || 0) + '</span></div>' +
-        '<div class="fila"><span>+ Efectivo ventas</span><span>' + monedaCOP(caja.efectivo_ventas || 0) + '</span></div>' +
-        '<div class="fila"><span>+ Efectivo abonos</span><span>' + monedaCOP(caja.efectivo_abonos || 0) + '</span></div>' +
-        '<div class="fila"><span>- Gastos</span><span>' + monedaCOP(caja.gastos_efectivo || 0) + '</span></div>' +
-        '<div class="fila"><b>= ESPERADO</b><span>' + monedaCOP(caja.efectivo_esperado || 0) + '</span></div>' +
-        '<div class="fila"><b>CONTADO</b><span>' + monedaCOP(contado) + '</span></div>' +
-        '<div class="fila"><b>' + (Math.abs(dif) < 1 ? 'CUADRADA' : (dif > 0 ? 'SOBRA' : 'FALTA')) +
-        '</b><span>' + monedaCOP(Math.abs(dif)) + '</span></div><hr>' +
-        '<b>PRODUCTOS VENDIDOS</b><br>' + filas +
-        '<hr><div style="text-align:center">Firma: ______________</div>' +
+        '<div class="fila"><span>(+) Efvo. ventas</span><span>' + monedaCOP(caja.efectivo_ventas || 0) + '</span></div>' +
+        '<div class="fila"><span>(+) Efvo. abonos</span><span>' + monedaCOP(caja.efectivo_abonos || 0) + '</span></div>' +
+        '<div class="fila"><span>(-) Gastos</span><span>' + monedaCOP(caja.gastos_efectivo || 0) + '</span></div>' +
+        '<hr>' +
+        '<div class="fila total"><span>= ESPERADO</span><span>' + monedaCOP(caja.efectivo_esperado || 0) + '</span></div>' +
+        '<div class="fila"><span>CONTADO</span><span>' + monedaCOP(contado) + '</span></div>' +
+        '<hr class="solido">' +
+        '<div class="fila total"><span>' + (Math.abs(dif) < 1 ? 'CUADRADA' : (dif > 0 ? 'SOBRA' : 'FALTA')) +
+        '</span><span>' + monedaCOP(Math.abs(dif)) + '</span></div>' +
+        '<hr class="solido">' +
+        '<div class="etiqueta">PRODUCTOS VENDIDOS</div>' +
+        (d.productos_vendidos || []).map(p =>
+          '<div class="prod">' + escapeHtml(String(p.cantidad)) + ' x ' + escapeHtml(p.nombre) +
+          ' = ' + monedaCOP(p.subtotal) + '</div>').join('') +
+        ((d.productos_vendidos || []).length ? '' : '<div class="prod">Sin ventas</div>') +
+        '<hr class="solido">' +
+        '<div class="firma">Firma del responsable</div>' +
+        '<div class="centro" style="margin-top:8px">Documento interno de control de caja.</div>' +
         '</body></html>');
       win.document.close();
       win.focus();

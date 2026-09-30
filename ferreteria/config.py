@@ -94,6 +94,11 @@ if EN_PRODUCCION and not os.environ.get('FERRETERIA_DB'):
 # Clave secreta de Flask para firmar la sesión.
 SECRET_KEY = os.environ.get('SECRET_KEY', 'clave_secreta_ferreteria')
 
+# Horas que dura una sesión iniciada. El POS trabaja por turnos: si la sesión
+# muere a la media hora, el cajero ve el POS "vacío" (los fetch se quedan con
+# el HTML del login) sin entender por qué. 12 horas cubre el turno completo.
+SESION_HORAS = int(os.environ.get('SESION_HORAS', 12))
+
 # Parámetros de conexión SQLite.
 DB_TIMEOUT = 15
 DB_BUSY_TIMEOUT_MS = 15000
