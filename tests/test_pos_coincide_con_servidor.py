@@ -120,88 +120,123 @@ def test_la_aritmetica_del_documento_cierra(admin):
         f'y la DIAN lo rechaza')
 
 
-def test_editar_una_factaura_conserva_la_tasa_cero(admin):
-    """La edicion usa la MISMA función de calculo que la creacion.
-
-    Si el IVA viviera en dos sitios, editar una factura con un producto de tasa
-    cero podria empezar a cobrarle 19%: la venta se habria creado bien y se
-    corromperia al corregir un precio.
-    """
+# ── Tasa por producto: hay que ACTIVAR el interruptor ─────────────────────
+# El catálogo real no está clasificado (casi todos sus productos traen
+# iva_tasa = 0), así que la venta usa la tasa global por defecto. Estas
+# pruebas miden la vía por producto, que es lo que ocurrirá cuando el dueño
+# clasifique el catálogo. Ver test_iva_por_producto_desactivado.py.
+def _activar_iva_por_producto():
     conn = get_db()
     try:
-        exento = conn.execute(
-            "INSERT INTO productos (nombre, precio_venta, precio_costo, precio_base,"
-            " iva_valor, iva_tasa, stock_actual, activo) "
-            "VALUES ('Exento',50000,0,0,0,0,500,1)"
-        ).lastrowid
+        conn.execute('UPDATE configuracion SET iva_por_producto = 1 WHERE id = 1')
         conn.commit()
     finally:
         conn.close()
 
-    res = admin.post('/api/ventas', json={
-        'id_cliente': 1, 'tipo_pago': 'efectivo',
-        'items': [{'id_producto': exento, 'cantidad': 2, 'precio_unitario': 50000}]})
-    id_venta = res.get_json()['id_venta']
 
-    put = admin.put(f'/api/ventas/{id_venta}/detalle', json={
-        'items': [{'id_producto': exento, 'cantidad': 3, 'precio_unitario': 50000}]})
-    assert put.status_code == 200
-    d = put.get_json()
+def _desactivar_iva_por_producto():
+    conn = get_db()
+    try:
+        conn.execute('UPDATE configuracion SET iva_por_producto = 0 WHERE id = 1')
+        conn.commit()
+    finally:
+        conn.close()
 
-    assert d['total_venta'] == 150000, f'total tras editar: {d["total_venta"]}'
-    assert d['iva_valor'] == 0, (
-        f'la edicion cobro {d["iva_valor"]} de IVA a un producto de tasa cero')
+
+def test_editar_una_factaura_conserva_la_tasa_cero(admin):
+    _activar_iva_por_producto()
+    try:
+        """La edicion usa la MISMA función de calculo que la creacion.
+
+        Si el IVA viviera en dos sitios, editar una factura con un producto de tasa
+        cero podria empezar a cobrarle 19%: la venta se habria creado bien y se
+        corromperia al corregir un precio.
+        """
+        conn = get_db()
+        try:
+            exento = conn.execute(
+                "INSERT INTO productos (nombre, precio_venta, precio_costo, precio_base,"
+                " iva_valor, iva_tasa, stock_actual, activo) "
+                "VALUES ('Exento',50000,0,0,0,0,500,1)"
+            ).lastrowid
+            conn.commit()
+        finally:
+            conn.close()
+
+        res = admin.post('/api/ventas', json={
+            'id_cliente': 1, 'tipo_pago': 'efectivo',
+            'items': [{'id_producto': exento, 'cantidad': 2, 'precio_unitario': 50000}]})
+        id_venta = res.get_json()['id_venta']
+
+        put = admin.put(f'/api/ventas/{id_venta}/detalle', json={
+            'items': [{'id_producto': exento, 'cantidad': 3, 'precio_unitario': 50000}]})
+        assert put.status_code == 200
+        d = put.get_json()
+
+        assert d['total_venta'] == 150000, f'total tras editar: {d["total_venta"]}'
+        assert d['iva_valor'] == 0, (
+            f'la edicion cobro {d["iva_valor"]} de IVA a un producto de tasa cero')
+    finally:
+        _desactivar_iva_por_producto()
+
 def test_un_producto_de_tasa_cero_no_cobra_iva(admin):
-    """Cemento de uso arquitectónico (art. 422) o material de extracción
-    (art. 424): el producto tiene `iva_tasa = 0` y así se cobra.
+    _activar_iva_por_producto()
+    try:
+        """Cemento de uso arquitectónico (art. 422) o material de extracción
+        (art. 424): el producto tiene `iva_tasa = 0` y así se cobra.
 
-    Antes toda la venta usaba la tasa global del negocio, así que un artículo
-    de tasa cero pagaba 19% igual que uno gravado, y el documento declararía una
-    tarifa que no era la del producto.
-    """
-    total, base, iva = _vender(admin, 'Tasa cero', [(2, 50000)], iva=0)
-    assert total == 100000, f'total {total}: un producto de tasa cero no debe llevar impuesto'
-    assert iva == 0
-    assert base == 100000
-
+        Antes toda la venta usaba la tasa global del negocio, así que un artículo
+        de tasa cero pagaba 19% igual que uno gravado, y el documento declararía una
+        tarifa que no era la del producto.
+        """
+        total, base, iva = _vender(admin, 'Tasa cero', [(2, 50000)], iva=0)
+        assert total == 100000, f'total {total}: un producto de tasa cero no debe llevar impuesto'
+        assert iva == 0
+        assert base == 100000
+    finally:
+        _desactivar_iva_por_producto()
 
 def test_una_venta_mixta_tiene_iva_solo_de_lo_gravado(admin):
-    """Dos productos, uno al 19% y otro a tasa cero.
-
-    El total sigue siendo lo que puso el cajero, pero el impuesto solo se
-    extrae de la parte gravada.
-    """
-    conn = get_db()
+    _activar_iva_por_producto()
     try:
-        gravado = conn.execute(
-            "INSERT INTO productos (nombre, precio_venta, precio_costo, precio_base,"
-            " iva_valor, iva_tasa, stock_actual, activo) VALUES ('Gravado',50000,0,0,0,19,500,1)"
-        ).lastrowid
-        exento = conn.execute(
-            "INSERT INTO productos (nombre, precio_venta, precio_costo, precio_base,"
-            " iva_valor, iva_tasa, stock_actual, activo) VALUES ('Exento',50000,0,0,0,0,500,1)"
-        ).lastrowid
-        conn.commit()
-    finally:
-        conn.close()
+        """Dos productos, uno al 19% y otro a tasa cero.
 
-    res = admin.post('/api/ventas', json={
-        'id_cliente': 1, 'tipo_pago': 'efectivo',
-        'items': [{'id_producto': gravado, 'cantidad': 1, 'precio_unitario': 50000},
-                  {'id_producto': exento, 'cantidad': 1, 'precio_unitario': 50000}]})
-    assert res.status_code == 201
-    conn = get_db()
-    try:
-        total, base, iva = conn.execute(
-            'SELECT total_venta, subtotal_venta, iva_valor FROM ventas WHERE id = ?',
-            (res.get_json()['id_venta'],)).fetchone()
-    finally:
-        conn.close()
+        El total sigue siendo lo que puso el cajero, pero el impuesto solo se
+        extrae de la parte gravada.
+        """
+        conn = get_db()
+        try:
+            gravado = conn.execute(
+                "INSERT INTO productos (nombre, precio_venta, precio_costo, precio_base,"
+                " iva_valor, iva_tasa, stock_actual, activo) VALUES ('Gravado',50000,0,0,0,19,500,1)"
+            ).lastrowid
+            exento = conn.execute(
+                "INSERT INTO productos (nombre, precio_venta, precio_costo, precio_base,"
+                " iva_valor, iva_tasa, stock_actual, activo) VALUES ('Exento',50000,0,0,0,0,500,1)"
+            ).lastrowid
+            conn.commit()
+        finally:
+            conn.close()
 
-    assert total == 100000, f'total {total}, el cajero escribio 100000'
-    # Solo la mitad gravada aporta impuesto: 50000 / 1.19 = 7983.19 -> 7983
-    # (con el redondeo a pesos que exige la DIAN). Si también se gravara la
-    # parte exenta, el IVA seria 19000.
-    assert iva == 7983, f'IVA {iva}: solo debe gravarse la parte del 19% (7983)'
-    assert iva < 10000, 'parece que se está gravando también la parte de tasa cero'
-    assert abs(base + iva - total) < 1
+        res = admin.post('/api/ventas', json={
+            'id_cliente': 1, 'tipo_pago': 'efectivo',
+            'items': [{'id_producto': gravado, 'cantidad': 1, 'precio_unitario': 50000},
+                      {'id_producto': exento, 'cantidad': 1, 'precio_unitario': 50000}]})
+        assert res.status_code == 201
+        conn = get_db()
+        try:
+            total, base, iva = conn.execute(
+                'SELECT total_venta, subtotal_venta, iva_valor FROM ventas WHERE id = ?',
+                (res.get_json()['id_venta'],)).fetchone()
+        finally:
+            conn.close()
+
+        assert total == 100000, f'total {total}, el cajero escribio 100000'
+        # Solo la mitad gravada aporta impuesto: 50000 / 1.19 = 7983.19 -> 7983
+        # (con el redondeo a pesos que exige la DIAN). Si también se gravara la
+        # parte exenta, el IVA seria 19000.
+        assert iva == 7983, f'IVA {iva}: solo debe gravarse la parte del 19% (7983)'
+        assert iva < 10000, 'parece que se está gravando también la parte de tasa cero'
+        assert abs(base + iva - total) < 1
+    finally:
+        _desactivar_iva_por_producto()

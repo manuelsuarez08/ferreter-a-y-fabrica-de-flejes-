@@ -1338,6 +1338,24 @@
               <label class="form-check-label" for="config-iva-activo">Cobrar IVA</label>
             </div>
           </div>
+          <div class="col-12">
+            <div class="alert alert-warning py-2 mb-0 small">
+              <div class="form-check">
+                <input id="config-iva-por-producto" class="form-check-input" type="checkbox">
+                <label class="form-check-label" for="config-iva-por-producto">
+                  <strong>Cobrar el IVA segun la tasa de cada producto</strong>
+                  <span class="text-muted">(tarifa cero, 5%, 19% por artículo)</span>
+                </label>
+              </div>
+              <div class="mt-2" id="aviso-iva-por-producto">
+                ⚠️ <strong>Dejalo apagado mientras el catálogo no esté clasificado.</strong>
+                Hoy casi todos los productos traen la tasa en 0 (la columna se creó
+                con ese valor y nunca se migró). Si lo activas sin clasificar, la
+                ferretería deja de cobrar IVA en prácticamente toda la venta.
+                Clasifica primero cada producto y luego actívalo.
+              </div>
+            </div>
+          </div>
         </form>
         <div class="row g-4 mb-4">
           <div class="col-lg-6">
@@ -6315,6 +6333,12 @@
         if (inputIva) inputIva.value = ivaPorcentaje;
         const checkIva = document.getElementById('config-iva-activo');
         if (checkIva) checkIva.checked = ivaActivo;
+        // Interruptor de IVA por producto. Apagado mientras el catalogo no este
+        // clasificado: ver `_iva_por_producto_activo` en blueprints/ventas.py.
+        const checkIvaProducto = document.getElementById('config-iva-por-producto');
+        if (checkIvaProducto) {
+          checkIvaProducto.checked = window.datosNegocio.iva_por_producto === true;
+        }
         actualizarBotonAutoImprimir();
         actualizarTablaCarrito();
       } catch (e) { /* silencioso: la tirilla usa valores por defecto */ }
@@ -6327,7 +6351,10 @@
         telefono: document.getElementById('config-telefono').value,
         direccion: document.getElementById('config-direccion').value,
         iva_porcentaje: document.getElementById('config-iva') ? document.getElementById('config-iva').value : undefined,
-        iva_activo: document.getElementById('config-iva-activo') ? document.getElementById('config-iva-activo').checked : true
+        iva_activo: document.getElementById('config-iva-activo') ? document.getElementById('config-iva-activo').checked : true,
+        // Ver el aviso junto al checkbox: solo activar con el catálogo clasificado.
+        iva_por_producto: document.getElementById('config-iva-por-producto')
+          ? document.getElementById('config-iva-por-producto').checked : false
       };
       const res = await fetch('/api/configuracion', { method: 'PUT', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
       const data = await res.json();

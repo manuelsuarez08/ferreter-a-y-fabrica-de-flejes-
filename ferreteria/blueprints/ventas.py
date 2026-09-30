@@ -100,6 +100,23 @@ def _adquirente_tiene_documento(cedula_nit):
     return digitos not in ('222', '222222222222')
 
 
+def _iva_por_producto_activo(cursor):
+    """¿Se cobra el IVA segun la tasa de cada producto?
+
+    Esta en 0 por defecto y hay una razon: el catalogo tiene `iva_tasa = 0` en
+    casi todos sus productos porque la columna se creo con ese DEFAULT y nunca
+    se migro. Con la tasa por producto, todo se vendria sin impuesto.
+
+    Mientras el dueno no clasifique el catalogo, se usa la tasa GLOBAL, que es
+    como funcionaba antes y como el negocio espera. Se activa desde
+    Administracion cuando cada producto tenga su tasa real.
+    """
+    fila = cursor.execute(
+        'SELECT COALESCE(iva_por_producto, 0) FROM configuracion WHERE id = 1'
+    ).fetchone()
+    return bool(fila[0]) if fila else False
+
+
 def _leer_iva_del_producto(cursor, id_producto):
     """Tasa de IVA de un producto. 0 es un valor legitimo (tasa cero)."""
     fila = cursor.execute(
@@ -247,9 +264,15 @@ def _construir_detalles(cursor, conn, items):
     # Si el negocio tiene el IVA desactivado, todas las lineas van a tasa cero
     # aunque el producto tenga la suya: el interruptor global manda.
     iva_porcentaje_global, iva_activo = _leer_config_iva(cursor)
-    base_venta, iva_valor, iva_porcentaje = _calcular_iva_por_lineas(
+    iva_por_linea = _iva_por_producto_activo(cursor)
+    if not iva_por_linea:
+        # El catalogo no esta clasificado: TODAS las lineas van a la tasa
+        # global, que es el comportamiento de siempre. Ver la nota de
+        # `_iva_por_producto_activo`.
+        for d in detalles:
+            d['iva_tasa'] = iva_porcentaje_global
+    subtotal_venta, iva_valor, iva_porcentaje = _calcular_iva_por_lineas(
         detalles, subtotal_venta, iva_porcentaje_global, iva_activo)
-    subtotal_venta = base_venta
     # El total es SIEMPRE la suma de los precios finales que puso el cajero:
     # no se recalcula desde la base, o se acumularia el redondeo por linea.
     total_venta = redondear_pesos(sum(d['precio'] * d['cantidad'] for d in detalles))
@@ -1055,7 +1078,8 @@ def editar_detalle_factura(id_venta):
     # veces, editar una factura podría dar un IVA distinto al que se calculó
     # al crearla, y la caja no cerraría.
     lineas_iva = [{'precio': f[2], 'cantidad': f[1],
-                   'iva_tasa': _leer_iva_del_producto(cursor, f[0])}
+                   'iva_tasa': _leer_iva_del_producto(cursor, f[0])
+                   if _iva_por_producto_activo(cursor) else iva_porcentaje_global}
                   for f in filas]
     base_venta, iva_valor, iva_porcentaje = _calcular_iva_por_lineas(
         lineas_iva, subtotal_venta, iva_porcentaje_global, iva_activo)

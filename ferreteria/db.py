@@ -598,6 +598,34 @@ def _aplicar_migraciones(cursor):
     migrar_columna(cursor, 'productos', 'iva_valor', 'REAL NOT NULL DEFAULT 0')
     migrar_columna(cursor, 'productos', 'iva_tasa', 'REAL NOT NULL DEFAULT 0')
 
+    # ═════════════════════════════════════════════════════
+    #  IVA POR PRODUCTO: PENDIENTE DE CLASIFICAR
+    # ═════════════════════════════════════════════════════
+    # ESTE CAMPO ESTA EN 0 A PROPOSITO. Leerlo antes de entenderlo hace daño.
+    #
+    # Que la venta use la tasa de cada producto en vez de la tasa global del
+    # negocio es lo correcto (un cemento de tasa cero no puede cobrar 19%), pero
+    # en ESTE catálogo los 1461 productos tienen `iva_tasa = 0` y
+    # `iva_tipo_tarifa = '01'`: la columna se creó con DEFAULT 0 y nunca se
+    # migró, y el tipo '01' ("excluido", art. 424 del Estatuto Tributario) se
+    # le puso a todo el catalogo por el mismo defecto.
+    #
+    # Con la tasa por producto, un ladrillo de $1.200 pasaria de $1.428 a
+    # $1.200: la ferreteria dejaria de cobrar IVA en practicamente toda la
+    # venta. Ese es el motivo de que el interruptor exista.
+    #
+    # Mientras el dueño NO clasifique el catalogo, este interruptor se queda en
+    # 0 y todo se cobra con la tasa global, que es como funcionaba antes. En
+    # cuanto se clasifique cada producto (tasa real en `iva_tasa` y
+    # `iva_tipo_tarifa`), se pone en 1 desde Administración y las dos vias
+    # quedan coherentes.
+    #
+    # NO se migra el catalogo automaticamente: decidir que productos son de tasa
+    # cero es una decision fiscal del negocio, no del software. Se deja el
+    # codigo listo y se espera el dato.
+    migrar_columna(cursor, 'configuracion', 'iva_por_producto',
+                   'INTEGER NOT NULL DEFAULT 0')
+
     # OJO: SQLite IGNORA el DEFAULT de ALTER TABLE ADD COLUMN. En una base que ya
     # existia cuando se agrego `cantidad_entregada`, las lineas viejas quedan en
     # NULL (no en 0). Con NULL, el pendiente se calcula como

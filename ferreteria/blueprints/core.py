@@ -220,12 +220,18 @@ def configuracion_negocio():
     if request.method == 'GET':
         row = conn.execute(
             "SELECT nombre, nit, telefono, direccion, consecutivo, "
-            "COALESCE(iva_porcentaje, 19), COALESCE(iva_activo, 1) FROM configuracion WHERE id = 1"
+            "COALESCE(iva_porcentaje, 19), COALESCE(iva_activo, 1), "
+            "COALESCE(iva_por_producto, 0) FROM configuracion WHERE id = 1"
         ).fetchone()
         conn.close()
         return jsonify({"nombre": row[0], "nit": row[1], "telefono": row[2],
                         "direccion": row[3], "consecutivo": row[4],
-                        "iva_porcentaje": row[5], "iva_activo": bool(row[6])})
+                        "iva_porcentaje": row[5], "iva_activo": bool(row[6]),
+                        # Cobrar el IVA segun la tasa de cada producto. En 0
+                        # mientras el catalogo no este clasificado: hoy casi
+                        # todos los productos tienen tasa 0, y activarlo sin
+                        # clasificar dejaria de cobrar impuesto en toda la venta.
+                        "iva_por_producto": bool(row[7])})
 
     if session.get('rol') != 'admin':
         conn.close()
@@ -247,6 +253,19 @@ def configuracion_negocio():
         activo = 1 if data.get('iva_activo', True) in (True, 1, '1', 'true', 'on') else 0
         conn.execute("UPDATE configuracion SET iva_porcentaje = ?, iva_activo = ? WHERE id = 1",
                      (pct, activo))
+    # Interruptor de IVA por producto. Solo se toca si viene en la peticion.
+    if 'iva_por_producto' in data:
+        por_producto = 1 if data.get('iva_por_producto') in (True, 1, '1', 'true', 'on') else 0
+        conn.execute("UPDATE configuracion SET iva_por_producto = ? WHERE id = 1",
+                     (por_producto,))
+        # Queda en la auditoria porque es un cambio que altera cuanto impuesto
+        # cobra la ferreteria: si alguien lo activa sin clasificar el catalogo,
+        # aqui queda registrado cuando fue.
+        if por_producto:
+            registrar_auditoria(
+                conn, 'activar', 'iva_por_producto', 1,
+                'IVA por tasa de producto ACTIVADO: se usara la tasa de cada '
+                'articulo en vez de la tasa general')
     registrar_auditoria(conn, 'actualizar', 'configuracion', 1, 'Datos del negocio actualizados')
     conn.commit()
     conn.close()
