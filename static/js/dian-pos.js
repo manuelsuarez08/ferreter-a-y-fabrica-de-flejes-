@@ -221,6 +221,14 @@
     badge: badge,
     pintarBloque: pintarBloque,
     emitirFactura: emitirFactura,
-    sePuedeEmitir: sePuedeEmitir
+    sePuedeEmitir: sePuedeEmitir,
+    // BUG (corregido): esta funcion existia desde el commit 49b49da pero NUNCA
+    // se agrego a este objeto. `verFactura` la llama asi:
+    //     window.DianPos && window.DianPos.estaEmitida(factura)
+    // El guardia de la izquierda pasa (el objeto existe), y la llamada a la
+    // derecha lanza TypeError: esa comprehension corta verFactura a mitad del
+    // pintado, justo antes de los totales, y el modal nunca se abre.
+    // Como verFactura es async, el error se perdia como promesa rechazada.
+    estaEmitida: estaEmitida
   };
 })(window);
