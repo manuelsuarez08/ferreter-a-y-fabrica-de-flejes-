@@ -313,7 +313,7 @@ def _resumen_impuestos(items, clave_tasa):
     return [grupos[t] for t in sorted(grupos)]
 
 
-def _leer_items(cursor, id_venta, iva_porcentaje_venta):
+def _leer_items(cursor, id_venta, iva_porcentaje_venta, iva_por_producto=False):
     """Líneas del documento a partir del detalle de la venta.
 
     IMPORTANTE (decisión fiscal): en este POS el `precio_venta` del producto es
@@ -360,12 +360,38 @@ def _leer_items(cursor, id_venta, iva_porcentaje_venta):
         # porque `iva_naturaleza` vale 'excluido' por defecto para TODOS los
         # productos (allí significa "gravado", no "excluido del impuesto"). Usar
         # ese texto como criterio dejaría a tasa 0 los 1.461 productos.
-        if (naturaleza in ('exento', 'excluido_iva', 'no_sujeto')
-                or tipo_tarifa in ('01', '02', '03')):
+        #
+        # PERO solo si el catálogo está clasificado. `iva_tipo_tarifa` se creó
+        # con DEFAULT '01' y nunca se migró, así que hoy los 1461 productos
+        # tienen '01' (excluido) y este bloque los PONDRÍA EN TASA CERO: el
+        # documento declararía un impuesto de 0 sobre una venta que sí lo cobra.
+        # La DIAN rechaza eso, y además el documento no cuadraría con la venta.
+        #
+        # Con `iva_por_producto` apagado (el valor por defecto mientras el
+        # catálogo no se clasifique) se aplica la tasa global del negocio, que es
+        # lo que el POS está cobrando de verdad. Ver
+        # `_iva_por_producto_activo` en blueprints/ventas.py.
+        #
+        # EXCEPTO: un producto marcado exento, excluido o no sujeto SIEMPRE va a
+        # tasa cero, tenga el interruptor como tenga. Declarar impuesto sobre una
+        # operación no gravada lo rechaza la DIAN, y el cliente pagaría de más.
+        #
+        # OJO con `iva_naturaleza`: vale 'excluido' por defecto para TODOS los
+        # productos (allí significa "gravado", no "excluido del impuesto"), así
+        # que no puede usarse sola como criterio. Y OJO con `iva_tasa`: un 0
+        # aquí significa "tasa cero legítima", NO "falta informacion", así que
+        # no se puede escribir `not iva_tasa` (en Python `not 0` es True y el
+        # artículo de tasa cero acabaría gravado).
+        if naturaleza in ('exento', 'no_sujeto') or iva_tasa == 0:
             iva_tasa = 0.0
-        elif not iva_tasa and iva_porcentaje_venta:
-            # Producto sin tasa propia: se usa la del negocio (comportamiento del
-            # POS, donde el IVA se configura globalmente).
+        elif iva_por_producto:
+            if naturaleza == 'excluido_iva' or tipo_tarifa in ('01', '02', '03'):
+                iva_tasa = 0.0
+            else:
+                iva_tasa = float(iva_porcentaje_venta or 0)
+        else:
+            # Catálogo sin clasificar: la tarifa del documento es la que aplica
+            # a toda la venta, no la que trae el producto (que es 0 en todos).
             iva_tasa = float(iva_porcentaje_venta or 0)
 
         # Desagregación: del precio final (con IVA) a la base (sin IVA).
@@ -615,7 +641,14 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
     ajustes = _leer_ajustes_dian(cursor)
     emisor = _leer_emisor(cursor)
     adquirente = _leer_adquirente(cursor, venta[4])
-    items = _leer_items(cursor, id_venta, venta[8])
+    # El interruptor decide si el documento declara la tasa global o la de cada
+    # producto. Tiene que ser el MISMO que usa la venta (`_calcular_iva_por_
+    # lineas`), o el documento declararía un impuesto distinto al cobrado.
+    fila_iva_prod = cursor.execute(
+        'SELECT COALESCE(iva_por_producto, 0) FROM configuracion WHERE id = 1'
+    ).fetchone()
+    iva_por_producto = bool(fila_iva_prod[0]) if fila_iva_prod else False
+    items = _leer_items(cursor, id_venta, venta[8], iva_por_producto)
 
     # ── Totales del documento ────────────────────────────────────────────────
     # Se recalculan desde las líneas (base sin IVA) para que el XML cuadre

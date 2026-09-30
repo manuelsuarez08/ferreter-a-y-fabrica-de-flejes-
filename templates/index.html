@@ -1353,7 +1353,13 @@
                 con ese valor y nunca se migró). Si lo activas sin clasificar, la
                 ferretería deja de cobrar IVA en prácticamente toda la venta.
                 Clasifica primero cada producto y luego actívalo.
-              </div>
+                <div class="mt-2 d-flex gap-2 align-items-center flex-wrap">
+                  <span id="contador-iva-pendientes" class="text-muted small">Cargando…</span>
+                  <button type="button" class="btn btn-sm btn-outline-primary fw-bold"
+                          id="btn-abrir-clasificacion-iva"
+                          onclick="abrirPanelClasificacionIVA()">🗂️ Clasificar catálogo</button>
+                </div>
+                </div>
             </div>
           </div>
         </form>
@@ -2165,7 +2171,73 @@
                </div>
             </div>
 
-             <!-- ══ MODAL PRODUCTO RÁPIDO (desde cotizaciones) ═══════════════════
+             <!-- ══ CLASIFICACIÓN DEL IVA DEL CATÁLOGO ═══════════════════════════
+       El catálogo tiene `iva_tasa = 0` y `iva_tipo_tarifa = '01'` en casi todos
+       sus productos porque esas columnas se crearon con ese valor y nunca se
+       migraron. Decidir cuáles van a tasa cero es una decisión FISCAL del
+       negocio: ninguna herramienta puede deducirla del nombre del producto.
+       Este panel guarda lo que el administrador decide, por categoría (que es
+       como se hace en la práctica). -->
+  <div class="modal fade" id="modalClasificarIVA" tabindex="-1">
+    <div class="modal-dialog modal-lg">
+      <div class="modal-content">
+        <div class="modal-header bg-primary text-white">
+          <h5 class="modal-title fw-bold">Clasificar el IVA del catálogo</h5>
+          <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal"></button>
+        </div>
+        <div class="modal-body">
+          <div class="alert alert-info py-2 small">
+            <strong>Referencia:</strong> el 19% es la tarifa general. La tasa cero
+            aplica a materiales de construcción de extracción directa
+            (art. 424 del Estatuto Tributario: arena, balastro, piedra) y a
+            productos exentos (art. 422). La DIAN exige declarar además el
+            código de tarifa: <code>00</code> gravada, <code>01</code> excluida,
+            <code>02</code> exenta, <code>03</code> no sujeta.
+          </div>
+          <div class="row g-3">
+            <div class="col-md-5">
+              <label class="form-label fw-bold" for="clasif-categoria">Categoría</label>
+              <select id="clasif-categoria" class="form-select"
+                      onchange="actualizarDetalleClasificacion()"></select>
+              <small class="text-muted">Se clasifican todos los productos de la categoría.</small>
+            </div>
+            <div class="col-md-3">
+              <label class="form-label fw-bold" for="clasif-tasa">Tasa de IVA</label>
+              <select id="clasif-tasa" class="form-select">
+                <option value="19" selected>19% — gravada</option>
+                <option value="5">5% — gravada reducida</option>
+                <option value="0">0% — tasa cero</option>
+              </select>
+            </div>
+            <div class="col-md-4">
+              <label class="form-label fw-bold" for="clasif-tipo">Código DIAN</label>
+              <select id="clasif-tipo" class="form-select">
+                <option value="00" selected>00 — Tarifa normal</option>
+                <option value="01">01 — Excluido (art. 424)</option>
+                <option value="02">02 — Exento (art. 422)</option>
+                <option value="03">03 — No sujeto</option>
+              </select>
+            </div>
+          </div>
+          <div class="mt-3">
+            <small class="text-muted" id="clasif-conteo">Elige una categoría.</small>
+          </div>
+          <hr>
+          <div class="d-flex justify-content-between align-items-center">
+            <span class="small text-muted" id="clasif-progreso"></span>
+            <button type="button" class="btn btn-primary fw-bold"
+                    id="btn-aplicar-clasificacion"
+                    onclick="aplicarClasificacionIVA()">Aplicar a la categoría</button>
+          </div>
+        </div>
+        <div class="modal-footer">
+          <button type="button" class="btn btn-outline-secondary" data-bs-dismiss="modal">Cerrar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- ══ MODAL PRODUCTO RÁPIDO (desde cotizaciones) ═══════════════════
        Crea el producto en el inventario y lo deja seleccionado en la
        cotización en curso, sin salir del módulo. Mismo criterio que el
        modal de cliente rápido del POS. -->
@@ -4571,6 +4643,85 @@
       alert(historial.map(v => `Venta #${v.id} | ${v.fecha} | ${monedaCOP(v.total)} | ${v.tipo_pago}${v.anulada ? ' | ANULADA' : ''}`).join('\n'));
     }
 
+    // ══ Clasificación del IVA del catálogo ════════════════════════
+    // El catálogo llegó con `iva_tasa = 0` y `iva_tipo_tarifa = '01'` en casi
+    // todos sus productos: esas columnas se crearon con ese valor y nunca se
+    // migraron. Decidir cuáles van a tasa cero es una decisión FISCAL del
+    // negocio — ninguna herramienta puede deducirla del nombre del artículo.
+    // Este panel solo guarda lo que el administrador decide.
+    let categoriasIVA = [];
+
+    async function abrirPanelClasificacionIVA() {
+      try {
+        const res = await fetch('/api/productos/iva/pendientes');
+        if (!res.ok) throw new Error('no se pudo leer el estado');
+        const d = await res.json();
+        categoriasIVA = d.categorias || [];
+        const sel = document.getElementById('clasif-categoria');
+        sel.innerHTML = categoriasIVA
+          .map(c => `<option value="${escapeHtml(c.categoria)}">`
+            + `${escapeHtml(c.categoria)} (${c.productos})</option>`)
+          .join('') || '<option value="">(sin categorías)</option>';
+        actualizarDetalleClasificacion();
+        new bootstrap.Modal(document.getElementById('modalClasificarIVA')).show();
+      } catch (e) {
+        alert('No se pudo abrir la clasificación del IVA: ' + e.message);
+      }
+    }
+
+    function actualizarDetalleClasificacion() {
+      const sel = document.getElementById('clasif-categoria');
+      const el = document.getElementById('clasif-conteo');
+      if (!sel || !el) return;
+      const elegida = categoriasIVA.find(c => c.categoria === sel.value);
+      el.textContent = elegida
+        ? `Se aplicar�� a los ${elegida.productos} producto(s) de "${elegida.categoria}".`
+        : 'Elige una categoría.';
+    }
+
+    async function aplicarClasificacionIVA() {
+      const categoria = document.getElementById('clasif-categoria')?.value || '';
+      if (!categoria) { alert('Elige una categoría.'); return; }
+      const iva_tasa = Number(document.getElementById('clasif-tasa').value);
+      const iva_tipo_tarifa = document.getElementById('clasif-tipo').value;
+      const btn = document.getElementById('btn-aplicar-clasificacion');
+      const original = btn.innerText;
+      btn.disabled = true;
+      btn.innerText = 'Aplicando…';
+      try {
+        const res = await fetch('/api/productos/tarifa-iva', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ categoria, iva_tasa, iva_tipo_tarifa }),
+        });
+        const data = await res.json();
+        if (!res.ok) { alert('No se pudo aplicar: ' + (data.error || 'error')); return; }
+        setTexto('clasif-progreso', data.mensaje);
+        await cargarContadorIvaPendientes();
+        actualizarDetalleClasificacion();
+      } finally {
+        btn.disabled = false;
+        btn.innerText = original;
+      }
+    }
+
+    async function cargarContadorIvaPendientes() {
+      try {
+        const res = await fetch('/api/productos/iva/pendientes');
+        if (!res.ok) return;
+        const d = await res.json();
+        const el = document.getElementById('contador-iva-pendientes');
+        if (!el) return;
+        if (d.pendientes === 0) {
+          el.className = 'text-success fw-bold small';
+          el.innerHTML = '✅ Catálogo clasificado. Ya puede activar el IVA por producto.';
+        } else {
+          el.className = 'text-muted small';
+          el.innerText = `${d.pendientes} de ${d.total} productos sin clasificar.`;
+        }
+      } catch (e) { /* el contador es informativo */ }
+    }
+
     // ══ Producto rápido desde cotizaciones (punto 6) ═══════════════
     // Abre el alta de producto sin perder la cotización en curso. Al guardar,
     // el producto queda creado en el inventario Y agregado a la cotización.
@@ -6339,6 +6490,7 @@
         if (checkIvaProducto) {
           checkIvaProducto.checked = window.datosNegocio.iva_por_producto === true;
         }
+        cargarContadorIvaPendientes();
         actualizarBotonAutoImprimir();
         actualizarTablaCarrito();
       } catch (e) { /* silencioso: la tirilla usa valores por defecto */ }

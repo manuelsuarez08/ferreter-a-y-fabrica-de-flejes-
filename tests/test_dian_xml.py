@@ -323,15 +323,26 @@ def test_leer_items_respeta_el_producto_exento():
         'INSERT INTO productos (nombre, precio_venta, precio_costo,'
         ' stock_actual, iva_tasa, iva_naturaleza, unidad_medida, activo)'
         " VALUES ('Libro exento', 30000, 24000, 10, 0, 'exento', '94', 1)")
+    # Se crea una venta propia. Antes se usaba `SELECT MAX(id) FROM ventas`,
+    # que devuelve NULL si la base esta vacia: el detalle quedaba con
+    # id_venta = NULL, `_leer_items` no encontraba la linea y la prueba fallaba
+    # con "no se encontro la linea del producto exento", muy lejos de la causa.
+    cur.execute(
+        "INSERT INTO ventas (id_cliente, fecha_dia, hora, total_venta,"
+        " saldo_pendiente, tipo_pago, subtotal_venta, iva_valor, iva_porcentaje,"
+        " anulada) VALUES (1, '2026-09-30', '10:00:00', 30000, 0, 'efectivo',"
+        " 30000, 0, 0, 0)")
+    id_venta = cur.lastrowid
     cur.execute(
         'INSERT INTO detalle_ventas (id_venta, id_producto, cantidad,'
         ' precio_unitario, subtotal)'
-        ' SELECT (SELECT MAX(id) FROM ventas), id, 1, 30000, 30000'
-        ' FROM productos WHERE nombre=?', ('Libro exento',))
+        ' SELECT ?, id, 1, 30000, 30000'
+        ' FROM productos WHERE nombre=?', (id_venta, 'Libro exento'))
     conn.commit()
-
-    id_venta = cur.execute('SELECT MAX(id) FROM ventas').fetchone()[0]
-    items = dian_emision._leer_items(cur, id_venta, 19.0)
+    # Con el interruptor en 0 (el valor por defecto mientras el catálogo no esté
+    # clasificado). Un producto exento sigue yendo a tasa cero igualmente:
+    # declarar impuesto sobre una operación exenta lo rechaza la DIAN.
+    items = dian_emision._leer_items(cur, id_venta, 19.0, iva_por_producto=False)
     conn.close()
 
     exento = [i for i in items if 'exento' in i['descripcion'].lower()]
@@ -354,15 +365,26 @@ def test_un_producto_gravado_sigue_usando_su_tasa():
         'INSERT INTO productos (nombre, precio_venta, precio_costo,'
         ' stock_actual, iva_tasa, iva_naturaleza, unidad_medida, activo)'
         " VALUES ('Cemento grav', 59500, 47600, 10, 19, 'excluido', '94', 1)")
+    # Venta propia, no `MAX(id)`: en una base sin ventas eso devuelve NULL y el
+    # detalle queda huérfano. Ver el comentario de la prueba del exento.
+    cur.execute(
+        "INSERT INTO ventas (id_cliente, fecha_dia, hora, total_venta,"
+        " saldo_pendiente, tipo_pago, subtotal_venta, iva_valor, iva_porcentaje,"
+        " anulada) VALUES (1, '2026-09-30', '10:00:00', 59500, 0, 'efectivo',"
+        " 50000, 9500, 19, 0)")
+    id_venta = cur.lastrowid
     cur.execute(
         'INSERT INTO detalle_ventas (id_venta, id_producto, cantidad,'
         ' precio_unitario, subtotal)'
-        ' SELECT (SELECT MAX(id) FROM ventas), id, 1, 59500, 59500'
-        ' FROM productos WHERE nombre=?', ('Cemento grav',))
+        ' SELECT ?, id, 1, 59500, 59500'
+        ' FROM productos WHERE nombre=?', (id_venta, 'Cemento grav'))
     conn.commit()
 
-    id_venta = cur.execute('SELECT MAX(id) FROM ventas').fetchone()[0]
-    items = dian_emision._leer_items(cur, id_venta, 5.0)
+    # OJO: `iva_por_producto=False` es lo que usa el POS mientras el catálogo no
+    # esté clasificado. Con el catálogo en su estado real (toda la fila con
+    # iva_tipo_tarifa='01' sin migrar), el documento declara la tasa global, que
+    # es lo que el POS cobra. Ver test_clasificacion_iva.py.
+    items = dian_emision._leer_items(cur, id_venta, 19.0, iva_por_producto=False)
     conn.close()
 
     grav = [i for i in items if 'Cemento grav' in i['descripcion']]

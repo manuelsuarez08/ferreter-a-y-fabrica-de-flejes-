@@ -9,7 +9,7 @@ from datetime import datetime
 from flask import Blueprint, jsonify, request, session
 
 from ..db import get_db
-from ..security import login_required
+from ..security import admin_required, login_required
 from ..services.auditoria import registrar_auditoria
 from ..services.dian import calcular_digito_verificacion, es_nit
 
@@ -416,6 +416,128 @@ def _crear_o_reabastecer_producto(cursor, conn):
     # para dejar el producto recien creado seleccionado en el buscador.
     return jsonify({"mensaje": "Producto agregado con éxito",
                     "id": id_producto, "nombre": nombre}), 201
+
+
+@bp.route('/api/productos/tarifa-iva', methods=['POST'])
+@admin_required
+def clasificar_tarifa_iva():
+    """Clasifica el IVA del catálogo en LOTE.
+
+    Es la herramienta que falta para poder activar `iva_por_producto`. Hoy los
+    1461 productos tienen `iva_tasa = 0` y `iva_tipo_tarifa = '01'`, porque
+    esas columnas se crearon con ese valor y nunca se migraron. Con eso, la
+    venta cobraría (o dejaría de cobrar) sin que nadie lo haya decidido.
+
+    Recibe:
+      - `ids`: lista de ids de producto (clasificar uno a uno o un grupo).
+      - o `categoria`: clasifica TODOS los productos de esa categoría de una vez,
+        que es como se hace en la práctica: "todo lo que sea arena y balastro va
+        a tasa cero".
+
+    Body ejemplo:
+        {"categoria": "Arenas", "iva_tasa": 0, "iva_tipo_tarifa": "01",
+         "descripcion": "Material de extracción directa, art. 424 ET"}
+
+    El `iva_tipo_tarifa` es el código que la DIAN exige declarar en el XML:
+        '00' tarifa normal (gravada)   '01' excluido (art. 424)
+        '02' exento (art. 422)         '03' no sujeto
+
+    NO se deduce nada del nombre del producto: esa decisión es fiscal del
+    negocio. Aquí solo se guarda lo que el administrador escribió.
+    """
+    data = request.json or {}
+    ids = data.get('ids')
+    categoria = str(data.get('categoria') or '').strip()
+    if not ids and not categoria:
+        return jsonify({'error': 'Indique "ids" o "categoria"'}), 400
+
+    tasa = data.get('iva_tasa')
+    if tasa is None:
+        return jsonify({'error': 'Indique "iva_tasa" (0, 5 o 19)'}), 400
+    try:
+        tasa = float(tasa)
+    except (TypeError, ValueError):
+        return jsonify({'error': '"iva_tasa" debe ser un número'}), 400
+    if tasa not in (0.0, 5.0, 19.0):
+        return jsonify({'error': 'La tasa debe ser 0, 5 o 19'}), 400
+
+    tipo_tarifa = str(data.get('iva_tipo_tarifa') or '').strip()
+    if tipo_tarifa and tipo_tarifa not in ('00', '01', '02', '03'):
+        return jsonify({'error': '"iva_tipo_tarifa" debe ser 00, 01, 02 o 03'}), 400
+    # Si no viene el código de la DIAN, se deduce de la tasa SOLO para no dejar
+    # el campo incoherent: tasa 0 puede ser excluido o exento, y eso lo decide
+    # el negocio. Sin dato explícito se deja '00' (gravada) y se avisa.
+    if not tipo_tarifa:
+        tipo_tarifa = '00' if tasa > 0 else '01'
+        if tasa == 0:
+            # Tasa cero: '01' excluido o '02' exento. Por defecto excluido
+            # (art. 424, materiales de extracción), que es lo más común en una
+            # ferretería. Se puede corregir producto a producto después.
+            tipo_tarifa = '01'
+
+    conn = get_db()
+    try:
+        if ids:
+            marcas = ','.join('?' * len(ids))
+            cur = conn.execute(
+                f'UPDATE productos SET iva_tasa = ?, iva_tipo_tarifa = ? '
+                f'WHERE id IN ({marcas})',
+                [tasa, tipo_tarifa] + list(ids))
+        else:
+            cur = conn.execute(
+                'UPDATE productos SET iva_tasa = ?, iva_tipo_tarifa = ? '
+                'WHERE TRIM(COALESCE(categoria, \'\')) = ? COLLATE NOCASE',
+                (tasa, tipo_tarifa, categoria))
+        afectados = cur.rowcount
+        from ..services.auditoria import registrar_auditoria as _aud
+        _aud(conn, 'clasificar_iva', 'producto', None,
+             f'IVA {tasa}% (tipo {tipo_tarifa}) a {afectados} producto(s)'
+             + (f' de la categoría "{categoria}"' if categoria else ''))
+        conn.commit()
+    finally:
+        conn.close()
+
+    return jsonify({
+        'mensaje': f'{afectados} producto(s) clasificados con IVA {tasa}% '
+                   f'(tipo DIAN {tipo_tarifa})',
+        'afectados': afectados, 'iva_tasa': tasa, 'iva_tipo_tarifa': tipo_tarifa,
+    })
+
+
+@bp.route('/api/productos/iva/pendientes', methods=['GET'])
+@login_required
+def pendientes_clasificar_iva():
+    """Cuántos productos siguen SIN clasificar, y un resumen por categoría.
+
+    Sirve para saber cuánto falta para poder activar el IVA por producto sin
+    una activación accidental. Cuando `pendientes` llega a 0, ya se puede
+    activar con la casilla de Administración.
+    """
+    conn = get_db()
+    try:
+        total = conn.execute('SELECT COUNT(*) FROM productos').fetchone()[0]
+        sin_clasificar = conn.execute(
+            'SELECT COUNT(*) FROM productos '
+            'WHERE COALESCE(iva_tasa, 0) = 0 AND COALESCE(iva_tipo_tarifa, \'01\') = \'01\''
+        ).fetchone()[0]
+        interruptor = conn.execute(
+            'SELECT COALESCE(iva_por_producto, 0) FROM configuracion WHERE id = 1'
+        ).fetchone()[0]
+        por_categoria = conn.execute(
+            "SELECT COALESCE(categoria, 'Sin categoría') AS cat, COUNT(*) AS n "
+            "FROM productos GROUP BY cat ORDER BY n DESC LIMIT 40"
+        ).fetchall()
+    finally:
+        conn.close()
+    return jsonify({
+        'total': total,
+        'pendientes': sin_clasificar,
+        'clasificados': total - sin_clasificar,
+        'iva_por_producto_activo': bool(interruptor),
+        # Solo tiene sentido activarlo cuando no queda nada por decidir.
+        'puede_activar': sin_clasificar == 0,
+        'categorias': [{'categoria': r[0], 'productos': r[1]} for r in por_categoria],
+    })
 
 
 @bp.route('/api/productos/<int:id_producto>', methods=['PUT', 'DELETE'])
