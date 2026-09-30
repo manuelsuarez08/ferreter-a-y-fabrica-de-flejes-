@@ -4756,8 +4756,14 @@
         categoria: document.getElementById('prod-rapido-categoria').value.trim(),
         dimensiones: document.getElementById('prod-rapido-dimensiones').value.trim(),
         codigo_barras: document.getElementById('prod-rapido-codigo').value.trim(),
-        precio_venta: Number(document.getElementById('prod-rapido-precio').value || 0),
-        iva_tasa: Number(document.getElementById('prod-rapido-iva').value || 19),
+        // El precio del modal rápido es el PRECIO FINAL (con IVA incluido),
+        // igual que en Inventario de Productos. Se desglosa para guardar la base
+        // y el impuesto, que es lo que espera `_crear_o_reabastecer_producto`.
+        precio_venta: Number(document.getElementById('prod-rapido-precio').value),
+        // OJO: `|| 19` devuelve 19 cuando la tasa es 0, porque en JavaScript
+        // "0" es falsy. Elegir "0% (tasa cero)" en el desplegable guardaba 19.
+        // Se lee el valor y se convierte, sin `||`.
+        iva_tasa: Number(document.getElementById('prod-rapido-iva').value),
         stock_actual: Number(document.getElementById('prod-rapido-stock').value || 0),
         unidad_medida: '94',
       };

@@ -175,12 +175,22 @@ def _leer_items_creditados(cursor, id_venta, iva_porcentaje_venta):
         iva_tasa = float(iva_tasa or 0)
         naturaleza = str(naturaleza or 'excluido').strip().lower()
 
-        # Mismo criterio que la venta original: la nota debe cuadrar con el
-        # documento que corrige, así que aplica la MISMA regla de tarifa 0.
-        if (naturaleza in ('exento', 'excluido_iva', 'no_sujeto')
-                or tipo_tarifa in ('01', '02', '03')):
+        # Mismo criterio que el documento que corrige (dian_emision._leer_items).
+        # Si aquí no coincide, la nota declara un impuesto distinto al de la
+        # factura original y la DIAN rechaza la corrección.
+        #
+        # OJO con `not iva_tasa`: en Python `not 0` es True, así que un producto
+        # de tasa CERO caía en la rama siguiente y se le ponía la tasa general.
+        # Una nota crédito sobre un artículo excluido declaraba IVA 19% sobre un
+        # impuesto que nunca se cobró. Se compara con `== 0`.
+        #
+        # Tampoco se puede usar `iva_naturaleza` sola: vale 'excluido' por
+        # defecto en todo el catálogo, donde significa "gravado".
+        if naturaleza in ('exento', 'no_sujeto') or iva_tasa == 0:
             iva_tasa = 0.0
-        elif not iva_tasa and iva_porcentaje_venta:
+        elif naturaleza == 'excluido_iva' or tipo_tarifa in ('01', '02', '03'):
+            iva_tasa = 0.0
+        elif iva_porcentaje_venta:
             iva_tasa = float(iva_porcentaje_venta or 0)
 
         precio_base = (precio_final / (1 + iva_tasa / 100)) if iva_tasa else precio_final
