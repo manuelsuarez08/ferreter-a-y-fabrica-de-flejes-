@@ -69,6 +69,27 @@ def _cerrar():
         _conn = None
 
 
+@pytest.fixture(autouse=True)
+def _series_en_estado_base():
+    """Cada prueba arranca con las series en su estado por defecto.
+
+    Hace falta por dos motivos, ambos por interferencia entre modulos:
+
+    1. El consecutivo se reinicia. `test_emision_con_series.py` emite de
+       verdad y deja el contador movido; como el orden de pytest no es el del
+       archivo, el modulo puede correr antes o despues.
+    2. El prefijo vuelve a su valor por defecto, porque el test de emision
+       configura SETP111111111 / SETP222222222 para probar el aislamiento.
+
+    Un `autouse=True` aqui NO alcanza para lo que hace el otro modulo (los
+    fixtures son por modulo), asi que cada lado se limpia a si mismo.
+    """
+    conn = _abrir()
+    conn.execute("UPDATE series_dian SET consecutivo = 1, prefijo = tipo_documento")
+    conn.commit()
+    yield
+
+
 @pytest.fixture
 def app():
     # `create_app()` con `inicializar_db=True` puede Volver a sembrar el
