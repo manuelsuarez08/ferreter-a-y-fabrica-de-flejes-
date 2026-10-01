@@ -85,6 +85,17 @@ _verif_*.mjs
 # Precios pendientes de cargar (datos de trabajo, no parte de la app)
 precios_pendientes/
 
+# ── Instancias de los clientes ──────────────────────────
+# `provisionar()` crea `ferreteria_<nombre>.db` (y su carpeta de static/) junto a
+# la base del desarrollador. Son DATOS DE UN CLIENTE, no del software: subirlos
+# al repositorio publicaría su catálogo, sus ventas y hasta su logo, y dos
+# instancias se pisarían los archivos entre sí al clonarse.
+ferreteria_*.db
+ferreteria_*.db-journal
+ferreteria_*.db-wal
+ferreteria_*.db-shm
+ferreteria_*/
+
 # ── Logo del negocio (Personalización) ─────────────────────────────────
 # `static/logos/` lo sube el dueño de CADA ferretería desde su pantalla de
 # Personalización. Son datos de un cliente concreto, no del software, y además
