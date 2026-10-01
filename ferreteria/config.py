@@ -218,6 +218,20 @@ DB_TIMEOUT = 15
 DB_BUSY_TIMEOUT_MS = 15000
 DB_CACHE_SIZE_KB = -16000
 
+# ── Marca de la plataforma ─────────────────────────────────────────
+# FerreControl es el SOFTWARE. El nombre de cada ferretería es un DATO, vive en
+# la tabla `configuracion` de SU base (campo `nombre`) y lo configura el dueño.
+#
+# Antes el nombre del cliente estaba escrito en el código (títulos de página,
+# textos del POS, nombre por defecto de la base), lo que ataba el software a un
+# solo cliente: cada ferretería nueva aparecía como "Ferretería y Fábrica de
+# Flejes" hasta que alguien lo cambiaba a mano. Ahora la marca vive en un solo
+# lugar y el negocio se lee de la base.
+NOMBRE_PLATAFORMA = 'FerreControl'
+VERSION_PLATAFORMA = '1.0'
+# Subtítulo que aparece bajo la marca en las pantallas de la plataforma.
+TAGLINE_PLATAFORMA = 'Control total para su ferretería'
+
 # ── Reglas de negocio reutilizables ────────────────────────
 # Tipos de tarifa válidos para alquiler de maquinaria.
 TIPOS_TARIFA = ('dia', 'hora', 'turno', 'bulto')

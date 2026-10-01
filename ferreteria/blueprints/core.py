@@ -14,7 +14,8 @@ from flask import (
 )
 from werkzeug.security import check_password_hash, generate_password_hash
 
-from ..config import CLIENTE_MOSTRADOR_ID, DB_NAME, NOMBRE_CLIENTE_MOSTRADOR
+from ..config import (CLIENTE_MOSTRADOR_ID, DB_NAME, NOMBRE_CLIENTE_MOSTRADOR,
+                      NOMBRE_PLATAFORMA, VERSION_PLATAFORMA)
 from ..db import get_db
 from ..security import admin_required, login_required
 from .catalogo import DEPARTAMENTO_NEGOCIO, MUNICIPIO_NEGOCIO
@@ -25,8 +26,32 @@ bp = Blueprint('core', __name__)
 
 
 # ── Autenticación ─────────────────────────────
+def _leer_marca():
+    """Marca del negocio (logo, nombre, mensaje), o la vacía si algo falla.
+
+    Se llama desde el POS y también desde el login. Va en el login porque el
+    cliente tiene que ver SU logo antes de autenticarse: si la marca se leyera
+    solo con la sesión iniciada, toda ferretería se vería con el logo de la
+    primera en la pantalla de entrada, que es justo la primera que el cliente ve.
+
+    Ante cualquier error devuelve la marca vacía en vez de lanzar: una pantalla
+    en blanco es peor que una pantalla sin logo, y la venta es lo importante.
+    """
+    conn = get_db()
+    try:
+        return personalizacion.leer(conn)
+    except personalizacion.ErrorPersonalizacion:
+        # Base vieja que no reinició y no tiene las columnas de personalización.
+        return _marca_por_defecto()
+    except sqlite3.Error:
+        current_app.logger.exception('No se pudo leer la marca del negocio')
+        return _marca_por_defecto()
+    finally:
+        conn.close()
+
+
 def _marca_por_defecto():
-    """Marca vacía: el POS arranca igual, solo que sin logo propio."""
+    """Marca vacía: la app arranca igual, solo que sin logo propio."""
     return {
         'nombre': '', 'nombre_comercial': '', 'logo_url': '', 'logo_tiene': False,
         'logo_tamano': 96, 'logo_mostrar': False, 'mensaje_pie': '',
@@ -39,26 +64,9 @@ def index():
     if 'usuario' not in session:
         return redirect(url_for('core.login'))
 
-    # Marca del negocio: logo, nombre comercial y mensaje del ticket. Se leen
-    # aquí para que el POS nazca con la ferretería ya personalizada, sin una
-    # llamada extra desde JavaScript. Si la base todavía no tiene las columnas
-    # (una instalación vieja que no reinició), se usan valores vacíos: es
-    # preferible un POS sin logo a una pantalla en blanco.
-    conn = get_db()
-    try:
-        marca = personalizacion.leer(conn)
-    except personalizacion.ErrorPersonalizacion:
-        # La base todavía no tiene las columnas (instalación vieja que no
-        # reinició). Es preferible un POS sin logo a una pantalla en blanco.
-        marca = _marca_por_defecto()
-    except sqlite3.Error:
-        # Error de base de datos: se registra y se sigue con la marca vacía. El
-        # POS debe poderfacturar aunque falle la lectura de la configuración de
-        # marca; la venta es lo importante.
-        current_app.logger.exception('No se pudo leer la marca del negocio')
-        marca = _marca_por_defecto()
-    finally:
-        conn.close()
+    # La marca se lee una sola vez, con el mismo camino que el login: asi el
+    # cliente ve su logo en las dos pantallas.
+    marca = _leer_marca()
 
     return render_template(
         'index.html',
@@ -69,6 +77,7 @@ def index():
         # `marca['logo_tiene']` es falso.
         logo_defecto='logo_ferreteria.jpeg',
         negocio=marca,
+        NOMBRE_PLATAFORMA=NOMBRE_PLATAFORMA,
         # El POS arranca en el cliente mostrador genérico (ver config.py).
         cliente_mostrador_id=CLIENTE_MOSTRADOR_ID,
         nombre_cliente_mostrador=NOMBRE_CLIENTE_MOSTRADOR,
@@ -102,9 +111,16 @@ def login():
             # HTML del login y las vistas salen vacías sin avisar.
             session.permanent = True
             return redirect(url_for('core.index'))
-        return render_template('login.html', error='Credenciales incorrectas.')
+        return render_template(
+            'login.html', error='Credenciales incorrectas.',
+            negocio=_leer_marca(),
+            NOMBRE_PLATAFORMA=NOMBRE_PLATAFORMA)
 
-    return render_template('login.html')
+    # El GET también pasa la marca: el cliente ve su logo y su nombre ANTES de
+    # autenticarse. Antes se usaba aquí el logo y el nombre de un cliente
+    # concreto, así que toda ferretería nueva abría con la imagen de la primera.
+    return render_template('login.html', negocio=_leer_marca(),
+                        NOMBRE_PLATAFORMA=NOMBRE_PLATAFORMA)
 
 
 def _credenciales_validas(row, clave):

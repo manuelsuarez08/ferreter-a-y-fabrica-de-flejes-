@@ -4,7 +4,7 @@
  <meta charset="UTF-8">
  <meta name="viewport" content="width=device-width, initial-scale=1.0">
  <meta name="google" content="notranslate">
- <title>Ferretería y Fábrica de Flejes - Sistema POS</title>
+ <title>{{ negocio.nombre_comercial or negocio.nombre or 'FerreControl' }} | FerreControl</title>
   <link href="{{ url_for('static', filename='vendor/bootstrap.min.css') }}" rel="stylesheet">
   <link href="{{ url_for('static', filename='vendor/tom-select.bootstrap5.min.css') }}" rel="stylesheet">
    <!-- html2pdf (~885 KB) y html5-qrcode (~367 KB) NO se cargan aquí: se
@@ -243,10 +243,16 @@
   <!-- Navbar -->
   <nav class="navbar navbar-expand-lg navbar-dark bg-primary mb-4 shadow-sm">
     <div class="container-fluid">
+      {# El nombre de arriba es el del NEGOCIO (dato de su base). La marca del
+         software va debajo, chica: el cliente tiene que ver su ferretería en
+         grande, no el nombre del programa. #}
       <a class="navbar-brand fw-bold fs-4 d-flex align-items-center gap-2" href="#">
         <img src="{% if negocio.logo_tiene %}{{ negocio.logo_url }}{% else %}{{ url_for('static', filename=logo_defecto) }}{% endif %}"
              alt="Logo del negocio" class="logo-navbar">
-        <span>{{ negocio.nombre_comercial or negocio.nombre or 'FERRETERÍA Y FÁBRICA DE FLEJES' }}</span>
+        <span class="d-flex flex-column lh-1">
+          <span>{{ negocio.nombre_comercial or negocio.nombre or 'Mi Negocio' }}</span>
+          <span class="fs-7 fw-normal opacity-75">{{ NOMBRE_PLATAFORMA }}</span>
+        </span>
       </a>
 
       <div class="d-flex align-items-center gap-3">
@@ -2013,7 +2019,7 @@
             <div class="text-center mb-2">
               <img src="{% if negocio.logo_tiene %}{{ negocio.logo_url }}{% else %}{{ url_for('static', filename=logo_defecto) }}{% endif %}"
                    alt="Logo del negocio" class="logo-documento">
-              <h3 class="fw-bold mb-0" id="fac-negocio-nombre">{{ negocio.nombre_comercial or negocio.nombre or 'FERRETERÍA Y FÁBRICA DE FLEJES' }}</h3>
+              <h3 class="fw-bold mb-0" id="fac-negocio-nombre">{{ negocio.nombre_comercial or negocio.nombre or 'Mi Negocio' }}</h3>
               <p class="text-muted mb-0">Venta de Materiales de Construcción y Flejes a Medida</p>
               <p class="text-muted mb-0" id="fac-negocio-nit"></p>
               <p class="text-muted mb-0" id="fac-negocio-dir"></p>
@@ -2327,7 +2333,7 @@
             <div class="text-center mb-2">
               <img src="{% if negocio.logo_tiene %}{{ negocio.logo_url }}{% else %}{{ url_for('static', filename=logo_defecto) }}{% endif %}"
                    alt="Logo del negocio" class="logo-documento">
-              <h3 class="fw-bold mb-0" id="abono-negocio-nombre">{{ negocio.nombre_comercial or negocio.nombre or 'FERRETERÍA Y FÁBRICA DE FLEJES' }}</h3>
+              <h3 class="fw-bold mb-0" id="abono-negocio-nombre">{{ negocio.nombre_comercial or negocio.nombre or 'Mi Negocio' }}</h3>
               <p class="text-muted mb-0" id="abono-negocio-nit"></p>
               <p class="text-muted mb-0" id="abono-negocio-dir"></p>
               <p class="fw-bold mb-0">RECIBO DE ABONO N° <span id="abono-id"></span></p>
@@ -2481,7 +2487,7 @@
              <div class="text-center mb-2">
                <img src="{% if negocio.logo_tiene %}{{ negocio.logo_url }}{% else %}{{ url_for('static', filename=logo_defecto) }}{% endif %}"
                     alt="Logo del negocio" class="logo-documento">
-               <h3 class="fw-bold mb-0" id="cot-negocio-nombre">{{ negocio.nombre_comercial or negocio.nombre or 'FERRETERÍA Y FÁBRICA DE FLEJES' }}</h3>
+               <h3 class="fw-bold mb-0" id="cot-negocio-nombre">{{ negocio.nombre_comercial or negocio.nombre or 'Mi Negocio' }}</h3>
                <p class="text-muted mb-0" id="cot-negocio-nit"></p>
                <p class="text-muted mb-0" id="cot-negocio-dir"></p>
                <p class="fw-bold mb-0">COTIZACIÓN N° <span id="cot-ver-consecutivo"></span></p>
@@ -3263,7 +3269,7 @@
 
       const html = `
         <div class="text-center mb-2">
-          <h3 class="fw-bold mb-0">${escapeHtml(neg.nombre || 'FERRETERÍA Y FÁBRICA DE FLEJES').toUpperCase()}</h3>
+          <h3 class="fw-bold mb-0">${escapeHtml(neg.nombre || 'MI NEGOCIO').toUpperCase()}</h3>
           <p class="text-muted mb-0">${neg.nit ? 'NIT: ' + escapeHtml(neg.nit) : ''}${neg.telefono ? ' | Tel: ' + escapeHtml(neg.telefono) : ''}</p>
           <p class="text-muted mb-0">${escapeHtml(neg.direccion || '')}</p>
           <p class="fw-bold mb-0">RECIBO DE ENTREGA DE EQUIPO</p>
@@ -4886,7 +4892,7 @@
 
       const html = `
         <div class="text-center mb-2">
-          <h3 class="fw-bold mb-0">${escapeHtml(negocio.nombre || 'FERRETERÍA Y FÁBRICA DE FLEJES').toUpperCase()}</h3>
+          <h3 class="fw-bold mb-0">${escapeHtml(negocio.nombre || 'MI NEGOCIO').toUpperCase()}</h3>
           <p class="text-muted mb-0">${negocio.nit ? 'NIT: ' + escapeHtml(negocio.nit) : ''}</p>
           <p class="fw-bold mb-0">ESTADO DE CUENTA — ${escapeHtml(d.mes_nombre.toUpperCase())}</p>
         </div>
@@ -5181,7 +5187,7 @@
     function mostrarComprobanteAbono(abono, autoPrint) {
       comprobanteAbonoActual = abono;
       const negocio = (window.datosNegocio || {});
-      setTexto('abono-negocio-nombre', (negocio.nombre || 'Ferretería y Fábrica de Flejes').toUpperCase());
+      setTexto('abono-negocio-nombre', (negocio.nombre || 'Mi Negocio').toUpperCase());
       setTexto('abono-negocio-nit', (negocio.nit ? `NIT: ${negocio.nit}` : '') + (negocio.telefono ? ` | Tel: ${negocio.telefono}` : ''));
       setTexto('abono-negocio-dir', negocio.direccion || '');
       setTexto('abono-id', abono.id);
@@ -5210,7 +5216,7 @@
       const negocio = (window.datosNegocio || {});
       const moneda = (v) => '$' + Number(v || 0).toLocaleString('es-CO') + ' COP';
       const lineas = [];
-      lineas.push('*' + (negocio.nombre || 'FERRETERÍA Y FÁBRICA DE FLEJES').toUpperCase() + '*');
+      lineas.push('*' + (negocio.nombre || 'MI NEGOCIO').toUpperCase() + '*');
       if (negocio.telefono) lineas.push('Tel: ' + negocio.telefono);
       lineas.push('');
       lineas.push('*RECIBO DE ABONO N° ' + a.id + '*');
@@ -5737,7 +5743,7 @@
 					facturaActualId = id;
 				facturaActual = factura;
 				const negocio = factura.negocio || {};
-				setTexto('fac-negocio-nombre', (negocio.nombre || 'Ferretería y Fábrica de Flejes').toUpperCase());
+				setTexto('fac-negocio-nombre', (negocio.nombre || 'Mi Negocio').toUpperCase());
 				setTexto('fac-negocio-nit', (negocio.nit ? `NIT: ${negocio.nit}` : '') + (negocio.telefono ? ` | Tel: ${negocio.telefono}` : ''));
 				setTexto('fac-negocio-dir', negocio.direccion || '');
 					setTexto('fac-id', factura.id);
@@ -5948,7 +5954,7 @@
 		const negocio = (f.negocio || {});
 		const moneda = (v) => '$' + Number(v || 0).toLocaleString('es-CO') + ' COP';
 		const lineas = [];
-		lineas.push('*' + (negocio.nombre || 'FERRETERÍA Y FÁBRICA DE FLEJES').toUpperCase() + '*');
+		lineas.push('*' + (negocio.nombre || 'MI NEGOCIO').toUpperCase() + '*');
 		if (negocio.telefono) lineas.push('Tel: ' + negocio.telefono);
 		if (negocio.direccion) lineas.push(negocio.direccion);
 		lineas.push('');
@@ -7385,7 +7391,7 @@
             if (!res.ok) { alert('Error: ' + cot.error); return; }
             cotizacionActual = cot;
             const negocio = cot.negocio || {};
-            setTexto('cot-negocio-nombre', (negocio.nombre || 'Ferretería y Fábrica de Flejes').toUpperCase());
+            setTexto('cot-negocio-nombre', (negocio.nombre || 'Mi Negocio').toUpperCase());
             setTexto('cot-negocio-nit', (negocio.nit ? `NIT: ${negocio.nit}` : '') + (negocio.telefono ? ` | Tel: ${negocio.telefono}` : ''));
             setTexto('cot-negocio-dir', negocio.direccion || '');
             setTexto('cot-ver-consecutivo', cot.consecutivo);
@@ -7466,7 +7472,7 @@
             const negocio = (cot.negocio || {});
             const moneda = (v) => '$' + Number(v || 0).toLocaleString('es-CO') + ' COP';
             const lineas = [];
-            lineas.push(`*${(negocio.nombre || 'FERRETERÍA Y FÁBRICA DE FLEJES').toUpperCase()}*`);
+            lineas.push(`*${(negocio.nombre || 'MI NEGOCIO').toUpperCase()}*`);
             if (negocio.telefono) lineas.push(`Tel: ${negocio.telefono}`);
             if (negocio.direccion) lineas.push(`${negocio.direccion}`);
             lineas.push('');

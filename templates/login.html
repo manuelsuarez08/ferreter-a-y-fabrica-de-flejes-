@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="google" content="notranslate">
-    <title>Iniciar Sesión - Sistema Ferretería</title>
+    <title>Iniciar Sesión | FerreControl</title>
     <link href="{{ url_for('static', filename='vendor/bootstrap.min.css') }}" rel="stylesheet">
     <style>
         body {
@@ -34,16 +34,45 @@
             display: block;
             margin: 0 auto 14px;
         }
+        /* Cuando la ferretería todavía no ha subido logo, se muestra la marca
+           de la plataforma. Va en un círculo del mismo tamaño que el logo para
+           que la pantalla no cambie de alto al cargar el logo de verdad. */
+        .login-marca {
+            width: 132px;
+            height: 132px;
+            border-radius: 50%;
+            background: #1F4E79;
+            color: #ffffff;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            font-weight: 700;
+            font-size: 1.05rem;
+            text-align: center;
+            padding: 0 10px;
+            margin: 0 auto 14px;
+        }
     </style>
 </head>
 <body>
 
 <div class="login-card">
-    <img src="{{ url_for('static', filename='logo_ferreteria.jpeg') }}"
-         alt="Logo Ferretería y Fábrica de Flejes" class="login-logo">
+    {# El logo de arriba es el del NEGOCIO, no el de la plataforma: en el login
+       todavía no hay sesión, así que se lee de la configuración de esta base
+       (que es la del ferretería que está entrando). Si no hay logo propio, cae
+       al de la plataforma. Antes se usaba aquí el logo de un cliente concreto,
+       y eso hacía que toda ferretería nueva abriera el login con el nombre de
+       la primera. #}
+    {% if negocio and negocio.logo_tiene %}
+        <img src="{{ negocio.logo_url }}" alt="{{ negocio.nombre_comercial }}"
+             class="login-logo">
+    {% else %}
+        <div class="login-marca">{{ NOMBRE_PLATAFORMA }}</div>
+    {% endif %}
     <h3 class="text-center mb-1 text-primary">Acceso al Sistema</h3>
     <p class="text-center text-muted mb-4" style="font-size:.85rem;">
-        Ferretería y Fábrica de Flejes
+        {{ negocio.nombre_comercial if negocio and negocio.nombre_comercial
+           else NOMBRE_PLATAFORMA }}
     </p>
     
     {% if error %}

@@ -220,10 +220,18 @@ def _crear_tablas_operacion(cursor):
             fecha TEXT NOT NULL
         )
     ''')
+    # `nombre` es la RAZON SOCIAL DEL NEGOCIO, no el nombre del software. El
+    # software se llama FerreControl (ver NOMBRE_PLATAFORMA en config.py) y este
+    # campo lo llena el dueño de cada ferretería. El valor por defecto es
+    # genérico a propósito: una base nueva no debe arrancar mostrando el nombre
+    # de un cliente anterior.
+    #
+    # El comentario va FUERA del literal: SQLite no acepta `#` dentro de una
+    # sentencia y falla con "unrecognized token".
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS configuracion (
             id INTEGER PRIMARY KEY CHECK (id = 1),
-            nombre TEXT NOT NULL DEFAULT 'Ferretería y Fábrica de Flejes',
+            nombre TEXT NOT NULL DEFAULT 'Mi Negocio',
             nit TEXT DEFAULT '',
             telefono TEXT DEFAULT '',
             direccion TEXT DEFAULT '',
