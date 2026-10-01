@@ -145,21 +145,22 @@ def test_encuentra_aplicar_tras_insertar_una_columna(tmp_path):
 # 3. La trampa de las hojas que --aplicar no lee
 # ═══════════════════════════════════════════
 
-def test_avisa_de_marcas_en_una_hoja_que_no_se_aplica(tmp_path):
-    """--aplicar SOLO lee TODOS. Marcar en otra hoja no aplica nada.
+def test_no_avisa_sobre_todos_porque_ya_se_consolida(tmp_path):
+    """Antes avisaba que --aplicar solo leía TODOS. Ahora consolida, así que no.
 
-    Es la trampa más probable: la propia hoja COMO LEER ESTO manda trabajar en
-    POR REVISAR, pero las decisiones se leen de TODOS. Perder tres horas de
-    marcado sin ningún error es el peor desenlace posible.
+    Este test fija el CAMBIO de comportamiento: el aviso era el síntoma de un
+    problema que se resolvió en el lector. Si vuelve a aparecer, significa que
+    alguien revirtió la consolidación.
     """
     ruta = _excel_con_marcas(str(tmp_path / 'f.xlsx'), [(2, 'SI')],
                              hoja='POR REVISAR')
 
     info = exportador.revisar_existente(ruta)
 
+    assert not any('TODOS' in a for a in info['advertencias']), \
+        'Ya no aplica el aviso: --aplicar lee todas las hojas'
+    # Pero SÍ debe seguir detectando que hay trabajo que no se puede pisar.
     assert info['con_marcas'] is True
-    assert any('TODOS' in a for a in info['advertencias']), \
-        'Debe avisar que --aplicar solo lee TODOS'
 
 
 def test_no_avisa_si_las_marcas_estan_en_todos(tmp_path):
@@ -169,7 +170,7 @@ def test_no_avisa_si_las_marcas_estan_en_todos(tmp_path):
 
     info = exportador.revisar_existente(ruta)
 
-    assert not any('TODOS' in a for a in info['advertencias'])
+    assert not info['advertencias']
 
 
 # ═══════════════════════════════════════════

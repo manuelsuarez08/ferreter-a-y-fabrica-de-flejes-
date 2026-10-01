@@ -414,68 +414,163 @@ def resumen(filas):
 # 6. APLICACION
 # ══════════════════════════════════════════════════════════════
 
-def decisiones_del_excel(filas):
-    """Lee la columna APLICAR del Excel que lleno el administrador.
+# Hojas del Excel de las que se leen decisiones, en ORDEN DE MENOS a MAS
+# prioridad. Ver `_resolver` para por qué está en ese orden.
+HOJAS_DECISION = ('LISTOS PARA APLICAR', 'POR REVISAR', 'TODOS')
 
-    El Excel trae la hoja 'TODOS' con la MISMA informacion que el reporte, pero
-    con la columna `aplicar` en blanco esperando la decision. Sin esto, lo que
-    la persona marco en el Excel se perdia: el reporte se cerraba aqui mismo y
-    el CSV nunca se miraba.
+VERDADEROS = ('SI', 'SÍ', 'S', 'YES', '1', 'X')
 
-    Solo se acepta un SI/NO explicito. Las hojas 'POR REVISAR' y 'LISTOS PARA
-    APLICAR' se IGNORAN a proposito: si se marcaran en las dos se contaria un
-    producto dos veces, y no hay una regla barata para decidir cual gana.
-    Se manda 'TODOS', que es la unica que cubre el catalogo entero.
+
+def _leer_marcas(hoja):
+    """Devuelve {id_producto: 'SI'|'NO'} de una hoja del Excel.
+
+    Se recorre UNA sola vez con `iter_rows`: con `read_only`, cada llamada a
+    `hoja.cell()` vuelve a recorrer la hoja entera, y 1461 filas convertían la
+    lectura en algo de más de dos minutos.
+
+    La columna APLICAR se busca por ENCABECADO y no por posición: el dueño puede
+    insertar o reordenar columnas en Excel, y una posición fija leería la
+    decisión de la columna equivocada sin avisar.
     """
-    if not os.path.exists(SALIDA_XLSX):
+    iterador = hoja.iter_rows(values_only=True)
+    try:
+        cabeceras = next(iterador)
+    except StopIteration:
         return {}
+    if not cabeceras:
+        return {}
+
+    col_id = col_aplicar = None
+    for posicion, valor in enumerate(cabeceras):
+        if valor is None:
+            continue
+        titulo = str(valor).strip().lower()
+        if titulo == 'id bd':
+            col_id = posicion
+        elif titulo == 'aplicar':
+            col_aplicar = posicion
+    if col_id is None or col_aplicar is None:
+        return {}
+
+    marcas = {}
+    for fila in iterador:
+        if col_id >= len(fila) or col_aplicar >= len(fila):
+            continue
+        identificador = fila[col_id]
+        if identificador is None:
+            continue
+        decision = fila[col_aplicar]
+        if decision is None:
+            continue
+        texto = str(decision).strip()
+        if texto == '':
+            continue
+        try:
+            clave = int(identificador)
+        except (TypeError, ValueError):
+            continue
+        # 'NO' se guarda como tal: es una decisión explícita de NO TOCAR, y la
+        # respetamos por encima de la confianza que tenga el reporte.
+        marcas[clave] = 'SI' if texto.upper() in VERDADEROS else 'NO'
+    return marcas
+
+
+def _resolver(marcas_por_hoja):
+    """Consolida las marcas de varias hojas en una sola decisión por producto.
+
+    REGLA (y por qué esta)
+    ---------------------
+    Un producto aparece en varias hojas: está en TODOS siempre, en POR REVISAR
+    si necesita decisión, y en LISTOS si el reporte lo considera de confianza.
+
+    - Si tiene NO en CUALQUIER hoja, no se aplica. Un NO es alguien diciendo
+      "a este déjalo quieto". Y como el reporte aplica solo lo que considera de
+      confianza, ese NO también debe frenar la propuesta automática: si no, el
+      usuario marcó NO en una hoja y la herramienta lo aplicó igual.
+    - Si tiene SI y ningún NO, se aplica. Da igual en qué hoja esté marcado:
+      la persona lo decidió.
+    - Si no tiene ninguna marca, no se decide aquí. El comando usa entonces la
+      confianza del reporte.
+
+    El NO gana sobre el SI a propósito. Si alguien se contradice entre hojas, lo
+    que sale mal es cambiar la tarifa de un producto sin querer; eso no tiene
+    arreglo. Dejarlo como estaba, sí.
+    """
+    consolidado = {}
+    for hoja in HOJAS_DECISION:
+        for clave, valor in marcas_por_hoja.get(hoja, {}).items():
+            if valor == 'NO':
+                consolidado[clave] = 'NO'
+            elif consolidado.get(clave) != 'NO':
+                consolidado[clave] = 'SI'
+    return consolidado
+
+
+def decisiones_del_excel(filas=None, detallado=False):
+    """Lee la columna APLICAR del Excel que llenó el administrador.
+
+    Se leen TODAS las hojas de detalle y se consolidan (ver `_resolver`), para
+    que no haya que copiar las decisiones de `POR REVISAR` a `TODOS` a mano. Antes
+    solo se leía `TODOS`, y el propio archivo indicaba trabajar en `POR
+    REVISAR`: lo que se marcaba ahí no se aplicaba nunca, sin aviso.
+
+    Returns:
+        {id_producto: 'SI'|'NO'}. Con `detallado=True` devuelve además un
+        resumen por hoja, para que el comando diga de dónde salió cada cosa.
+    """
+    vacio = ({}, {}) if detallado else {}
+    if not os.path.exists(SALIDA_XLSX):
+        return vacio
 
     import openpyxl
 
-    libro = openpyxl.load_workbook(SALIDA_XLSX, data_only=True)
-    if 'TODOS' not in libro.sheetnames:
-        return {}
-    hoja = libro['TODOS']
+    libro = openpyxl.load_workbook(SALIDA_XLSX, data_only=True, read_only=True)
+    try:
+        marcas_por_hoja = {
+            nombre: _leer_marcas(libro[nombre])
+            for nombre in HOJAS_DECISION
+            if nombre in libro.sheetnames
+        }
+    finally:
+        libro.close()
 
-    cabeceras = {}
-    for celda in hoja[1]:
-        if celda.value is None:
-            continue
-        cabeceras[str(celda.value).strip().lower()] = celda.column
-
-    col_id = cabeceras.get('id bd')
-    col_aplicar = cabeceras.get('aplicar')
-    if not col_id or not col_aplicar:
-        return {}
-
-    decisiones = {}
-    for fila in hoja.iter_rows(min_row=2, values_only=True):
-        if not fila or fila[col_id - 1] is None:
-            continue
-        crudo = fila[col_aplicar - 1]
-        if crudo is None:
-            continue
-        if str(crudo).strip().upper() in ('SI', 'SÍ', 'S', 'YES', '1', 'X'):
-            decisiones[int(fila[col_id - 1])] = 'SI'
-
-    return decisiones
+    decisiones = _resolver(marcas_por_hoja)
+    del filas
+    if not detallado:
+        return decisiones
+    return decisiones, marcas_por_hoja
 
 
 def aplicar(conn, filas):
     """Escribe SOLO los productos que el administrador marco como aplicables.
 
-    La decision sale del Excel (`auditoria_catalogo.xlsx`, hoja TODOS) y, si el
-    Excel no existe o esta vacio, del reporte generado en memoria. El Excel
-    manda: es lo que la persona reviso y confirmo fila por fila.
+    La decision sale del Excel (`auditoria_catalogo.xlsx`), leyendo TODAS sus
+    hojas y consolidandolas, y si el Excel no existe o esta vacio, del reporte
+    generado en memoria. El Excel manda: es lo que la persona reviso y confirmo
+    fila por fila.
+
+    Un 'NO' explicito en cualquier hoja frena el producto, incluso si el reporte
+    lo considera de confianza alta. Quien marco NO estaba diciendo "no se": estaba
+    diciendo "a este no lo toques", y eso gana.
 
     Se guardan la tasa, el tipo de tarifa DIAN, la naturaleza y la unidad. El
     `precio_venta` NO se toca: es el precio que paga el cliente y ni el reporte
     ni este comando lo modifican.
     """
-    decisiones = decisiones_del_excel(filas)
+    decisiones, por_hoja = decisiones_del_excel(detallado=True)
     if decisiones:
-        print(f'Decisiones leidas del Excel: {sum(1 for v in decisiones.values() if v == "SI")}'
-              ' productos marcados con APLICAR = SI.')
+        marcados = [h for h in HOJAS_DECISION if por_hoja.get(h)]
+        origen = ', '.join(
+            f'{h} ({sum(1 for v in por_hoja[h].values() if v == "SI")})'
+            for h in marcados)
+        print(f'Decisiones leidas del Excel: {origen}')
+
+    explicitos_si = sum(1 for v in decisiones.values() if v == 'SI')
+    explicitos_no = sum(1 for v in decisiones.values() if v == 'NO')
+    if explicitos_si or explicitos_no:
+        print(f'  {explicitos_si} marcado(s) SI · {explicitos_no} marcado(s) NO '
+              '(un NO gana sobre un SI)')
+
     candidatos = [f for f in filas
                   if decisiones.get(f['id'], f['aplicar']) == 'SI'
                   and f['codigo_interno']]

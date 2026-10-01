@@ -530,16 +530,9 @@ def revisar_existente(ruta):
     finally:
         libro.close()
 
-    # La trampa más probable: la persona marca en la hoja donde el archivo le
-    # dice que revise, pero `--aplicar` solo lee TODOS. Sus marcas se perderían
-    # sin error. Se avisa en vez de fallar: puede que sí haya marcado en TODOS.
-    for nombre in ('POR REVISAR', 'LISTOS PARA APLICAR'):
-        if nombre in info['por_hoja'] and info['por_hoja'][nombre][0] > 0:
-            info['advertencias'].append(
-                f'Hay {info["por_hoja"][nombre][0]} marca(s) en la hoja '
-                f'"{nombre}", pero --aplicar SOLO lee la hoja "TODOS". '
-                'Replica ahí tus decisiones o nada se aplicará.'
-            )
+    # Antes esto avisaba de que "--aplicar solo lee TODOS". Ya no hace falta:
+    # la lectura consolida TODAS las hojas. Se deja una nota en la guia porque
+    # el usuario tiene que saber que marcar en cualquier hoja cuenta igual.
     return info
 
 
@@ -594,8 +587,8 @@ def main(forzar=False, salida=None):
             print(f'  - {aviso}')
         print()
         print('  Opciones:')
-        print('    1) Copia el archivo a otro nombre y vuelve a correr: se')
-        print('       generará el nuevo junto al viejo.')
+        print('    1) Renombra el archivo a mano y vuelve a correr. El nuevo')
+        print(f'       saldría como: {_nombre_alternativo(destino)}')
         print('    2) Si ya aplicaste las decisiones y quieres un Excel')
         print('       limpio, usa --forzar (revisalo antes: no hay vuelta atrás).')
         print('    3) Si solo querés el reporte en otro lado: --salida RUTA')
