@@ -31,6 +31,24 @@ generador haría ese archivo más difícil de mantener y más fácil de romper p
 cambio de uno. Aquí se reaprovechan las piezas puras: `dian_pos` (constantes y
 formato), `dian_firma` (XAdES-EPES) y `dian_soap` (transporte).
 
+REPARTO DE RESPONSABILIDAD (importante, se corrigió aquí)
+----------------------------------------------------------
+`construir_nota_credito` usa `dian_xml.construir_documento_equivalente`: el
+generador COMÚN ya auditado contra el anexo técnico. Antes este módulo tenía su
+PROPIA copia del constructor (emisor, adquirente, impuestos, totales, líneas),
+y por eso los arreglos estructurales que se le hicieron a `dian_xml.py` —el
+`cbc:UUID` con el CUDE, el `sts:InvoiceControl`, el `cbc:IssueTime` con -05:00,
+el `cac:PartyLegalEntity`, el CIIU, el `cbc:AdditionalAccountID` y el
+`cac:CountrySubentityCode`— NUNCA llegaban a la nota crédito. La nota salía sin
+CUDE y sin extensiones DIAN, es decir, un documento que la DIAN rechaza de
+entrada, y las pruebas no lo veían porque cada copia tenía sus propias pruebas.
+
+La lección es la razón de este párrafo: en facturación electrónica no puede
+haber dos constructores del mismo documento. Si el próximo documento nuevo
+(arranque de sesión, evento de reversión, nota débito) necesita esa estructura,
+se llama al generador común; si necesita elementos que el generador común no
+tiene, se AGREGAN ahí, no se copia el generador.
+
 NO valida contra el XSD oficial de la DIAN: el anexo del Documento Soporte no
 está publicado con esa estructura. La forma del documento sigue las reglas del
 documento electrónico estándar (UBL 2.1) y los campos que el anexo del DS
@@ -41,6 +59,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
+from . import dian_xml
 from .dian_pos import (
     DEPARTAMENTO_POR_DEFECTO,
     DV_CONSUMIDOR_FINAL,
@@ -132,6 +151,12 @@ def construir_nota_credito(documento, emisor, adquirente, items, totales,
                            extras=None):
     """Arma el árbol XML de la Nota Crédito Electrónica.
 
+    DELEGA en `dian_xml.construir_documento_equivalente`, el generador común ya
+    auditado contra el anexo técnico. Antes este módulo tenía su propia copia
+    del constructor y los arreglos estructurales nunca llegaban aquí: la nota
+    salía sin `cbc:UUID`, sin `sts:DianExtensions` y sin `cac:PartyLegalEntity`,
+    es decir, un documento que la DIAN rechaza por esquema.
+
     Args:
         documento: dict con numero, fecha, hora, cuide, tipo_ambiente, moneda,
             tipo_operacion, valor_total, Y los datos de la referencia:
@@ -160,61 +185,58 @@ def construir_nota_credito(documento, emisor, adquirente, items, totales,
             'Sin esa referencia la DIAN no sabe a qué documento se aplica la nota.'
         )
 
-    extras = extras or {}
-    adquirente = adquirente or {}
+    # Se delega todo el esqueleto al generador común. `tipo_documento` decide el
+    # schemeName del UUID: para la nota es CUDE-SHA384.
+    documento_base = dict(documento)
+    documento_base['tipo_documento'] = 'NC'
 
-    invoice = ET.Element(f'{{{NS_INVOICE}}}Invoice')
-    invoice.set(f'{{{NS_XSI}}}schemaLocation', f'{NS_INVOICE} UBL-Invoice-2.1.xsd')
+    invoice = dian_xml.construir_invoice(
+        documento_base, emisor, adquirente, items, totales, extras)
 
-    # ── Encabezado ───────────────────────────────────────────────────────────
-    _agregar(
-        invoice,
-        _cbc('UBLVersionID', 'UBL 2.1'),
-        _cbc('CustomizationID', CUSTOMIZATION_ID_NC),
-        _cbc('ProfileID', PROFILE_ID_NC),
-        _cbc('ID', numero),
-        _cbc('IssueDate', normalizar_fecha(documento.get('fecha'))),
-        _cbc('IssueTime', normalizar_hora(documento.get('hora'))),
-        # InvoiceTypeCode '01' = nota crédito (corrige un documento previo).
-        # '02' sería la nota débito.
-        _cbc('InvoiceTypeCode', '01'),
-        _cbc('DocumentCurrencyCode', documento.get('moneda') or 'COP'),
-        _cbc('LineCountNumeric', str(len(items))),
-    )
+    # ── Identidad del TIPO de documento ────────────────────────────────────────
+    # El generador común pone los valores del POS. La nota crédito es otro tipo
+    # documental y la DIAN valida su `CustomizationID` contra su catálogo, así que
+    # aquí se reemplazan por los de la nota. Solo son dos etiquetas de cabecera:
+    # el resto de la estructura (UUID, extensiones, partes, horas) es la que ya
+    # está auditada y se conserva.
+    for etiqueta, valor in (('CustomizationID', CUSTOMIZATION_ID_NC),
+                            ('ProfileID', PROFILE_ID_NC)):
+        nodo = invoice.find(f'{{{NS_CBC}}}{etiqueta}')
+        if nodo is not None:
+            nodo.text = valor
 
-    # ── Referencia al documento que se corrige ───────────────────────────────
-    # Es lo que hace que la nota sea una CORRECCIÓN y no una venta negativa
-    # suelta. La DIAN la usa para validar que el documento existe y para
-    # update su saldo.
+    # ── Lo que hace que sea una CORRECCIÓN y no una venta negativa suelta ──────
+    # 1. La referencia al documento que corrige, con su CUIDE, número y fecha.
     invoice.append(_construir_referencia_ajuste(documento))
 
-    # ── Partes ───────────────────────────────────────────────────────────────
-    invoice.append(_construir_emisor(emisor))
-    invoice.append(_construir_adquirente(adquirente))
+    # 2. El concepto de corrección del catálogo del anexo. Sin él la DIAN no sabe
+    #    POR QUÉ se corrigió: devuelve "concepto no válido".
+    #    InvoiceTypeCode ya es '01' (nota crédito) desde el generador común.
+    if documento.get('motivo_codigo'):
+        invoice.append(_construir_discrepancia(documento))
 
-    # ── Impuestos y totales ──────────────────────────────────────────────────
-    invoice.append(_construir_impuestos(totales))
-
-    monetary = _cac('LegalMonetaryTotal')
-    _agregar(
-        monetary,
-        _cbc('LineExtensionAmount', _monto(totales.get('line_extension_amount')),
-             currencyID='COP'),
-        _cbc('TaxExclusiveAmount', _monto(totales.get('tax_exclusive_amount')),
-             currencyID='COP'),
-        _cbc('TaxInclusiveAmount', _monto(totales.get('tax_inclusive_amount')),
-             currencyID='COP'),
-        # NegativeValue=true: la nota RESTA del valor del documento original.
-        _cbc('PayableAmount', _monto(totales.get('payable_amount')),
-             currencyID='COP', NegativeValue='true'),
-    )
-    invoice.append(monetary)
-
-    # ── Líneas ───────────────────────────────────────────────────────────────
-    for indice, item in enumerate(items, start=1):
-        invoice.append(_construir_linea(indice, item))
+    # 3. Importes en negativo: la nota RESTA del documento original. En UBL el
+    #    atributo es `NegativeValue="true"` en cada monto, no un signo pegado.
+    monetary = invoice.find(f'{{{dian_xml.NS_CAC}}}LegalMonetaryTotal')
+    if monetary is not None:
+        for monto in monetary:
+            monto.set('NegativeValue', 'true')
 
     return invoice
+
+
+def _construir_discrepancia(documento):
+    """`<cac:DiscrepancyResponse>` con el código de concepto del anexo.
+
+    Xpath: cac:DiscrepancyResponse/cbc:ResponseCode
+    Valores 1-6 para nota crédito (devolución total/parcial, anulación de la
+    operación, devolución por cambio en la forma de pago,(ServiceType) ajuste de
+    precio, etc.).
+    """
+    grupo = ET.Element(f'{{{dian_xml.NS_CAC}}}DiscrepancyResponse')
+    codigo = ET.SubElement(grupo, f'{{{dian_xml.NS_CBC}}}ResponseCode')
+    codigo.text = str(documento['motivo_codigo'])
+    return grupo
 
 
 def _construir_referencia_ajuste(documento):
@@ -231,12 +253,11 @@ def _construir_referencia_ajuste(documento):
         _cbc('IssueDate', normalizar_fecha(documento.get('fecha_referido'))),
     )
 
-    # Motivo: el anexo exige el código del catálogo, y la descripción es texto
-    # libre para que el auditor entienda por qué se corrigió.
-    if documento.get('motivo_codigo'):
-        ref.append(_cbc('LineID', str(documento['motivo_codigo'])))
+    # Motivo: el anexo exige el código del catálogo (va en DiscrepancyResponse),
+    # y la descripción es texto libre para que el auditor entienda por qué se
+    # corrigió.
     if documento.get('motivo_descripcion'):
-        nota = _cac('Description')
+        nota = _cac('Note')
         nota.append(_cbc('Description', str(documento['motivo_descripcion'])))
         ref.append(nota)
     return ref

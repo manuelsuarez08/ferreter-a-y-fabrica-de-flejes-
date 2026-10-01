@@ -100,12 +100,20 @@ def test_la_nota_credito_referencia_el_cuide_original():
 
 
 def test_la_nota_credito_declara_el_motivo():
-    """El anexo exige el motivo del ajuste."""
+    """El anexo exige el motivo del ajuste.
+
+    Va en `cac:DiscrepancyResponse/cbc:ResponseCode`, NO en
+    `cac:AdditionalDocumentReference/cbc:LineID` (que era donde estaba antes).
+    La referencia apunta al documento que se corrige; el motivo es un dato
+    DISTINTO, del ajuste. Puesto en la referencia, la DIAN no encuentra el
+    concepto de corrección y devuelve "concepto no válido".
+    """
     raiz = _nota()
-    ref = raiz.find(f'{{{NS_CAC}}}AdditionalDocumentReference')
-    line_id = ref.find(f'{{{NS_CBC}}}LineID')
-    assert line_id is not None, 'falta el código de motivo'
-    assert line_id.text == '1'
+    respuesta = raiz.find(f'{{{NS_CAC}}}DiscrepancyResponse')
+    assert respuesta is not None, 'falta el grupo del concepto de corrección'
+    codigo = respuesta.find(f'{{{NS_CBC}}}ResponseCode')
+    assert codigo is not None, 'falta el código de motivo'
+    assert codigo.text == '1'
 
 
 def test_la_nota_credito_es_de_tipo_correccion():

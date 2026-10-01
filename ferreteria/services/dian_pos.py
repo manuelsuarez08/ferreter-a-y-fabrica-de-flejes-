@@ -334,6 +334,37 @@ def tipo_documento_identidad(sigla):
 # ═════════════════════════════════════════════════════
 # CUIDE — Código Único de Documento Equivalente Electrónico
 # ═════════════════════════════════════════════════════
+def hora_para_cuide(hora):
+    """'HH:MM:SS' para la cadena del CUFE/CUFE, SIN zona horaria.
+
+    Es gemela de `normalizar_hora` pero deliberadamente distinta: el anexo pide
+    la hora sin offset en la cadena que se hashea, y con offset en
+    `cbc:IssueTime`. Mezclarlas rompe una de las dos cosas, y como las pruebas
+    derivan el valor esperado de la misma función, el error pasa inadvertido.
+    """
+    from datetime import datetime as _dt
+    if isinstance(hora, _dt):
+        return hora.strftime('%H:%M:%S')
+    texto = str(hora or '').strip()
+    if not texto:
+        return _dt.now().strftime('%H:%M:%S')
+    texto = texto.replace('T', ' ').split(' ')[-1]
+    # Se descarta el offset si viene puesto: aquí no forma parte.
+    if texto.endswith(('Z', 'z')):
+        texto = texto[:-1]
+    else:
+        encontrado = re.search(r'([+-]\d{2}):?(\d{2})$', texto)
+        if encontrado:
+            texto = texto[:encontrado.start()]
+    partes = texto.replace('.', ':').split(':')
+    if len(partes) < 2:
+        return _dt.now().strftime('%H:%M:%S')
+    hora_ = partes[0][-2:].zfill(2)
+    minuto = partes[1][:2].zfill(2)
+    segundo = (partes[2][:2].zfill(2) if len(partes) > 2 else '00')
+    return f'{hora_}:{minuto}:{segundo}'
+
+
 def cadena_cuide(num_documento, fecha, hora, val_imp1, val_imp2, val_total,
                  nit, tipo_documento, clave_tecnica, tipo_ambiente):
     """Construye la cadena canónica sobre la que se calcula el SHA-384.
@@ -352,7 +383,7 @@ def cadena_cuide(num_documento, fecha, hora, val_imp1, val_imp2, val_total,
 
       - NumDocumento:   consecutivo con prefijo, sin espacios ('POS-1042')
       - Fecha:          'YYYY-MM-DD'
-      - Hora:           'HH:MM:SS' (24 h, sin zona horaria)
+      - Hora:           'HH:MM:SS' (24 h, SIN zona horaria)
       - ValImp1:        valor del IVA con 2 decimales ('1900.00')
       - ValImp2:        valor del INC con 2 decimales ('0.00')
       - ValTotal:       total del documento con 2 decimales ('11900.00')
@@ -361,13 +392,21 @@ def cadena_cuide(num_documento, fecha, hora, val_imp1, val_imp2, val_total,
       - ClaveTecnica:   clave técnica del software propio
       - TipoAmbiente:   '1' producción, '2' habilitación
 
+    OJO: la hora va SIN el offset '-05:00'. Es un requisito distinto del de
+    `cbc:IssueTime`, que sí lo lleva. Por eso NO se reutiliza
+    `normalizar_hora()` aquí sino `hora_para_cuide()`: si se compartieran,
+    agregar el offset al IssueTime habría cambiado también la cadena del CUFE y
+    TODOS los documentos se habrían calculado mal de una vez, sin que ninguna
+    prueba lo notara (las pruebas calculan el valor esperado con la misma
+    función, así que ambas se equivocarían juntas).
+
     Returns:
         La cadena lista para `hashlib.sha384(...)`.
     """
     return ''.join((
         str(num_documento or '').strip(),
         normalizar_fecha(fecha),
-        normalizar_hora(hora),
+        hora_para_cuide(hora),
         formatear_monto(val_imp1),
         formatear_monto(val_imp2),
         formatear_monto(val_total),

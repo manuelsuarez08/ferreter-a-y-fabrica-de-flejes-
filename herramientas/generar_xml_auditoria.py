@@ -140,11 +140,13 @@ def main():
 
     from ferreteria.services.dian_pos import calcular_cuide
 
-    def doc(numero):
+    def doc(numero, tipo_documento='POS'):
         d = comun(numero)
+        d['tipo_documento'] = tipo_documento
         d['cuide'] = calcular_cuide(
             num_documento=numero, fecha=FECHA, hora=HORA, val_imp1=29260.0,
-            val_imp2=0.0, val_total=183260.0, nit=NIT, tipo_documento='POS',
+            val_imp2=0.0, val_total=183260.0, nit=NIT,
+            tipo_documento=tipo_documento,
             clave_tecnica='CT-PRUEBA', tipo_ambiente='2')
         return d
 
@@ -168,7 +170,7 @@ def main():
     _guardar('invoice_simple.xml', dian_xml.a_texto(raiz))
 
     try:
-        d = doc('SETP-NC-1')
+        d = doc('SETP-NC-1', 'NC')
         # Los datos de la referencia van dentro del mismo dict `documento`:
         # es lo que lee `construir_nota_credito` (ver su docstring).
         d.update({'documento_referido': 1, 'numero_referido': 'SETP-1',
