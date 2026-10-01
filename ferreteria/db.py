@@ -570,6 +570,12 @@ def _aplicar_migraciones(cursor):
         # compatibilidad con instalaciones antiguas y se normaliza en la
         # migración de abajo, pero NINGÚN código debe leerla.
         ('dian_software_security_code', "TEXT DEFAULT ''"),
+        # CIIU del emisor (codigo de actividad economica) y el NOMBRE del
+        # municipio. Ambos son obligatorios en el XML: `dian_ciiu` va en
+        # `cbc:IndustryClassificationCode` y `dian_ciudad` en `cbc:CityName`.
+        # `codigo_municipio` (que ya existe) es el DANE y va en `cbc:LocationID`.
+        ('dian_ciiu', "TEXT DEFAULT ''"),
+        ('dian_ciudad', "TEXT DEFAULT ''"),
         # ── Identidad del PROVEEDOR de software (el desarrollador, no la
         # ferretería). El anexo técnico exige identificarla en el nodo
         # SoftwareProvider/SoftwareProviderID del XML. Antes esos datos eran

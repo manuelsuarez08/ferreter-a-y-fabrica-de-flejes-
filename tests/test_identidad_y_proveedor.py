@@ -224,11 +224,11 @@ def test_el_proveedor_no_se_confunde_con_el_emisor():
     )
     xml = _texto_documento(documento)
     assert '<sts:SoftwareProvider>DESARROLLO SAS</sts:SoftwareProvider>' in xml
-    # El emisor sigue siendo la ferretería, en su propio bloque, con el
-    # schemeID 31 (NIT) que exige UBL. Ojo: el NIT del proveedor va en
-    # SoftwareProviderID, no aquí.
-    assert ('<cbc:ID schemeID="31" schemeName="31" schemeAgencyID="195">'
-            f'{NIT_EMISOR}</cbc:ID>') in xml
+    # El emisor sigue siendo la ferretería, en su propio bloque. Su NIT va en
+    # `cbc:CompanyID` con `@schemeID="4"` (CorporateScheme), dentro de
+    # `cac:PartyLegalEntity`: es la forma en que UBL 2.1 modela una empresa.
+    # Ojo: el NIT del proveedor va en SoftwareProviderID, no aquí.
+    assert (f'<cbc:CompanyID schemeID="4">{NIT_EMISOR}</cbc:CompanyID>') in xml
     assert NIT_EMISOR not in documento['empresa_software']
     # Y el NIT del proveedor NO aparece como identificación del emisor.
     assert xml.count(NIT_EMISOR) == 1

@@ -18,6 +18,7 @@ Referencia normativa: Resolución DIAN 000165 de 2023, Anexo Técnico 1.0
 from __future__ import annotations
 
 import hashlib
+import re
 import urllib.parse
 from datetime import date, datetime
 from decimal import Decimal, ROUND_HALF_UP
@@ -91,6 +92,11 @@ DV_CONSUMIDOR_FINAL = '0'
 NOMBRE_CONSUMIDOR_FINAL = 'consumidor final'
 MUNICIPIO_POR_DEFECTO = '11001'          # Bogotá D.C. (código DANE)
 DEPARTAMENTO_POR_DEFECTO = '11'          # Cundinamarca (código DANE)
+
+# Zona horaria oficial de Colombia. El anexo técnico exige que `cbc:IssueTime` la
+# traiga explícita: '10:30:00-05:00'. Colombia no aplica horario de verano, así
+# que el offset es fijo todo el año.
+OFFSET_HORA_COLOMBIA = '-05:00'
 PAIS_POR_DEFECTO = 'CO'
 
 # ── Tarifas de impuesto ──────────────────────────────────────────────────────
@@ -192,24 +198,48 @@ def normalizar_fecha(valor):
 
 
 def normalizar_hora(valor):
-    """Devuelve 'HH:MM:SS' a partir de un datetime, un time o un texto.
+    """Devuelve 'HH:MM:SS-05:00' a partir de un datetime, un time o un texto.
 
-    La DIAN exige hora de 24 horas SIN zona horaria ni fracciones de segundo.
-    Si el texto trae milisegundos ('14:03:07.123') se recortan.
+    La DIAN exige hora de 24 horas CON zona horaria oficial de Colombia
+    (UTC-05:00). Sin el offset el documento se rechaza por esquema.
+
+    El offset va FIJO en -05:00 y no se calcula de la zona del servidor: el
+    anexo pide la hora oficial de Colombia, no la del equipo donde se firma. Si
+    el servidor quedara en otra zona, usar su hora con un -05:00 fijo daría una
+    hora falsa.
+
+    Si el texto ya trae offset se respeta; si no, se le agrega -05:00.
     """
     if isinstance(valor, datetime):
-        return valor.strftime('%H:%M:%S')
+        return valor.strftime('%H:%M:%S') + OFFSET_HORA_COLOMBIA
     texto = str(valor or '').strip()
     if not texto:
-        return datetime.now().strftime('%H:%M:%S')
+        return datetime.now().strftime('%H:%M:%S') + OFFSET_HORA_COLOMBIA
     texto = texto.replace('T', ' ').split(' ')[-1]
-    partes = texto.split(':')
+
+    # 1) Se separa el offset si el texto ya lo trae. `Z` significa UTC.
+    offset = OFFSET_HORA_COLOMBIA
+    if texto.endswith(('Z', 'z')):
+        offset = '+00:00'
+        texto = texto[:-1]
+    else:
+        encontrado = re.search(r'([+-])(\d{2}):?(\d{2})$', texto)
+        if encontrado:
+            signo, horas, minutos = encontrado.groups()
+            # `+-05:00` -> se reconstruye con un solo guion, sin duplicarlo.
+            offset = f'{signo}{horas}:{minutos}'
+            texto = texto[:encontrado.start()]
+
+    # 2) Se normaliza la hora, sin offset y sin fracciones.
+    partes = texto.replace('.', ':').split(':')
     if len(partes) < 2:
-        return datetime.now().strftime('%H:%M:%S')
-    hora = partes[0].zfill(2)
-    minuto = partes[1].zfill(2)[:2]
-    segundo = (partes[2].split('.')[0].zfill(2)[:2] if len(partes) > 2 else '00')
-    return f'{hora}:{minuto}:{segundo}'
+        return datetime.now().strftime('%H:%M:%S') + OFFSET_HORA_COLOMBIA
+    hora = partes[0][-2:].zfill(2)
+    minuto = partes[1][:2].zfill(2)
+    segundo = (partes[2][:2].zfill(2) if len(partes) > 2 else '00')
+
+    # 3) Se devuelve con el offset: el anexo lo exige explícito.
+    return f'{hora}:{minuto}:{segundo}{offset}'
 
 
 def formatear_monto(valor):

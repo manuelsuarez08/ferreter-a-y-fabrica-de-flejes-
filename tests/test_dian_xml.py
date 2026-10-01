@@ -180,15 +180,49 @@ def test_existe_despatch_advice_con_fecha():
 
 # ── Bloque DIAN: CUIDE y QR ───────────────────────────────────────────────────
 def test_cuide_y_qr_en_la_extension_dian():
-    """El CUIDE y el QR viajan en `sts:DianExtensions`."""
+    """El QR viaja en `sts:DianExtensions`; el CUFE, en `cbc:UUID`.
+
+    OJO: esto cambió tras la auditoría. El CUFE estaba dentro de
+    `sts:DianExtensions/sts:CUDE`, y la DIAN no lee ahí: lo busca en
+    `cbc:UUID`. El QR sí se queda en la extensión.
+    """
     raiz = _factura()
     dian = raiz.find(
         f'.//{{{dian_xml.NS_STS}}}DianExtensions')
     assert dian is not None, 'falta sts:DianExtensions'
-    cuide = dian.find(f'{{{NS_STS}}}CUDE')
-    assert cuide is not None and len(cuide.text) == 96, 'CUIDE inválido'
+
+    # La extensión ya NO lleva el CUDE.
+    assert dian.find(f'{{{NS_STS}}}CUDE') is None, \
+        'el CUFE no va en sts:DianExtensions, va en cbc:UUID'
+
+    # El QR sí va en la extensión.
     qr = dian.find(f'{{{NS_STS}}}QRCode')
     assert qr is not None and qr.text.startswith('https://'), 'falta el QR'
+
+    # Y el CUFE está en cbc:UUID con su @schemeName.
+    uuid = raiz.find(f'{{{NS_CBC}}}UUID')
+    assert uuid is not None, 'falta cbc:UUID'
+    assert len(uuid.text) == 96, 'CUIDE inválido en cbc:UUID'
+    assert uuid.get('schemeName') in ('CUFE-SHA384', 'CUDE-SHA384')
+
+
+def test_invoice_control_en_la_extension_dian():
+    """La resolución y el rango autorizado van en `sts:InvoiceControl`.
+
+    La auditoría los encontró ausentes: sin ellos el documento no declara su
+    numeración y la DIAN lo rechaza.
+
+    Se omiten cuando no hay dato: declarar `AuthorizedInvoices` sin rango real
+    es peor que no declararlo, porque la DIAN lo lee como rango vigente.
+    """
+    raiz = _factura()
+    control = raiz.find(f'.//{{{NS_STS}}}InvoiceControl')
+    assert control is not None, 'falta sts:InvoiceControl'
+
+    # Esta factura de prueba no trae resolución ni rango, así que no debe
+    # emitir esos subgrupos.
+    assert control.find(f'{{{NS_STS}}}InvoiceAuthorization') is None
+    assert control.find(f'{{{NS_STS}}}AuthorizedInvoices') is None
 
 
 def test_software_id_en_la_extension():
@@ -199,12 +233,24 @@ def test_software_id_en_la_extension():
 
 # ── Identificación de las partes ─────────────────────────────────────────────
 def test_emisor_con_scheme_agency_dian():
+    """El NIT del emisor va en `cbc:CompanyID` con `@schemeID="4"`.
+
+    Antes iba en `cbc:ID` dentro de `cac:PartyIdentification`, que no es la forma
+    en que UBL 2.1 modela una empresa. `schemeAgencyID="195"` (DIAN) lo lleva el
+    identificador del ADQUIRENTE, no el del emisor.
+    """
     raiz = _factura()
     nodo = raiz.find(
-        f'.//{{{NS_CAC}}}AccountingSupplierParty//{{{NS_CBC}}}ID')
-    assert nodo is not None
-    assert nodo.get('schemeAgencyID') == '195'
+        f'.//{{{NS_CAC}}}AccountingSupplierParty//{{{NS_CBC}}}CompanyID')
+    assert nodo is not None, 'falta cbc:CompanyID en el emisor'
+    assert nodo.get('schemeID') == '4', 'el NIT va con schemeID CorporateScheme'
     assert nodo.text == '900187391'
+
+    # La razón social va en RegistrationName dentro de PartyLegalEntity.
+    legal = raiz.find(
+        f'.//{{{NS_CAC}}}AccountingSupplierParty//{{{NS_CAC}}}PartyLegalEntity')
+    assert legal is not None, 'falta cac:PartyLegalEntity en el emisor'
+    assert legal.find(f'{{{NS_CBC}}}RegistrationName') is not None
 
 
 def test_adquirente_con_scheme_agency_dian():

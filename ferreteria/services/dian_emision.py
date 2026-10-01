@@ -167,7 +167,11 @@ def _leer_emisor(cursor):
         SELECT nombre, nit, COALESCE(digito_verificacion, ''), direccion, telefono,
                COALESCE(email_emisor, ''), COALESCE(codigo_municipio, ''),
                COALESCE(codigo_departamento, ''), COALESCE(regimen_fiscal, ''),
-               COALESCE(responsabilidades, '')
+               COALESCE(responsabilidades, ''),
+               -- El CIIU del emisor y el NOMBRE del municipio son obligatorios
+               -- en el XML. Se leen si existen; en una base vieja la migracion
+               -- de columnas los agrega vacios y el documento se completa luego.
+               COALESCE(dian_ciiu, ''), COALESCE(dian_ciudad, '')
         FROM configuracion WHERE id = 1
         """
     ).fetchone()
@@ -175,7 +179,7 @@ def _leer_emisor(cursor):
         raise ErrorEmision('No hay datos de configuración del negocio')
 
     nombre, nit, dv, direccion, telefono, email, municipio, departamento, \
-        regimen, responsabilidades = fila
+        regimen, responsabilidades, ciiu, ciudad = fila
 
     if not dian_pos.solo_digitos(nit):
         raise ErrorEmision(
@@ -194,6 +198,8 @@ def _leer_emisor(cursor):
         'razon_social': str(nombre or '').strip(),
         'nombre_comercial': str(nombre or '').strip(),
         'direccion': str(direccion or '').strip(),
+        'ciiu': str(ciiu or '').strip(),
+        'ciudad': str(ciudad or '').strip(),
         'telefono': str(telefono or '').strip(),
         'email': str(email or '').strip(),
         'municipio': str(municipio or '').strip() or dian_pos.MUNICIPIO_POR_DEFECTO,

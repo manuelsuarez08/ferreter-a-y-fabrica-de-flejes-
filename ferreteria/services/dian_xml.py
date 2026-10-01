@@ -202,12 +202,21 @@ def construir_invoice(documento, emisor, adquirente, items, totales, extras=None
                 f'{NS_INVOICE} UBL-Invoice-2.1.xsd')
 
     # ── Encabezado ───────────────────────────────────────────────────────────
+    # El CUFE/CUDE va en `cbc:UUID` con `@schemeName`. Es donde el anexo lo
+    # ubica: antes iba dentro de `sts:DianExtensions`, que la DIAN no lee.
+    # `schemeName` distingue el algoritmo: CUFE-SHA384 en factura y CUDE-SHA384
+    # en notas y eventos.
+    uuid = _cbc('UUID', str(documento.get('cuide') or ''))
+    uuid.set('schemeName', _scheme_name_uuid(documento))
+    # `schemeID` no aplica: la DIAN identifica el algoritmo por `schemeName`.
+
     _agregar(
         invoice,
         _cbc('UBLVersionID', 'UBL 2.1'),
         _cbc('CustomizationID', CUSTOMIZATION_ID),
         _cbc('ProfileID', PROFILE_ID),
         _cbc('ID', numero),
+        uuid,
         _cbc('IssueDate', _fecha(documento.get('fecha'))),
         _cbc('IssueTime', _hora(documento.get('hora'))),
         _cbc('InvoiceTypeCode', '01'),   # 01 = documento equivalente POS
@@ -270,6 +279,55 @@ def construir_invoice(documento, emisor, adquirente, items, totales, extras=None
     return invoice
 
 
+def _scheme_name_uuid(documento):
+    """`schemeName` del `cbc:UUID`: CUFE-SHA384 o CUDE-SHA384.
+
+    El tipo de documento decide cuál de los dos es. No es cosmético: es lo que
+    le dice a la DIAN con qué algoritmo se calculó la huella.
+    """
+    tipo = str(documento.get('tipo_documento') or '').upper()
+    # FV = Factura de venta -> CUFE. POS, NC y ND -> CUDE.
+    return 'CUFE-SHA384' if tipo == 'FV' else 'CUDE-SHA384'
+
+
+def _construir_invoice_control(documento):
+    """Crea `<sts:InvoiceControl>` con la resolución y el rango autorizado.
+
+    Sin este grupo el documento NO declara su numeración. El anexo lo exige
+    dentro de `sts:DianExtensions`, y es lo que permite a la DIAN saber que el
+    consecutivo usado está dentro del rango que autorizó.
+
+    Xpath: sts:DianExtensions/sts:InvoiceControl
+    """
+    control = ET.Element(f'{{{NS_STS}}}InvoiceControl')
+
+    numero_resolucion = str(documento.get('numero_resolucion') or '').strip()
+    if numero_resolucion:
+        autorizacion = ET.SubElement(control, f'{{{NS_STS}}}InvoiceAuthorization')
+        ET.SubElement(autorizacion, f'{{{NS_STS}}}AuthorizationNumber').text = \
+            numero_resolucion
+
+    # El rango solo se declara si hay prefijo y un desde/hasta con sentido. En
+    # pruebas se deja rango_hasta = 0 para no limitar, y en ese caso se omite el
+    # grupo entero: declarar un rango 0-0 es peor que no declararlo.
+    prefijo = str(documento.get('prefijo_resolucion') or '').strip()
+    desde = documento.get('rango_desde')
+    hasta = documento.get('rango_hasta')
+    try:
+        desde = int(desde) if desde is not None else 0
+        hasta = int(hasta) if hasta is not None else 0
+    except (TypeError, ValueError):
+        desde = hasta = 0
+
+    if prefijo and hasta > 0:
+        autorizados = ET.SubElement(control, f'{{{NS_STS}}}AuthorizedInvoices')
+        ET.SubElement(autorizados, f'{{{NS_STS}}}Prefix').text = prefijo
+        ET.SubElement(autorizados, f'{{{NS_STS}}}From').text = str(max(desde, 1))
+        ET.SubElement(autorizados, f'{{{NS_STS}}}To').text = str(hasta)
+
+    return control
+
+
 def _construir_extensiones(documento, extras):
     """Crea `<ext:UBLExtensions>` con el bloque DIAN (SoftwareID, CUIDE, QR).
 
@@ -290,10 +348,13 @@ def _construir_extensiones(documento, extras):
 
     # CUIDE: es el identificador fiscal del documento y debe viajar en el XML.
     if documento.get('cuide'):
-        cuide = ET.SubElement(dian, f'{{{NS_STS}}}CUDE')
-        cuide.text = str(documento['cuide'])
-        # La URL de consulta también se incluye: el anexo la pide explícitamente
-        # para el QR del documento equivalente.
+        # InvoiceControl va PRIMERO dentro de DianExtensions: el anexo lo coloca
+        # ahí para que la DIAN lea la numeración autorizada del documento.
+        dian.append(_construir_invoice_control(documento))
+
+        # El QR se incluye para que un lector pueda reconstruir la URL de
+        # consulta desde el XML, sin depender de la tirilla. Va aquí desde el
+        # principio; el CUDE NO, porque ese va en `cbc:UUID`.
         qr = ET.SubElement(dian, f'{{{NS_STS}}}QRCode')
         qr.text = url_consulta(
             documento['cuide'],
@@ -335,24 +396,40 @@ def _construir_extensiones(documento, extras):
 
 
 def _construir_emisor(emisor):
-    """Crea `<cac:AccountingSupplierParty>` con la identidad tributaria."""
+    """Crea `<cac:AccountingSupplierParty>` con la identidad tributaria.
+
+    La estructura importa: la razón social y el NIT van DENTRO de
+    `cac:PartyLegalEntity`, no sueltos en `cac:Party`. Antes quedó un
+    `cbc:Name` colgado del Party y el NIT en PartyIdentification, que no es la
+    forma en que UBL 2.1 modela una empresa y que la DIAN no valida.
+
+    Xpath: cac:AccountingSupplierParty/cac:Party/cac:PartyLegalEntity
+    """
     parte = _cac('AccountingSupplierParty')
     party = _cac('Party')
 
-    # Nombre comercial (opcional) y razón social.
+    # Nombre comercial: es el nombre de mostrador y va en el Party, no en la
+    # entidad legal (que es la razón social del RUT).
     if emisor.get('nombre_comercial'):
         party.append(_cbc('Name', str(emisor['nombre_comercial'])))
 
-    identificacion = _cac('PartyIdentification')
-    identificacion.append(_cbc('ID', _solo_digitos(emisor.get('nit')),
-                               schemeID='31',
-                               schemeName='31',
-                               schemeAgencyID='195'))
-    party.append(identificacion)
+    entidad = _cac('PartyLegalEntity')
+    entidad.append(_cbc('RegistrationName',
+                        str(emisor.get('razon_social') or emisor.get('nombre') or '')))
+    # El CIIU del emisor es obligatorio. Sin él el documento se rechaza.
+    ciiu = str(emisor.get('ciiu') or '').strip()
+    if ciiu:
+        entidad.append(_cbc('IndustryClassificationCode', ciiu))
+    # El NIT va en CompanyID con schemeID 4 (CorporateScheme). El DV va aparte
+    # en `cbc:CorporateID`, no pegado al número.
+    entidad.append(_cbc('CompanyID', _solo_digitos(emisor.get('nit')),
+                        schemeID='4'))
+    dv = str(emisor.get('digito_verificacion') or '').strip()
+    if dv:
+        entidad.append(_cbc('CorporateID', dv))
+    party.append(entidad)
 
     party.append(_construir_direccion(emisor))
-
-    # Régimen fiscal y responsabilidades tributarias del emisor.
     party.append(_construir_responsabilidades(emisor))
 
     parte.append(party)
@@ -370,10 +447,10 @@ def _construir_entrega(documento):
     entrega = _cac('DespatchAdvice')
     fecha = _fecha(documento.get('fecha'))
     entrega.append(_cbc('DespatchDate', fecha))
-    # `DespatchDateLine` es la fecha por línea que el anexo exige. Va con el
-    # namespace `cust`/`cbc` segun el XSD; se declara en `cbc` porque el anexo
-    # lo ubica como dato basico, no como agregado.
-    entrega.append(_cbc('DespatchDateLine', fecha))
+    # OJO: aquí NO va `cbc:DespatchDateLine`. Ese elemento no existe en UBL 2.1
+    # ni en el anexo técnico; se había emitting y produce un XML que no valida
+    # contra el XSD. La fecha por línea no se declara porque no hay dato que
+    # usarla: en una venta de mostrador la entrega es la fecha del documento.
     return entrega
 
 
@@ -453,23 +530,57 @@ def _construir_adquirente(adquirente):
             'regimen_fiscal': 'No Responsable de IVA',
             'responsabilidades': ['R-99-PN'],
         }
+        # Se vuelve a leer el número DESPUÉS del fallback. Si no, el
+        # consumidor final quedaba con el documento vacío: el `numero` de
+        # arriba ya valía '' cuando se decidió entrar aquí.
+        numero = _solo_digitos(adquirente['numero_documento'])
 
     parte = _cac('AccountingCustomerParty')
     party = _cac('Party')
 
+    if adquirente.get('nombre'):
+        party.append(_cbc('Name', str(adquirente['nombre'])))
+
     party.append(_construir_direccion(adquirente))
 
-    identificacion = _cac('PartyIdentification')
-    identificacion.append(_cbc('ID', _solo_digitos(adquirente.get('numero_documento')),
-                               schemeID=_codigo_tipo_documento(adquirente.get('tipo_documento')),
-                               schemeName=_codigo_tipo_documento(adquirente.get('tipo_documento')),
-                               schemeAgencyID='195'))
-    party.append(identificacion)
+    # La IDENTIFICACIÓN del adquirente va dentro de `cac:PartyLegalEntity`,
+    # igual que en el emisor. Antes iba en `cac:PartyIdentification`, que no es
+    # la forma en que UBL 2.1 modela una empresa.
+    #
+    # `AdditionalAccountID` es OBLIGATORIO y dice si el adquirente es persona
+    # jurídica (1) o natural (2). Sin él el documento se rechaza.
+    tipo = _codigo_tipo_documento(adquirente.get('tipo_documento'))
+    entidad = _cac('PartyLegalEntity')
+    entidad.append(_cbc('RegistrationName',
+                        str(adquirente.get('nombre') or NOMBRE_CONSUMIDOR_FINAL)))
+    entidad.append(_cbc('ID', numero, schemeID=tipo, schemeName=tipo,
+                        schemeAgencyID='195'))
+    entidad.append(_cbc('AdditionalAccountID', _codigo_naturaleza(adquirente)))
+    party.append(entidad)
 
     party.append(_construir_responsabilidades(adquirente))
 
     parte.append(party)
     return parte
+
+
+def _codigo_naturaleza(adquirente):
+    """`AdditionalAccountID`: 1 = Persona Jurídica, 2 = Persona Natural.
+
+    La DIAN exige el CÓDIGO, no la sigla. Se decide por el tipo de documento del
+    cliente: la cédula de ciudadanía (CC) y el tipo 13 son de persona natural;
+    el resto (NIT, CE, pasaportes de persona jurídica) es persona jurídica.
+
+    El consumidor final del anexo es persona natural con tipo de documento 13,
+    así que SIEMPRE devuelve '2'.
+    """
+    numero = _solo_digitos(adquirente.get('numero_documento'))
+    tipo = str(adquirente.get('tipo_documento') or '').strip().upper()
+    if numero == NIT_CONSUMIDOR_FINAL:
+        return '2'
+    if tipo in ('CC', '13', 'CE'):
+        return '2'
+    return '1'
 
 
 def _construir_direccion(datos):
@@ -482,9 +593,19 @@ def _construir_direccion(datos):
     ubicacion = _cac('PhysicalLocation')
     direccion = _cac('Address')
     direccion.append(_cbc('StreetName', str(datos.get('direccion') or 'Sin dirección')))
-    direccion.append(_cbc('CityName', str(datos.get('municipio') or MUNICIPIO_POR_DEFECTO)))
+    # `CityName` es el NOMBRE del municipio y el código DANE va en
+    # `cbc:LocationID`. Antes se metía el código en CityName, que es un nombre.
+    direccion.append(_cbc('LocationID', str(datos.get('municipio') or MUNICIPIO_POR_DEFECTO),
+                          schemeID='195', schemeName='munidisco'))
+    direccion.append(_cbc('CityName', str(datos.get('ciudad') or datos.get('municipio') or MUNICIPIO_POR_DEFECTO)))
+    # `CountrySubentity` es el NOMBRE del departamento y `CountrySubentityCode`
+    # su código DANE de 2 dígitos. Antes se ponía el código en el nombre, y el
+    # código no existía.
+    direccion.append(_cbc('CountrySubentityCode',
+                          str(datos.get('departamento') or DEPARTAMENTO_POR_DEFECTO),
+                          listAgencyID='195', listID='05'))
     direccion.append(_cbc('CountrySubentity',
-                          str(datos.get('departamento') or DEPARTAMENTO_POR_DEFECTO)))
+                          str(datos.get('nombre_departamento') or datos.get('departamento') or DEPARTAMENTO_POR_DEFECTO)))
     pais = _cac('Country')
     pais.append(_cbc('IdentificationCode',
                      str(datos.get('pais') or PAIS_POR_DEFECTO)))
