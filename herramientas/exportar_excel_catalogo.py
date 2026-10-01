@@ -429,7 +429,130 @@ def _hoja_resumen(wb, filas):
     return hoja
 
 
-def main():
+def _columna_aplicar(hoja):
+    """Índice (base 0) de la columna APLICAR en la cabecera, o None.
+
+    Se lee solo la primera fila, así que es barato incluso en `read_only`. Se
+    busca por ENCABECADO y no por posición: el dueño puede insertar columnas en
+    Excel, y una posición fija leería la decisión de la columna equivocada.
+    """
+    for fila in hoja.iter_rows(min_row=1, max_row=1, values_only=True):
+        for posicion, valor in enumerate(fila or ()):
+            if valor and str(valor).strip().upper() == 'APLICAR':
+                return posicion
+    return None
+
+
+def _marcas_de(hoja):
+    """Cuántas filas tienen ALGO escrito en la columna APLICAR.
+
+    OJO: se recorre la hoja UNA vez con `iter_rows`. Con `read_only=True`, cada
+    llamada a `hoja.cell()` vuelve a recorrer la hoja desde el principio, así que
+    un bucle de 1461 celdas hace 1461 recorridos completos: al cuadrado. Medido,
+    eso pasaba de milisegundos a más de dos minutos, y el exportador quedaba
+    colgado antes incluso de avisar que iba a pisar el archivo.
+
+    Returns:
+        (con_marca, con_si) o (0, 0) si la hoja no tiene columna APLICAR.
+    """
+    iterador = hoja.iter_rows(values_only=True)
+    try:
+        cabeceras = next(iterador)
+    except StopIteration:
+        return 0, 0
+    if not cabeceras:
+        return 0, 0
+
+    # La columna APLICAR se busca por ENCABEZADO, no por posición: el dueño
+    # puede ordenar, filtrar o insertar columnas en Excel, y una posición fija
+    # leería la decisión de la columna equivocada sin avisar.
+    indice = None
+    for posicion, valor in enumerate(cabeceras):
+        if valor and str(valor).strip().upper() == 'APLICAR':
+            indice = posicion
+            break
+    if indice is None:
+        return 0, 0
+
+    con_marca = con_si = 0
+    for fila in iterador:
+        if indice >= len(fila) or fila[indice] is None:
+            continue
+        texto = str(fila[indice]).strip()
+        if texto == '':
+            continue
+        con_marca += 1
+        if texto.upper() in ('SI', 'SÍ', 'S', 'YES', '1', 'X'):
+            con_si += 1
+    return con_marca, con_si
+
+
+def revisar_existente(ruta):
+    """Qué tiene el Excel que ya está en disco.
+
+    Returns:
+        dict con:
+          existe     : hay un archivo ahí
+          con_marcas : alguna fila tiene algo en APLICAR
+          con_si     : cuántas filas están marcadas SI
+          advertencias: lista de textos que hay que mostrarle al usuario
+    """
+    info = {
+        'existe': False,
+        'con_marcas': False,
+        'con_si': 0,
+        'por_hoja': {},
+        'advertencias': [],
+    }
+    if not os.path.exists(ruta):
+        return info
+
+    import openpyxl
+
+    info['existe'] = True
+    try:
+        libro = openpyxl.load_workbook(ruta, data_only=True, read_only=True)
+    except Exception as error:
+        info['advertencias'].append(
+            f'No se pudo leer el archivo existente ({error}). Se va a generar '
+            'otro con otro nombre para no pisarlo.'
+        )
+        return info
+
+    try:
+        for nombre in ('TODOS', 'POR REVISAR', 'LISTOS PARA APLICAR'):
+            if nombre not in libro.sheetnames:
+                continue
+            con_marca, con_si = _marcas_de(libro[nombre])
+            info['por_hoja'][nombre] = (con_marca, con_si)
+            info['con_marcas'] = info['con_marcas'] or con_marca > 0
+            info['con_si'] += con_si
+    finally:
+        libro.close()
+
+    # La trampa más probable: la persona marca en la hoja donde el archivo le
+    # dice que revise, pero `--aplicar` solo lee TODOS. Sus marcas se perderían
+    # sin error. Se avisa en vez de fallar: puede que sí haya marcado en TODOS.
+    for nombre in ('POR REVISAR', 'LISTOS PARA APLICAR'):
+        if nombre in info['por_hoja'] and info['por_hoja'][nombre][0] > 0:
+            info['advertencias'].append(
+                f'Hay {info["por_hoja"][nombre][0]} marca(s) en la hoja '
+                f'"{nombre}", pero --aplicar SOLO lee la hoja "TODOS". '
+                'Replica ahí tus decisiones o nada se aplicará.'
+            )
+    return info
+
+
+def _nombre_alternativo(ruta):
+    """Un nombre libre junto al original: auditoria_catalogo_2.xlsx, etc."""
+    base, extension = os.path.splitext(ruta)
+    numero = 2
+    while os.path.exists(f'{base}_{numero}{extension}'):
+        numero += 1
+    return f'{base}_{numero}{extension}'
+
+
+def main(forzar=False, salida=None):
     if not os.path.exists(auditoria.DB):
         sys.exit(f'No existe la base: {auditoria.DB}')
 
@@ -452,6 +575,36 @@ def main():
                                 f['categoria'] or '', f['nombre_producto'] or ''))
     listos.sort(key=lambda f: (f['categoria'] or '', f['nombre_producto'] or ''))
 
+    # ── No pisar un Excel con trabajo dentro ───────────────────────────
+    # El archivo existe y tiene marcas en la columna APLICAR: son horas de
+    # revisión de alguien. Sobrescribirlo las pierde sin dejar rastro, y no hay
+    # forma de recuperarlas. Es el peor error que puede cometer esta herramienta,
+    # así que se detiene y deja que se decida a mano.
+    destino = salida or SALIDA
+    previo = revisar_existente(destino)
+
+    if previo['con_marcas'] and not forzar:
+        print()
+        print('*** NO SE GENERO EL ARCHIVO ***')
+        print()
+        print(f'{os.path.basename(destino)} ya tiene {previo["con_si"]} fila(s)')
+        print('marcadas como SI. Generarlo encima BORRARIA ese trabajo.')
+        print()
+        for aviso in previo['advertencias']:
+            print(f'  - {aviso}')
+        print()
+        print('  Opciones:')
+        print('    1) Copia el archivo a otro nombre y vuelve a correr: se')
+        print('       generará el nuevo junto al viejo.')
+        print('    2) Si ya aplicaste las decisiones y quieres un Excel')
+        print('       limpio, usa --forzar (revisalo antes: no hay vuelta atrás).')
+        print('    3) Si solo querés el reporte en otro lado: --salida RUTA')
+        print()
+        sys.exit(1)
+
+    for aviso in previo['advertencias']:
+        print(f'  AVISO: {aviso}')
+
     wb = Workbook()
     wb.remove(wb.active)  # la hoja por defecto no sirve para nada aqui
 
@@ -463,9 +616,12 @@ def main():
 
     # La primera hoja que se ve es la que explica.
     wb.active = 0
-    wb.save(SALIDA)
+    wb.save(destino)
 
-    print(f'Reporte: {os.path.basename(SALIDA)}')
+    print(f'Reporte: {os.path.basename(destino)}')
+    if previo['con_marcas']:
+        print(f'  (sobrescrito con --forzar: se perdieron '
+              f'{previo["con_si"]} marca(s) del archivo anterior)')
     print(f'  COMO LEER ESTO        : 1 hoja  (que significa cada columna)')
     print(f'  RESUMEN               : 1 hoja  (por categoria, con el prefijo de codigo)')
     print(f'  POR REVISAR           : {len(revisar)} productos  <- empieza aqui')
@@ -475,4 +631,17 @@ def main():
 
 
 if __name__ == '__main__':
-    main()
+    import argparse
+
+    analisador = argparse.ArgumentParser(
+        description='Exporta la auditoría del catálogo a un Excel para revisar.')
+    analisador.add_argument(
+        '--forzar', action='store_true',
+        help='Sobrescribe el archivo aunque tenga decisiones marcadas. '
+             'Revisa que ya las hayas aplicado: no hay vuelta atrás.')
+    analisador.add_argument(
+        '--salida', default=None,
+        help='Genera el Excel en otra ruta en vez de auditoria_catalogo.xlsx')
+    argumentos = analisador.parse_args()
+
+    main(forzar=argumentos.forzar, salida=argumentos.salida)
