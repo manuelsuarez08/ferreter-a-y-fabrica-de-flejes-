@@ -35,11 +35,37 @@ AMBIENTES = {
 
 # URL del servicio web (WCF) por ambiente. Es la misma para SendBillSync,
 # SendTestSetAsync, GetStatus y GetStatusZip.
+#
+# SIN `?wsdl`. Ese sufijo es el del DESCRIPTOR del servicio (el XML que declara
+# que operaciones existen), no el del servicio. El descriptor se consulta solo,
+# para leer; las operaciones van a la URL a secas. Medido contra el servicio real
+# de habilitación: con `?wsdl` y sin él el comportamiento es identico, asi que
+# el sufijo no era la causa de los timeouts (ver la nota de diagnostico de abajo).
+#
+# DIAGNOSTICO 2026-10-01 (ambiente de habilitación, desde esta red):
+#   - DNS resuelve (190.24.13.32), puerto 443 abre y el TLS es valido.
+#   - GET ?wsdl responde HTTP 200 con el descriptor (15 KB, 15 operaciones,
+#     targetNamespace http://wcf.dian.colombia).
+#   - Un sobre SOAP VACIO responde HTTP 500 en 0.4 s: el servidor recibe y
+#     rechaza pronto.
+#   - Un GetStatus bien formado NO responde: se agota el tiempo a los 40 s.
+#   - Una operacion INEXISTENTE tampoco responde. Si el servidor validara el
+#     SOAPAction devolveria un error rapido; que se cuelgue igual significa que
+#     el problema esta ANTES de la aplicacion, no en nuestra peticion.
+#
+# Conclusion: el envelope, los namespaces (SOAP 1.2), el targetNamespace y el
+# SOAPAction (`.../IWcfDianCustomerServices/<Op>`) son correctos segun el WSDL.
+# El cuelgue es del servicio o de la ruta de red hacia el, no del codigo. Por eso
+# NO se toco el transporte: cambiarlo a ciegas seria cambiar algo que ya esta
+# bien.
+#
+# Al corregir esto hay que volver a medir; si el servicio responde, el POS mandara
+# los documentos con normalidad sin ningun otro cambio.
 WSDL_HABILITACION = (
-    'https://vpfe-hab.dian.gov.co/WcfDianCustomerServices.svc?wsdl'
+    'https://vpfe-hab.dian.gov.co/WcfDianCustomerServices.svc'
 )
 WSDL_PRODUCCION = (
-    'https://vpfe.dian.gov.co/WcfDianCustomerServices.svc?wsdl'
+    'https://vpfe.dian.gov.co/WcfDianCustomerServices.svc'
 )
 ENDPOINTS = {
     AMBIENTE_HABILITACION: WSDL_HABILITACION,
