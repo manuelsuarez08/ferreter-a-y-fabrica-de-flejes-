@@ -84,13 +84,17 @@ def padron(tmp_path):
     return padron_real(tmp_path)
 
 
-def test_la_semilla_desactualizada_no_impide_provisionar(tmp_path):
-    """La semilla del repo siempre va un paso atrás. Eso no puede bloquear el alta.
+def test_una_semilla_desactualizada_no_impide_provisionar(tmp_path):
+    """Una semilla vieja NO puede dar una instancia incompleta.
 
-    Este test documenta una decisión: si a la semilla le falta una columna nueva,
-    NO se aborta. Se crea la instancia igual y se devuelve un aviso, porque
-    abortar dejaría al desarrollador sin poder dar de alta clientes hasta
-    regenerar la semilla, que es un paso fuera de su alcance.
+    Este test cambió de significado con una mejora de `provisionar()`: ahora el
+    provisionador aplica el esquema sobre la copia ANTES de sembrar, así que
+    aunque la semilla del repositorio vaya un paso atrás, la instancia sale
+    completa. Antes solo se avisaba de que faltaban columnas y el dueño tenía
+    que completarlas a mano; ahora se resuelven solas.
+
+    Se prueba con una semilla a la que se le quitan las columnas del
+    proveedor: el resultado debe tenerlas Y con el NIT escrito.
     """
     from ferreteria.services import provisionamiento
 
@@ -116,8 +120,22 @@ def test_la_semilla_desactualizada_no_impide_provisionar(tmp_path):
     finally:
         provisionamiento.DB_SEMILLA = original
 
-    assert os.path.exists(resultado['ruta'])
-    assert resultado['avisos'], 'Debe avisar que el proveedor quedó sin escribir'
+    ruta = resultado['ruta']
+    assert os.path.exists(ruta)
+
+    # La instancia tiene las columnas y el NIT del proveedor quedo escrito.
+    instancia = sqlite3.connect(ruta)
+    columnas = {r[1] for r in instancia.execute(
+        'PRAGMA table_info(configuracion)')}
+    nit = instancia.execute(
+        'SELECT software_proveedor_nit FROM configuracion WHERE id = 1'
+    ).fetchone()[0]
+    instancia.close()
+
+    assert 'software_proveedor_nit' in columnas, 'Debe aplicar el esquema faltante'
+    assert nit == '1054552590', 'El NIT del proveedor debe quedar escrito'
+    # Y ya no hace falta el aviso de "complete esto a mano".
+    assert not resultado['avisos']
 
 
 def test_el_nombre_del_archivo_no_rompe_la_linea_de_comandos():
@@ -483,4 +501,131 @@ def test_el_historial_registra_lo_que_paso(padron_real):
     acciones = [h['accion'] for h in padron.historial(conn, registro['id'])]
 
     assert 'creada' in acciones
-    assert 'suspendido' in acciones
+    assert 'suspendido' in acciones# ═══════════════════════════════════════════
+# 8. AISLAMIENTO de la instancia del cliente
+# ═══════════════════════════════════════════
+
+def _provisionar(base_ferreteria, directorio, **extra):
+    """Provisiona con el mismo camino que usa el panel."""
+    from ferreteria.services import padron_ferreterias as padron
+    datos = {
+        'nombre': 'Ferretería Aislada',
+        'usuario_dueno': 'dueno_aislada',
+        'clave_dueno': 'ClaveSegura123',
+    }
+    datos.update(extra)
+    return padron.crear_ferreteria(base_ferreteria, directorio, **datos)
+
+
+def test_la_instancia_no_tiene_las_tablas_del_padron(padron_real):
+    """El cliente no debe saber que existe el padrón de ferreterías.
+
+    Las tablas `ferreterias` e `historial_provisionamiento` describen QUIÉN tiene
+    el sistema: es el esquema del desarrollador. Que existan en la base de un
+    cliente no le da datos hoy, pero cualquier cambio futuro que las lea
+    expondría el padrón completo.
+    """
+    conn, directorio = padron_real
+    registro = _provisionar(conn, directorio)
+
+    instancia = sqlite3.connect(registro['ruta'])
+    tablas = {r[0] for r in instancia.execute(
+        "SELECT name FROM sqlite_master WHERE type='table'")}
+    instancia.close()
+
+    assert 'ferreterias' not in tablas, 'La instancia no debe tener el padron'
+    assert 'historial_provisionamiento' not in tablas
+
+
+def test_la_instancia_no_tiene_usuarios_de_prueba(padron_real):
+    """Las cuentas de la semilla traen contraseñas conocidas y publicadas.
+
+    Si sobreviven, cualquiera que haya leído el repositorio entra a la base de
+    un ferretería real con rol de bodega o de motocarguero.
+    """
+    conn, directorio = padron_real
+    registro = _provisionar(conn, directorio)
+
+    instancia = sqlite3.connect(registro['ruta'])
+    usuarios = [r[0] for r in instancia.execute('SELECT usuario FROM usuarios')]
+    instancia.close()
+
+    assert usuarios == ['dueno_aislada'], f'Usuarios inesperados: {usuarios}'
+    for prohibido in ('admin', 'empleado', 'vendedor', 'bodega_test', 'moto_test'):
+        assert prohibido not in usuarios
+
+
+def test_la_instancia_no_tiene_ningun_superadmin(padron_real):
+    """El rol superadmin solo puede existir en la base del desarrollador."""
+    conn, directorio = padron_real
+    registro = _provisionar(conn, directorio)
+
+    instancia = sqlite3.connect(registro['ruta'])
+    superadmins = instancia.execute(
+        "SELECT COUNT(*) FROM usuarios WHERE rol = 'superadmin'").fetchone()[0]
+    instancia.close()
+
+    assert superadmins == 0
+
+
+def test_el_logo_queda_en_la_carpeta_de_la_instancia(padron_real, tmp_path):
+    """Cada ferretería tiene SU logo. Una global haría que una viera el de otra.
+
+    El nombre del archivo siempre es `logo.<ext>`, así que si la carpeta fuera
+    compartida la última en subirlo le pisaría el logo a todas las demás.
+    """
+    from ferreteria.services import personalizacion as marca
+
+    conn, directorio = padron_real
+    registro = _provisionar(conn, directorio)
+
+    base_instancia = os.path.splitext(registro['archivo'])[0]
+    ruta_logos = os.path.join(directorio, base_instancia, 'static', 'logos')
+    os.makedirs(ruta_logos, exist_ok=True)
+
+    import ferreteria.config as config_mod
+    original_db = config_mod.DB_NAME
+    original_fn = marca.directorio_logos
+    config_mod.DB_NAME = registro['ruta']
+    marca.directorio_logos = lambda: ruta_logos
+    try:
+        instancia = sqlite3.connect(registro['ruta'])
+        marca.guardar_logo(instancia, _PNG, 'logo.png')
+        instancia.close()
+    finally:
+        config_mod.DB_NAME = original_db
+        marca.directorio_logos = original_fn
+
+    assert os.path.exists(os.path.join(ruta_logos, 'logo.png'))
+    # Y no se escribió en la carpeta compartida del desarrollador.
+    assert not os.path.exists(os.path.join(
+        directorio, 'static', 'logos', 'logo.png'))
+
+
+def test_la_instancia_arranca_con_el_esquema_al_dia(padron_real):
+    """Debe salir con TODO el esquema, no con lo que tuviera la semilla.
+
+    La semilla del repositorio se va quedando atrás. Si el provisionador no
+    aplica las migraciones sobre la copia, el cliente nuevo nace sin las últimas
+    columnas y se entera al usar la función.
+    """
+    conn, directorio = padron_real
+    registro = _provisionar(conn, directorio)
+
+    instancia = sqlite3.connect(registro['ruta'])
+    columnas = {r[1] for r in instancia.execute(
+        'PRAGMA table_info(configuracion)')}
+    instancia.close()
+
+    for esperada in ('software_proveedor_nit', 'software_proveedor_nombre',
+                     'negocio_logo', 'negocio_nombre_comercial',
+                     'negocio_mensaje_pie', 'negocio_color_primario',
+                     'certificado_ruta', 'dian_test_set_id'):
+        assert esperada in columnas, f'Falta la columna {esperada}'
+
+
+_PNG = (
+    b'\x89PNG\r\n\x1a\n\x00\x00\x00\rIHDR\x00\x00\x00\x01\x00\x00\x00\x01'
+    b'\x08\x06\x00\x00\x00\x1f\x15\xc4\x89\x00\x00\x00\nIDATx\x9cc\x00\x01\x00'
+    b'\x00\x05\x00\x01\r\n-\xb4\x00\x00\x00\x00IEND\xaeB`\x82'
+)

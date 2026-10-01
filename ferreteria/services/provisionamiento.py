@@ -192,9 +192,18 @@ def _crear_usuario_dueno(conn, usuario, clave):
     Returns:
         El id del usuario creado.
     """
-    # El admin genérico de la semilla se elimina: es una puerta conocida y su clave
+        # El admin generico de la semilla se elimina: es una puerta conocida y su clave
     # (`admin123`) está publicada en el repositorio.
-    conn.execute("DELETE FROM usuarios WHERE usuario = ?", ('admin',))
+    #
+    # Tambien se borran las cuentas de PRUEBA que trae la semilla. Vienen con
+    # contrasenas conocidas y estan pensadas para las pruebas automatizadas, no
+    # para un ferreteria real: si se quedaran, cualquiera que haya leido el
+    # repositorio podria entrar a la instancia de un cliente con rol de bodega o
+    # de motocarguero.
+    usuarios_semilla = ('admin', 'empleado', 'vendedor', 'pedidos',
+                         'bodega_test', 'moto_test')
+    for nombre in usuarios_semilla:
+        conn.execute('DELETE FROM usuarios WHERE usuario = ?', (nombre,))
 
     existe = conn.execute(
         'SELECT id FROM usuarios WHERE usuario = ?', (usuario,)
@@ -275,6 +284,33 @@ def provisionar(directorio, nombre_negocio, usuario_dueno, clave_dueno,
 
         conn = sqlite3.connect(temporal)
         try:
+            # Se aplica el esquema ANTES de sembrar. La semilla del
+            # repositorio se va quedando atras a medida que se agregan
+            # columnas, y sin esto una instancia nueva nacia sin lo
+            # ultimo que si esta en la base del desarrollador.
+            # Provisionar un cliente tiene que dar una base completa y
+            # vigente, no una copia de lo que hubiera en la semilla el dia
+            # que se regenero por ultima vez.
+            from .. import db as db_mod
+            cursor = conn.cursor()
+            for crear in (db_mod._crear_tablas_base,
+                          db_mod._crear_tablas_operacion,
+                          db_mod._crear_tablas_alquiler,
+                          db_mod._crear_tablas_pedidos,
+                          db_mod._crear_tablas_cotizaciones,
+                          db_mod._crear_tablas_dian):
+                crear(cursor)
+            db_mod._asegurar_migracion_documento_soporte(cursor)
+            db_mod._aplicar_migraciones(cursor)
+
+            # Las tablas del padron NO deben quedar en la instancia de un
+            # cliente. La semilla se genero cuando estas tablas si se creaban en
+            # todas las bases, asi que pueden venir pegadas en la copia; y
+            # `CREATE TABLE IF NOT EXISTS` no las quita. Se borran aqui para que
+            # el aislamiento no dependa de como estaba la semilla ese dia.
+            for tabla in ('historial_provisionamiento', 'ferreterias'):
+                cursor.execute(f'DROP TABLE IF EXISTS {tabla}')
+
             _sembrar_configuracion(conn, {
                 'nombre': nombre_negocio,
                 'nit': nit,

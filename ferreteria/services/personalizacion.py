@@ -27,7 +27,48 @@ from ..config import BASE_DIR
 # Carpeta donde viven los logos. Vive dentro de `static` a propósito: así la
 # plantilla puede pedirlo como `/static/logos/logo.png` y el servidor lo sirve
 # sin una ruta propia.
-DIRECTORIO_LOGOS = os.path.join(BASE_DIR, 'static', 'logos')
+#
+# Con UNA ferretería no había problema: la carpeta es del software. Con VARIAS,
+# este `BASE_DIR` es el del DESARROLLADOR, y todas las instancias comparten el
+# mismo archivo `logo.png`: la última en subirlo le pisaba el logo a las demás,
+# y una ferretería veía el logo de otra en su ticket y en su login. Un logo
+# ajeno es un problema de marca, no un detalle.
+#
+# Por eso el destino se resuelve en runtime (ver `directorio_logos()`): si la
+# base que se está usando es la del desarrollador, los logos van a la carpeta
+# compartida; si es una instancia de cliente, van a la carpeta de ESA instancia
+# y quedan aisladas como el resto de sus datos.
+DIRECTORIO_LOGOS_COMPARTIDO = os.path.join(BASE_DIR, 'static', 'logos')
+
+# Prefijo de la carpeta de la instancia. Es el mismo nombre con el que se crea
+# el archivo .db, sin extensión, para que sea obvio a qué ferretería pertenece.
+PREFIJO_INSTANCIA = 'ferreteria_'
+
+
+def directorio_logos():
+    """Carpeta de logos de la base con la que se está trabajando ahora.
+
+    Se resuelve en cada llamada y no al importar, porque `FERRETERIA_DB` cambia
+    en runtime: el panel corre sobre la base del desarrollador y cada cliente
+    sobre la suya. Fijarlo al importar haría que todas escribieran en la misma.
+    """
+    from ..config import DB_NAME
+
+    nombre = os.path.splitext(os.path.basename(DB_NAME))[0]
+    if PREFIJO_INSTANCIA not in nombre.lower():
+        # Es la base del desarrollador: los logos van a la carpeta compartida.
+        return DIRECTORIO_LOGOS_COMPARTIDO
+
+    # Es una instancia: los logos van a su propia carpeta, junto a su base.
+    base = os.path.dirname(os.path.abspath(DB_NAME))
+    directorio = os.path.join(base, 'static', 'logos')
+    os.makedirs(directorio, exist_ok=True)
+    return directorio
+
+
+# Se conserva el nombre viejo porque lo usan las pruebas y las herramientas.
+# Apunta a la carpeta del desarrollador: es el caso de una instancia solo.
+DIRECTORIO_LOGOS = DIRECTORIO_LOGOS_COMPARTIDO
 
 # Extensiones aceptadas. Solo formatos de imagen que un navegador y una
 # impresora térmica saben mostrar. El SVG se excluye a propósito: es un archivo
@@ -138,7 +179,7 @@ def _ruta_absoluta(logo):
         return ''
     if os.path.isabs(logo):
         return logo
-    return os.path.join(BASE_DIR, logo)
+    return os.path.join(directorio_logos(), os.path.basename(logo))
 
 
 def _url_publica(logo):
@@ -204,9 +245,10 @@ def guardar_logo(conn, contenido, nombre_original=''):
             'GIF o WebP. (Se revisa el contenido del archivo, no su extensión.)'
         )
 
-    os.makedirs(DIRECTORIO_LOGOS, exist_ok=True)
+    carpeta = directorio_logos()
+    os.makedirs(carpeta, exist_ok=True)
     destino_relativo = os.path.join('logos', f'logo.{extension}')
-    destino_absoluto = os.path.join(DIRECTORIO_LOGOS, f'logo.{extension}')
+    destino_absoluto = os.path.join(carpeta, f'logo.{extension}')
 
     anterior = conn.execute(
         'SELECT COALESCE(negocio_logo, "") FROM configuracion WHERE id = 1'
@@ -234,7 +276,7 @@ def _borrar_logo(logo):
     ruta = _ruta_absoluta(logo)
     # Solo se borra DENTRO de la carpeta de logos. Una ruta manipulada en la
     # base no debe poder borrar un archivo del sistema.
-    dentro = os.path.abspath(ruta).startswith(os.path.abspath(DIRECTORIO_LOGOS))
+    dentro = os.path.abspath(ruta).startswith(os.path.abspath(directorio_logos()))
     if dentro and os.path.exists(ruta):
         try:
             os.remove(ruta)
@@ -304,12 +346,13 @@ def _limpiar_logos_huerfanos(conn):
     ).fetchone()
     conservar = {os.path.basename(fila[0]), os.path.basename(fila[1])} - {''}
 
-    if not os.path.isdir(DIRECTORIO_LOGOS):
+    carpeta = directorio_logos()
+    if not os.path.isdir(carpeta):
         return
-    for nombre in os.listdir(DIRECTORIO_LOGOS):
+    for nombre in os.listdir(carpeta):
         if nombre.startswith('logo.') and nombre not in conservar:
             try:
-                os.remove(os.path.join(DIRECTORIO_LOGOS, nombre))
+                os.remove(os.path.join(carpeta, nombre))
             except OSError:
                 pass
 

@@ -91,11 +91,10 @@ def conn_logo(tmp_path, monkeypatch):
     directorio_logos = tmp_path / 'logos'
     directorio_logos.mkdir()
 
-    monkeypatch.setattr(marca, 'DIRECTORIO_LOGOS', str(directorio_logos))
-    monkeypatch.setattr(marca, '_ruta_absoluta', lambda logo: (
-        os.path.join(str(directorio_logos), os.path.basename(logo))
-        if logo else ''
-    ))
+    # Se parchea la FUNCION, no la constante: con varias instancias la carpeta
+    # se resuelve en runtime (cada ferretería tiene la suya) y el seam es
+    # `directorio_logos`, no el atributo de módulo.
+    monkeypatch.setattr(marca, 'directorio_logos', lambda: str(directorio_logos))
 
     base = sqlite3.connect(':memory:')
     cursor = base.cursor()

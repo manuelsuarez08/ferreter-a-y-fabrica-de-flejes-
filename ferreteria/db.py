@@ -56,6 +56,39 @@ def crear_indices(conn):
             pass
 
 
+def _es_base_desarrollador(cursor=None):
+    """True si esta base es la del desarrollador, no la de un cliente.
+
+    Se decide por el nombre del ARCHIVO REAL de la conexión, con la misma
+    heuristica que usan los logos: las instancias se llaman
+    `ferreteria_<algo>.db` y la del desarrollador no.
+
+    Se pregunta a la conexión (`PRAGMA database_list`) y NO a `config.DB_NAME`
+    a propósito: durante el provisionamiento la conexión apunta al archivo
+    temporal que se está creando, mientras `config.DB_NAME` sigue siendo la base
+    del desarrollador. Preguntar al config daria "es del desarrollador" y crearia
+    aqui el padron que justamente esta instancia no debe tener.
+
+    Args:
+        cursor: cursor de la conexion. Sin el, se cae a `config.DB_NAME`.
+    """
+    ruta = None
+    if cursor is not None:
+        try:
+            fila = cursor.execute('PRAGMA database_list').fetchone()
+            # (seq, name, file) — `file` viene vacio para bases en memoria.
+            ruta = fila[2] if fila and len(fila) > 2 else None
+        except Exception:
+            ruta = None
+
+    if not ruta:
+        from .config import DB_NAME
+        ruta = DB_NAME
+
+    nombre = os.path.splitext(os.path.basename(str(ruta)))[0].lower()
+    return 'ferreteria_' not in nombre
+
+
 def _crear_tablas_base(cursor):
     """Crea el conjunto de tablas del núcleo (usuarios, catálogo, ventas)."""
     cursor.execute('''
@@ -66,7 +99,8 @@ def _crear_tablas_base(cursor):
             rol TEXT NOT NULL
         )
     ''')
-    _crear_tablas_provisionamiento(cursor)
+    if _es_base_desarrollador(cursor):
+        _crear_tablas_provisionamiento(cursor)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS clientes (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
