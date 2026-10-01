@@ -18,7 +18,11 @@ Límite importante: NO borra archivos de instancia. La base de una ferretería
 puede tener ventas reales y documentos ya emitidos; eso se borra en el sistema de
 archivos, a mano y con respaldo.
 """
-from flask import Blueprint, jsonify, render_template, request, session
+import os
+
+from flask import (
+    Blueprint, jsonify, render_template, request, send_from_directory, session,
+)
 
 from ..config import aviso_persistencia_instancias, resolver_directorio_instancias
 from ..db import get_db
@@ -155,6 +159,74 @@ def api_editar(id_ferreteria):
     return jsonify({'mensaje': mensaje, 'ferreteria': registro})
 
 
+@bp.route('/api/superadmin/ferreterias/<int:id_ferreteria>/pago', methods=['PUT'])
+@superadmin_required
+def api_pago(id_ferreteria):
+    """Actualiza plan, fecha de vencimiento y días de prórroga.
+
+    Es un endpoint aparte (no el PUT general) porque estos campos tienen reglas
+    propias: el plan se valida contra la lista, la fecha contra el formato, y
+    tocar el pago puede cambiar el estado del cliente. Mezclarlos con la
+    edición de contacto haría que un cambio de teléfono suspendiera a alguien.
+    """
+    datos = request.json or {}
+    conn = get_db()
+    try:
+        pago = padron.configurar_pago(
+            conn, id_ferreteria,
+            plan=datos.get('plan'),
+            fecha_vencimiento=datos.get('fecha_vencimiento'),
+            dias_prorroga=datos.get('dias_prorroga'),
+            aplicar_estado=datos.get('aplicar_estado', True),
+        )
+    except padron.ErrorPadron as error:
+        return jsonify({'error': str(error)}), 400
+    finally:
+        conn.close()
+    return jsonify({'mensaje': 'Datos de pago actualizados.', 'pago': pago})
+
+
+@bp.route('/api/superadmin/vencimientos', methods=['GET'])
+@superadmin_required
+def api_vencimientos():
+    """Qué cambiaría si se aplicaran los vencimientos. NO escribe nada.
+
+    Se separa del listado a propósito: el desarrollador tiene que ver el efecto
+    antes de aceptarlo, sobre todo porque suspender es una medida real contra un
+    cliente que puede estar pagando.
+    """
+    conn = get_db()
+    try:
+        simulacion = padron.revisar_vencimientos(conn, aplicar=False)
+    finally:
+        conn.close()
+    return jsonify({
+        'simulacion': simulacion,
+        'planes': list(padron.PLANES),
+        'dias_prorroga_defecto': padron.DIAS_PRORROGA_DEFECTO,
+    })
+
+
+@bp.route('/api/superadmin/vencimientos/aplicar', methods=['POST'])
+@superadmin_required
+def api_aplicar_vencimientos():
+    """Aplica los cambios de estado por vencimiento. Requiere confirmación.
+
+    El panel pide confirmación antes de llamar esto.
+    """
+    conn = get_db()
+    try:
+        cambios = padron.revisar_vencimientos(conn, aplicar=True)
+    finally:
+        conn.close()
+    return jsonify({
+        'mensaje': (
+            f'Se aplicaron {len(cambios)} cambio(s).'
+            if cambios else 'No había vencimientos que aplicar.'),
+        'cambios': cambios,
+    })
+
+
 @bp.route('/api/superadmin/ferreterias/<int:id_ferreteria>', methods=['DELETE'])
 @superadmin_required
 def api_eliminar(id_ferreteria):
@@ -222,9 +294,128 @@ def _resumen_con_aviso(conn):
 
     El aviso viaja en la respuesta y no solo en los logs: el desarrollador que
     abre el panel es quien puede arreglarlo, y un aviso que solo existe en un
-    log de un servidor es un aviso que nadie lee hasta que ya se perdió una base.
+    log de un servidor es un aviso que nadie lee hasta que ya se perdio una base.
     """
     resultado = padron.resumen(conn, _directorio())
     resultado['directorio_instancias'] = _directorio()
     resultado['aviso_persistencia'] = aviso_persistencia_instancias()
     return resultado
+
+
+@bp.route('/api/superadmin/perfiles')
+@superadmin_required
+def api_perfiles():
+    """Los perfiles en formato de tarjetas, con el logo de cada instancia.
+
+    Cada tarjeta necesita el logo de SU ferretería. Se lee del archivo de la
+    instancia, no de la base del desarrollador: el logo lo sube el dueño desde
+    su panel y vive en el directorio de logos de su instancia.
+
+    Si la instancia no está en disco, se entrega el logo genérico de la
+    plataforma. Una tarjeta sin imagen se distingue de una con logo: la primera
+    significa "todavía no subió", que es información útil.
+    """
+    conn = get_db()
+    directorio = _directorio()
+    try:
+        registros = padron.listar(conn, directorio)
+    finally:
+        conn.close()
+
+    perfiles = []
+    for registro in registros:
+        logo = _logo_de_instancia(directorio, registro)
+        perfiles.append({
+            'id': registro['id'],
+            'nombre': registro['nombre'],
+            'nit': registro['nit'],
+            'contacto': registro['telefono'] or registro['email'],
+            'archivo': registro['archivo'],
+            'archivo_existe': registro['archivo_existe'],
+            'estado': registro['estado'],
+            'plan': registro['plan'],
+            'fecha_vencimiento': registro['fecha_vencimiento'],
+            'dias_para_vencer': registro['dias_para_vencer'],
+            'dias_prorroga': registro['dias_prorroga'],
+            'dias_restantes_prorroga': registro['dias_restantes_prorroga'],
+            'suspension_automatica': registro['suspension_automatica'],
+            'puede_operar': registro['puede_operar'],
+            'logo_url': logo,
+            'tiene_logo': bool(logo),
+            # El color de la franja de la tarjeta. Lo calcula el servidor para
+            # que el JavaScript no tenga que decidir qué estado es urgente.
+            'franja': _franja(registro),
+        })
+    return jsonify({'perfiles': perfiles})
+
+
+def _franja(registro):
+    """Color de la tarjeta, decidido por el servidor.
+
+    Centralizarlo acá evita que la regla de urgencia se desincronice entre el
+    backend y el frontend: si cambia, cambia en un solo lugar.
+    """
+    if not registro['puede_operar']:
+        return 'bloqueado'
+    dias = registro['dias_para_vencer']
+    if dias is not None and dias < 0:
+        return 'vencido'
+    if dias is not None and dias <= 7:
+        return 'por_vencer'
+    if registro['estado'] == 'prorrogado':
+        return 'prorroga'
+    return 'ok'
+
+
+def _logo_de_instancia(directorio, registro):
+    """URL del logo de una ferretería, leído de SU instancia.
+
+    El logo se guarda como `static/logos/logo.<ext>` dentro de la base de cada
+    instancia, así que la ruta es siempre la misma y solo cambia el contenido.
+    Se busca entre las extensiones aceptadas.
+    """
+    if not registro['archivo_existe']:
+        return ''
+    base_instancia = os.path.join(directorio, os.path.splitext(registro['archivo'])[0])
+    for extension in ('png', 'jpg', 'jpeg', 'webp', 'gif'):
+        if os.path.exists(os.path.join(base_instancia, 'static', 'logos',
+                                       f'logo.{extension}')):
+            return f'/instancia/{registro["archivo"]}/static/logos/logo.{extension}'
+    return ''
+
+
+@bp.route('/instancia/<archivo>/static/logos/<path:nombre>')
+@superadmin_required
+def servir_logo_instancia(archivo, nombre):
+    """Sirve el logo de UNA instancia.
+
+    Existe para las tarjetas del panel. Va por aquí y no por `static` porque
+    el logo de cada ferretería vive en SU carpeta de instancia, no en el
+    `static` del desarrollador.
+
+    Seguridad: el archivo se busca en el padrón, nunca se construye una ruta a
+    partir de lo que llega. `send_from_directory` además impide salir del
+    directorio indicado, así que un `../../` en `nombre` no llega al disco. Y
+    solo se sirven imágenes de la carpeta `logos`, que es lo único que el dueño
+    sube desde su panel.
+    """
+    conn = get_db()
+    directorio = _directorio()
+    try:
+        registrado = conn.execute(
+            'SELECT archivo FROM ferreterias WHERE archivo = ?', (archivo,)
+        ).fetchone()
+    finally:
+        conn.close()
+
+    if registrado is None:
+        return jsonify({'error': 'Instancia no encontrada.'}), 404
+
+    # Solo la carpeta de logos. Cualquier otra ruta (la base de datos de otro
+    # cliente, un .py, el .p12) queda fuera.
+    base = os.path.join(
+        directorio,
+        os.path.splitext(archivo)[0],
+        'static', 'logos',
+    )
+    return send_from_directory(base, nombre)

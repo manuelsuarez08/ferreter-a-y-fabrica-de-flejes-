@@ -32,12 +32,73 @@
         /* Una fila que no puede operar se marca en rojo claro. Se lee sin
            leer una columna: el color es la alerta. */
         .fila-problema { background-color: #FFF2F2; }
+        /* ── Selector de perfiles (estilo tarjetas) ────────────────────
+           Cada tarjeta es una ferretería. El logo sale de SU instancia, así
+           que si el dueño todavía no subió ninguno se ve la marca de la
+           plataforma en su lugar: una tarjeta sin logo es información
+           ("todavía no lo subió"), no un error. */
+        .perfil {
+            border-radius: 10px;
+            overflow: hidden;
+            background: #fff;
+            border: 1px solid #e2e5ea;
+            height: 100%;
+            display: flex;
+            flex-direction: column;
+            transition: transform .12s ease, box-shadow .12s ease;
+        }
+        .perfil:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 6px 18px rgba(0, 0, 0, .12);
+        }
+        /* La franja superior lleva el estado. El color lo decide el servidor
+           (`franja`), para que la regla de urgencia no se desincronice entre
+           el backend y el JavaScript. */
+        .perfil-franja { height: 6px; }
+        .franja-ok          { background: #1E6B2E; }
+        .franja-por_vencer  { background: #C68A00; }
+        .franja-prorroga    { background: #B8860B; }
+        .franja-vencido     { background: #C0392B; }
+        .franja-bloqueado   { background: #7B241C; }
+
+        .perfil-logo {
+            height: 92px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            background: #fbfbfc;
+            border-bottom: 1px solid #eef0f3;
+            overflow: hidden;
+        }
+        .perfil-logo img { max-width: 78%; max-height: 80px; object-fit: contain; }
+        .perfil-logo .marca {
+            font-weight: 700; color: #1F4E79; font-size: 1.05rem;
+            opacity: .55; text-align: center;
+        }
+        .perfil-cuerpo { padding: 12px 14px; flex: 1; }
+        .perfil-nombre {
+            font-weight: 600; font-size: .95rem; color: #1a2733;
+            white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+        }
+        .perfil-dato { font-size: .78rem; color: #6b7684; }
+
+        .tabla { font-size: .72rem; }
+        .tabla td, .tabla th { padding: .15rem .3rem; vertical-align: middle; }
+        .tabla th { white-space: nowrap; }
+        .boton-mini {
+            border: 1px solid #cfd5dd; border-radius: 4px; background: #fff;
+            color: #38424f; font-size: .74rem; padding: 2px 7px; cursor: pointer;
+        }
+        .boton-mini:hover { background: #f2f4f7; }
         .estado-badge { font-size: 11px; padding: 4px 8px; border-radius: 10px; }
         .estado-activo { background: #E2EFDA; color: #1E6B2E; }
-        .estado-suspendido { background: #FFF2CC; color: #8A6100; }
-        .estado-cancelado { background: #F8D7DA; color: #9C0006; }
+        .estado-prorrogado { background: #FFF2CC; color: #8A6100; }
+        .estado-suspendido { background: #FCE4D6; color: #9C0006; }
+        .estado-cancelado { background: #F8D7DA; color: #7B241C; }
         .marca-ok { color: #1E6B2E; }
         .marca-falta { color: #9C0006; }
+        .marca-aviso { color: #8A6100; }
+        #mensaje { display: none; }
         #mensaje { display: none; }
         .contrasena-generada {
             font-family: monospace;
@@ -66,13 +127,20 @@
 
 <div class="container py-4">
 
-    <div id="mensaje" class="alert" role="alert"></div>
+<div id="mensaje" class="alert" role="alert"></div>
 
-    <!-- Aviso de persistencia. Aparece solo cuando el directorio de instancias
-         se perderia al desplegar. Va arriba de todo porque si aparece, hay una
-         base de cliente que puede desaparecer sin avisar. -->
-    <div id="aviso-persistencia" class="alert alert-danger" style="display:none"
-         role="alert"></div>
+<!-- Aviso de persistencia. Aparece solo cuando el directorio de instancias
+     se perderia al desplegar. Va arriba de todo porque si aparece, hay una
+     base de cliente que puede desaparecer sin avisar. -->
+<div id="aviso-persistencia" class="alert alert-danger" style="display:none"
+     role="alert"></div>
+
+<!-- ── Selector de perfiles ────────────────────────────────── -->
+<div class="d-flex justify-content-between align-items-center mb-2">
+    <h5 class="mb-0">Ferreterías</h5>
+    <small class="text-muted">Cada tarjeta es una instancia independiente</small>
+</div>
+<div id="perfiles" class="row g-3 mb-4"></div>
 
     <!-- ── Cifras ────────────────────────────────────────────── -->
     <div class="row mb-4" id="fila-cifras">
@@ -111,6 +179,7 @@
                     <select id="filtro-estado" class="form-control form-control-sm" style="width:auto">
                         <option value="">Todas</option>
                         <option value="activo">Activas</option>
+                        <option value="prorrogado">En prórroga</option>
                         <option value="suspendido">Suspendidas</option>
                         <option value="cancelado">Canceladas</option>
                     </select>
@@ -254,6 +323,136 @@ async function api(ruta, opciones = {}) {
 
 function badge(estado) {
     return `<span class="estado-badge estado-${estado}">${estado}</span>`;
+}
+
+/* ── Tarjetas de perfiles ─────────────────────────────────────────── */
+function textoVencimiento(p) {
+    const d = p.dias_para_vencer;
+    if (d === null || d === undefined) return 'Sin fecha de pago';
+    if (d > 0) return `Vence en ${d} día${d === 1 ? '' : 's'}`;
+    if (d === 0) return 'Vence hoy';
+    if (p.dias_restantes_prorroga !== null && p.dias_restantes_prorroga >= 0) {
+        return `Vencida — quedan ${p.dias_restantes_prorraga} día(s) de prórroga`;
+    }
+    return `Vencida hace ${Math.abs(d)} día(s)`;
+}
+
+function pintarPerfiles(perfiles) {
+    const caja = $('#perfiles');
+    if (!perfiles.length) {
+        caja.innerHTML = '<div class="col-12 text-muted text-center py-4">'
+            + 'Todavía no hay ferreterías registradas.</div>';
+        return;
+    }
+    caja.innerHTML = perfiles.map(p => {
+        // El logo viene de la instancia de ESA ferretería. Si no hay, se muestra
+        // la marca de la plataforma: una tarjeta sin logo significa que el
+        // dueño todavía no lo subió, que es un dato útil, no un fallo.
+        const logo = p.tiene_logo
+            ? `<img src="${p.logo_url}" alt="${p.nombre}">`
+            : `<div class="marca">FerreControl</div>`;
+        const vencido = p.franja === 'vencido' || p.franja === 'bloqueado';
+        const claseFecha = p.franja === 'vencido' ? 'marca-falta'
+            : (p.franja === 'por_vencer' ? 'marca-aviso' : '');
+        return `
+        <div class="col-md-6 col-xl-4">
+          <div class="perfil">
+            <div class="perfil-franja franja-${p.franja}"></div>
+            <div class="perfil-logo">${logo}</div>
+            <div class="perfil-cuerpo">
+              <div class="perfil-nombre" title="${p.nombre}">${p.nombre}</div>
+              <div class="perfil-dato">${p.nit || 'NIT sin configurar'}</div>
+              <div class="perfil-dato">Plan: ${p.plan === 'anual' ? 'Anual' : 'Mensual'}</div>
+              <div class="perfil-dato ${claseFecha}">${textoVencimiento(p)}</div>
+              <div class="mt-2">${badge(p.estado)}</div>
+            </div>
+            <div class="p-2 border-top d-flex gap-1 justify-content-end">
+              <button class="boton-mini" onclick="editarPago(${p.id})">Pago</button>
+              <button class="boton-mini" onclick="verDetalle(${p.id})">Ver</button>
+            </div>
+          </div>
+        </div>`;
+    }).join('');
+}
+
+async function cargarPerfiles() {
+    try {
+        const d = await api('/api/superadmin/perfiles');
+        pintarPerfiles(d.perfiles);
+    } catch (e) {
+        avisar(e.message, 'danger');
+    }
+}
+
+/* ── Editar pago ─────────────────────────────────────────────────── */
+async function editarPago(id) {
+    const cuerpo = $('#detalle-cuerpo');
+    cuerpo.innerHTML = '<p class="text-muted">Cargando…</p>';
+    $('#detalle-titulo').textContent = 'Datos de pago';
+    new bootstrap.Modal('#modal-detalle').show();
+    try {
+        const d = await api('/api/superadmin/ferreterias/' + id);
+        const f = d.ferreteria;
+        cuerpo.innerHTML = `
+            <form onsubmit="guardarPago(event, ${id})">
+              <div class="row g-3">
+                <div class="col-md-6">
+                  <label class="form-label small">Plan</label>
+                  <select class="form-select form-select-sm" id="pg-plan">
+                    <option value="mensual" ${f.plan === 'mensual' ? 'selected' : ''}>Mensual</option>
+                    <option value="anual" ${f.plan === 'anual' ? 'selected' : ''}>Anual</option>
+                  </select>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label small">Fecha de vencimiento</label>
+                  <input type="date" class="form-control form-control-sm"
+                         id="pg-vencimiento" value="${f.fecha_vencimiento || ''}">
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label small">Días de prórroga</label>
+                  <input type="number" min="0" class="form-control form-control-sm"
+                         id="pg-prorroga" value="${f.dias_prorroga || 15}">
+                  <small class="text-muted">Vencida la fecha, tiene estos días
+                     antes de que se sugiera la suspensión.</small>
+                </div>
+                <div class="col-md-6">
+                  <label class="form-label small">Estado actual</label>
+                  <div class="pt-1">${badge(f.estado)}</div>
+                </div>
+              </div>
+              <div class="alert alert-info small mt-3 mb-0">
+                Al guardar se recalcula el estado según la fecha. Si la fecha está
+                vencida y la prórroga ya se agotó, el cliente queda suspendido.
+                Para darle más días sin cambiar de estado, suba primero la fecha.
+              </div>
+              <div class="text-end mt-3">
+                <button type="submit" class="btn btn-primary btn-sm">Guardar</button>
+              </div>
+            </form>`;
+    } catch (e) {
+        cuerpo.innerHTML = `<div class="alert alert-warning mb-0">${e.message}</div>`;
+    }
+}
+
+async function guardarPago(evento, id) {
+    evento.preventDefault();
+    try {
+        const d = await api('/api/superadmin/ferreterias/' + id + '/pago', {
+            method: 'PUT',
+            headers: {'Content-Type': 'application/json'},
+            body: JSON.stringify({
+                plan: $('#pg-plan').value,
+                fecha_vencimiento: $('#pg-vencimiento').value,
+                dias_prorroga: parseInt($('#pg-prorroga').value, 10),
+            }),
+        });
+        bootstrap.Modal.getInstance('#modal-detalle').hide();
+        avisar(d.mensaje, 'success');
+        cargarPerfiles();
+        cargar();
+    } catch (e) {
+        avisar(e.message, 'danger');
+    }
 }
 
 async function cargar() {
@@ -411,6 +610,7 @@ $('#form-nueva').addEventListener('submit', async (evento) => {
 });
 
 $('#filtro-estado').addEventListener('change', cargar);
+cargarPerfiles();
 cargar();
 </script>
 </body>

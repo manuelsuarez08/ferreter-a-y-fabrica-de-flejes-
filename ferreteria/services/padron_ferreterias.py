@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import os
 import sqlite3
-from datetime import datetime
+from datetime import datetime, timedelta
 
 from .provisionamiento import (
     ErrorProvisionamiento,
@@ -30,15 +30,116 @@ from .provisionamiento import (
 )
 
 # Estados en los que el cliente PUEDE operar.
-ESTADOS_OPERATIVOS = ('activo',)
+ESTADOS_OPERATIVOS = ('activo', 'prorrogado')
 # Estados en los que NO puede.
 ESTADOS_BLOQUEADOS = ('suspendido', 'cancelado')
 
 _ESTADOS_VALIDOS = ESTADOS_OPERATIVOS + ESTADOS_BLOQUEADOS
 
+# Plan de cobro. El nombre dice cada cuánto vence la licencia.
+PLANES = ('mensual', 'anual')
+DIAS_POR_PLAN = {'mensual': 30, 'anual': 365}
+
+# Prórroga por defecto tras el vencimiento, en días.
+DIAS_PRORROGA_DEFECTO = 15
+
+# Formato de fecha de vencimiento: solo `YYYY-MM-DD`. Aceptar otros formatos
+# haría que dos registros con la misma fecha se compararan distinto.
+FORMATO_FECHA = '%Y-%m-%d'
+
 
 class ErrorPadron(Exception):
     """Operación inválida sobre el padrón de ferreterías."""
+
+
+def _hoy():
+    return datetime.now().date()
+
+
+def _parsear_fecha(texto):
+    """Fecha a `date`, o None si viene vacía o mal formada.
+
+    Devuelve None en vez de lanzar porque un vencimiento mal escrito no puede
+    impedir que se abra el panel del desarrollador: se muestra como "sin fecha"
+    y es él quien lo corrige.
+    """
+    if not texto:
+        return None
+    try:
+        return datetime.strptime(str(texto).strip()[:10], FORMATO_FECHA).date()
+    except ValueError:
+        return None
+
+
+def _formatear_fecha(fecha):
+    return fecha.strftime(FORMATO_FECHA) if fecha else ''
+
+
+def dias_para_vencer(fecha_vencimiento):
+    """Días que faltan. Negativo si ya venció.
+
+    Returns:
+        int o None si no hay fecha configurada.
+    """
+    fecha = _parsear_fecha(fecha_vencimiento)
+    if fecha is None:
+        return None
+    return (fecha - _hoy()).days
+
+
+def estado_por_fecha(fecha_vencimiento, dias_prorroga=DIAS_PRORROGA_DEFECTO,
+                     estado_actual='activo'):
+    """Qué estado LE TOCARÍA por la fecha, sin tocar la base.
+
+    Es una función PURA a propósito: el panel la usa para mostrar "va a vencer
+    en 5 días" sin que eso cambie nada por sí solo. El cambio de estado solo
+    ocurre cuando el desarrollador lo pide o cuando se ejecuta
+    `revisar_vencimientos`.
+
+    Regla:
+        - sin fecha, o vigente          -> el estado que ya tenía
+        - vencida y dentro de prórroga  -> 'prorrogado'
+        - vencida y prórroga agotada    -> 'suspendido'
+
+    Un cliente 'suspendido' o 'cancelado' NO vuelve a activo por el paso del
+    tiempo: la suspensión es una decisión del desarrollador, no un efecto del
+    reloj. Si solo se tratara de una fecha vencida, `suspension_automatica`
+    avisaría y listo.
+    """
+    if estado_actual in ESTADOS_BLOQUEADOS:
+        return estado_actual
+
+    dias = dias_para_vencer(fecha_vencimiento)
+    if dias is None or dias >= 0:
+        return estado_actual
+
+    try:
+        gracia = int(dias_prorroga)
+    except (TypeError, ValueError):
+        gracia = DIAS_PRORROGA_DEFECTO
+    gracia = max(gracia, 0)
+
+    # Negativo: ya venció. `dias` es -1 el día después del vencimiento.
+    if (-dias) <= gracia:
+        return 'prorrogado'
+    return 'suspendido'
+
+
+def renovacion_sugerida(plan, desde=None):
+    """Fecha de vencimiento para un plan nuevo o una renovación.
+
+    Args:
+        plan: 'mensual' o 'anual'.
+        desde: fecha base. Por defecto hoy.
+    """
+    if plan not in PLANES:
+        raise ErrorPadron(
+            f'Plan desconocido: "{plan}". Use uno de: {", ".join(PLANES)}.'
+        )
+    base = _parsear_fecha(desde) if desde else _hoy()
+    if base is None:
+        base = _hoy()
+    return _formatear_fecha(base + timedelta(days=DIAS_POR_PLAN[plan]))
 
 
 def _ahora():
@@ -144,15 +245,261 @@ _COLUMNAS = None
 
 
 def _columnas_padron():
-    """Nombres de las columnas de `ferreterias`, en orden de definición."""
+    """Nombres de las columnas de `ferreterias`, en orden de definición.
+
+    Tiene que coincidir con el `CREATE TABLE` de `db._crear_tablas_provisionamiento`.
+    Si se agrega una columna ahí y no se agrega acá, `dict(zip(...))` desalinea
+    TODO lo que venga después: el `estado` de un cliente acabaría siendo su
+    `telefono`, y el panel mentiría sin dar ningún error.
+    """
     global _COLUMNAS
     if _COLUMNAS is None:
         _COLUMNAS = (
             'id', 'nombre', 'nit', 'archivo', 'usuario_dueno', 'estado',
             'telefono', 'email', 'direccion', 'dias_suspendida', 'notas',
             'creado_en', 'actualizado_en',
+            'plan', 'fecha_vencimiento', 'dias_prorroga', 'desde_prorroga',
         )
     return _COLUMNAS
+
+
+def revisar_vencimientos(conn, aplicar=True):
+    """Revisa los vencimientos y cambia los estados que correspondan.
+
+    QUÉ HACE
+    --------
+    Para cada ferretería compara su `fecha_vencimiento` con hoy y aplica la
+    regla: vencida y dentro de prórroga -> 'prorrogado'; vencida y prórroga
+    agotada -> 'suspendido'.
+
+    POR QUÉ NO SE CORRE EN CADA ARRANQUE NI EN CADA VENTA
+    ---------------------------------------------------
+    - En el arranque sería inútil: la fecha solo cambia cuando pasa el día, y el
+      servidor puede estar apagado ese día.
+    - En medio de una venta sería peligroso: una venta a medio registrar que
+      cambia de estado por una fecha es una venta perdida en una ferretería que
+      estaba pagando. Por eso NO se toca el POS.
+
+    Por eso `aplicar` es un parámetro explícito: el panel puede llamar esta
+    función para mostrar qué pasaría (`aplicar=False`, solo simulación) sin tocar
+    nada, y aplicar el cambio cuando el desarrollador lo decide.
+
+    EXCEPCIÓN INTENCIONAL
+    ---------------------
+    Un cliente 'suspendido' por decisión MANUAL no vuelve a activo porque su
+    fecha se renueve. La suspensión es una decisión; el reloj solo agrava.
+    Ver `estado_por_fecha`.
+
+    Returns:
+        Lista de cambios: [{id, nombre, de, a, dias}].
+    """
+    filas = conn.execute(
+        'SELECT id, nombre, estado, fecha_vencimiento, dias_prorroga '
+        'FROM ferreterias'
+    ).fetchall()
+
+    cambios = []
+    cursor = conn.cursor()
+    for fila in filas:
+        # Se leen por posición: esta consulta trae 5 columnas y la lista
+        # completa (17) haría que `_como_dict` alineara mal.
+        id_ = fila[0]
+        nombre = fila[1]
+        estado = fila[2]
+        vencimiento = fila[3]
+        try:
+            dias_prorroga = int(fila[4]) if fila[4] is not None \
+                else DIAS_PRORROGA_DEFECTO
+        except (TypeError, ValueError):
+            dias_prorroga = DIAS_PRORROGA_DEFECTO
+
+        nuevo = estado_por_fecha(vencimiento, dias_prorroga, estado)
+        if nuevo == estado:
+            continue
+
+        dias = dias_para_vencer(vencimiento)
+        cambios.append({
+            'id': id_, 'nombre': nombre, 'de': estado, 'a': nuevo,
+            'dias': dias,
+        })
+
+        if aplicar:
+            ahora = _ahora()
+            if nuevo == 'prorrogado':
+                cursor.execute(
+                    'UPDATE ferreterias SET estado = ?, desde_prorroga = ?, '
+                    'actualizado_en = ? WHERE id = ?',
+                    (nuevo, ahora, ahora, id_),
+                )
+            else:
+                cursor.execute(
+                    'UPDATE ferreterias SET estado = ?, desde_prorroga = NULL, '
+                    'actualizado_en = ? WHERE id = ?',
+                    (nuevo, ahora, id_),
+                )
+            _registrar_historial(
+                cursor, id_, nuevo,
+                f'Automatico por vencimiento (vencio hace '
+                f'{abs(dias or 0)} dia(s))',
+            )
+
+    if aplicar and cambios:
+        conn.commit()
+    return cambios
+
+
+def suspendidos_pendientes(conn):
+    """Clientes cuyo estado NO coincide con lo que dice su fecha.
+
+    No escribe nada. Sirve para que el panel diga "3 clientes deberian estar
+    suspendidos" sin que eso ocurra solo por abrir la pantalla.
+    """
+    pendientes = []
+    for fila in conn.execute(
+        'SELECT id, nombre, estado, fecha_vencimiento, dias_prorroga '
+        'FROM ferreterias'
+    ).fetchall():
+        try:
+            dias_prorroga = int(fila[4]) if fila[4] is not None \
+                else DIAS_PRORROGA_DEFECTO
+        except (TypeError, ValueError):
+            dias_prorroga = DIAS_PRORROGA_DEFECTO
+        esperado = estado_por_fecha(fila[3], dias_prorroga, fila[2])
+        if esperado != fila[2]:
+            pendientes.append({
+                'id': fila[0], 'nombre': fila[1], 'estado': fila[2],
+                'deberia_ser': esperado,
+            })
+    return pendientes
+
+
+def configurar_pago(conn, id_ferreteria, plan=None, fecha_vencimiento=None,
+                    dias_prorroga=None, aplicar_estado=True):
+    """Actualiza plan, vencimiento y días de prórroga de una ferretería.
+
+    Con `fecha_vencimiento=None` se deja la fecha COMO ESTÁ. Poner '' la borra.
+    Esa distinción importa: un cliente al que nunca se le puso fecha no debe
+    aparecer como "sin fecha" solo porque alguien guardó el plan.
+
+    `aplicar_estado` recalcula el estado según la fecha nueva. Con False, solo
+    guarda los datos y deja el estado como está (útil para dar más días de
+    prórroga sin tocar el estado manualmente).
+
+    Returns:
+        El registro de pago actualizado.
+    """
+    _existe(conn, id_ferreteria)
+    cursor = conn.cursor()
+
+    valores = {}
+    if plan is not None:
+        if plan not in PLANES:
+            raise ErrorPadron(
+                f'Plan desconocido: "{plan}". Use uno de: {", ".join(PLANES)}.'
+            )
+        valores['plan'] = plan
+    if fecha_vencimiento is not None:
+        if str(fecha_vencimiento).strip():
+            # Se valida el formato antes de guardar: una fecha mal escrita
+            # hace que el cliente nunca aparezca como vencido.
+            if _parsear_fecha(fecha_vencimiento) is None:
+                raise ErrorPadron(
+                    f'Fecha de vencimiento inválida: "{fecha_vencimiento}". '
+                    'Use el formato AAAA-MM-DD.'
+                )
+            valores['fecha_vencimiento'] = str(fecha_vencimiento).strip()[:10]
+        else:
+            valores['fecha_vencimiento'] = ''
+    if dias_prorroga is not None:
+        try:
+            dias = int(dias_prorroga)
+        except (TypeError, ValueError):
+            raise ErrorPadron('Los días de prórroga deben ser un número.')
+        if dias < 0:
+            raise ErrorPadron('Los días de prórroga no pueden ser negativos.')
+        valores['dias_prorroga'] = dias
+
+    if not valores:
+        raise ErrorPadron('No se recibió ningún dato de pago para guardar.')
+
+    asignaciones = ', '.join(f'{c} = ?' for c in valores)
+    cursor.execute(
+        f'UPDATE ferreterias SET {asignaciones}, actualizado_en = ? WHERE id = ?',
+        list(valores.values()) + [_ahora(), id_ferreteria],
+    )
+    _registrar_historial(
+        cursor, id_ferreteria, 'pago',
+        ', '.join(f'{k}={v}' for k, v in valores.items()),
+    )
+    conn.commit()
+
+    if aplicar_estado:
+        revisar_vencimientos(conn, aplicar=True)
+
+    return obtener_pago(conn, id_ferreteria)
+
+
+def obtener_pago(conn, id_ferreteria):
+    """Solo los datos de pago de una ferretería, sin tocar el disco."""
+    fila = conn.execute(
+        'SELECT id, nombre, estado, plan, fecha_vencimiento, dias_prorroga, '
+        'desde_prorroga FROM ferreterias WHERE id = ?', (id_ferreteria,)
+    ).fetchone()
+    if fila is None:
+        raise ErrorPadron(f'No existe una ferretería con el id {id_ferreteria}.')
+
+    registro = {
+        'id': fila[0], 'nombre': fila[1], 'estado': fila[2],
+        'plan': fila[3] or 'mensual', 'fecha_vencimiento': fila[4] or '',
+        'dias_prorroga': fila[5] if fila[5] is not None else DIAS_PRORROGA_DEFECTO,
+        'desde_prorroga': fila[6] or '',
+    }
+    registro['dias_para_vencer'] = dias_para_vencer(registro['fecha_vencimiento'])
+    registro['suspension_automatica'] = estado_por_fecha(
+        registro['fecha_vencimiento'], registro['dias_prorroga'],
+        registro['estado'],
+    )
+    return registro
+
+
+def _marcar_pago(registro):
+    """Agrega al registro los datos de pago ya calculados.
+
+    Se separa del `SELECT` porque los cálculos (días restantes, estado que
+    tocaría) no son una consulta: son lógica. Mezclarlos haría que el listado
+    devuelva lo que la base tiene y lo que el calendario dice, sin que se
+    pueda distinguir uno de lo otro.
+    """
+    registro = dict(registro)
+    dias = dias_para_vencer(registro.get('fecha_vencimiento'))
+    registro['dias_para_vencer'] = dias
+    registro['plan'] = registro.get('plan') or 'mensual'
+    try:
+        registro['dias_prorroga'] = int(
+            registro.get('dias_prorroga') or DIAS_PRORROGA_DEFECTO)
+    except (TypeError, ValueError):
+        registro['dias_prorroga'] = DIAS_PRORROGA_DEFECTO
+
+    # Cuánto le queda de prórroga, si ya venció.
+    if dias is not None and dias < 0:
+        registro['dias_restantes_prorroga'] = (
+            registro['dias_prorroga'] - (-dias))
+    else:
+        registro['dias_restantes_prorroga'] = None
+
+    registro['suspension_automatica'] = estado_por_fecha(
+        registro.get('fecha_vencimiento'),
+        registro['dias_prorroga'],
+        registro.get('estado', 'activo'),
+    )
+    # `puede_operar` tiene en cuenta lo que DICHA la base, no lo que la fecha
+    # sugiere: el panel muestra la diferencia, y el cambio real solo ocurre
+    # cuando el desarrollador lo acepta o se ejecuta `revisar_vencimientos`.
+    registro['puede_operar'] = (
+        registro.get('estado') in ESTADOS_OPERATIVOS
+        and registro.get('archivo_existe')
+    )
+    return registro
 
 
 def obtener(conn, id_ferreteria, directorio):
@@ -169,10 +516,7 @@ def obtener(conn, id_ferreteria, directorio):
     ruta = os.path.join(directorio, registro['archivo'])
     registro['ruta'] = ruta
     registro['archivo_existe'] = os.path.exists(ruta)
-    registro['puede_operar'] = (
-        registro['estado'] in ESTADOS_OPERATIVOS and registro['archivo_existe']
-    )
-    return registro
+    return _marcar_pago(registro)
 
 
 def listar(conn, directorio, estado=None):
@@ -201,14 +545,20 @@ def listar(conn, directorio, estado=None):
         ruta = os.path.join(directorio, registro['archivo'])
         registro['ruta'] = ruta
         registro['archivo_existe'] = os.path.exists(ruta)
-        registro['puede_operar'] = (
-            registro['estado'] in ESTADOS_OPERATIVOS
-            and registro['archivo_existe']
-        )
-        registros.append(registro)
+        registros.append(_marcar_pago(registro))
 
-    # Los que no pueden operar, primero.
-    registros.sort(key=lambda r: (r['puede_operar'], r['nombre'] or ''))
+    # Primero lo que requiere atención: los que no pueden operar y los que
+    # están por vencerse. Un listado donde todo parece bien esconde lo que hay
+    # que hacer hoy.
+    def _prioridad(r):
+        if not r['puede_operar']:
+            return (0, '')
+        dias = r['dias_para_vencer']
+        if dias is not None and dias <= 7:
+            return (1, f'{r["nombre"]}')
+        return (2, r['nombre'] or '')
+
+    registros.sort(key=_prioridad)
     return registros
 
 
@@ -385,6 +735,7 @@ def resumen(conn, directorio):
         r['archivo'] for r in listar(conn, directorio)
         if not r['archivo_existe']
     ]
+    pendientes = suspendidos_pendientes(conn)
 
     return {
         'total': total,
@@ -392,7 +743,11 @@ def resumen(conn, directorio):
         'operativos': sum(1 for r in listar(conn, directorio) if r['puede_operar']),
         'huerfanos': huerfanos,
         'sin_archivo': sin_archivo,
+        # Clientes cuyo estado no coincide con su fecha. NO se corrigen solos:
+        # se listan y el desarrollador decide.
+        'vencimientos_pendientes': pendientes,
         # Si esto no está vacío hay que revisarlo a mano: son clientes activos
-        # que no pueden entrar porque su archivo no está.
-        'requiere_atencion': len(sin_archivo) + len(huerfanos),
+        # que no pueden entrar porque su archivo no está, o que deberían estar
+        # suspendidos y siguen operando.
+        'requiere_atencion': len(sin_archivo) + len(huerfanos) + len(pendientes),
     }

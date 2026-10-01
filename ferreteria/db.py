@@ -757,13 +757,10 @@ def _crear_tablas_provisionamiento(cursor):
             id INTEGER PRIMARY KEY AUTOINCREMENT,
             nombre TEXT NOT NULL,
             nit TEXT DEFAULT '',
-            -- Nombre del archivo .db de la instancia. Es la llave que conecta el
-            -- registro con el archivo real en disco.
             archivo TEXT NOT NULL,
-            -- Usuario dueño de ESA instancia (no el de este panel).
             usuario_dueno TEXT NOT NULL,
             estado TEXT NOT NULL DEFAULT 'activo'
-                CHECK (estado IN ('activo', 'suspendido', 'cancelado')),
+                CHECK (estado IN ('activo', 'prorrogado', 'suspendido', 'cancelado')),
             -- Datos de contacto, para saber a quién escribirle.
             telefono TEXT DEFAULT '',
             email TEXT DEFAULT '',
@@ -773,9 +770,17 @@ def _crear_tablas_provisionamiento(cursor):
             -- Nota interna del desarrollador (pagos, pendientes, contrato).
             notas TEXT DEFAULT '',
             creado_en TEXT NOT NULL,
-            actualizado_en TEXT NOT NULL
+            actualizado_en TEXT NOT NULL,
+            -- ── Datos de pago ──
+            plan TEXT NOT NULL DEFAULT 'mensual'
+                CHECK (plan IN ('mensual', 'anual')),
+            fecha_vencimiento TEXT,
+            dias_prorroga INTEGER NOT NULL DEFAULT 15,
+            -- Fecha en que entró a prórroga. NULL si no está en prórroga.
+            desde_prorroga TEXT
         )
     ''')
+    _migrar_pagos_ferreterias(cursor)
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS historial_provisionamiento (
             id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -795,6 +800,108 @@ def _crear_tablas_provisionamiento(cursor):
         "CREATE INDEX IF NOT EXISTS idx_historial_ferreteria "
         "ON historial_provisionamiento (id_ferreteria, fecha)"
     )
+
+
+def _migrar_pagos_ferreterias(cursor):
+    """Agrega plan, vencimiento y prórroga al padrón de ferreterías.
+
+    POR QUÉ RECONSTRUYE LA TABLA Y NO SOLO AGREGA COLUMNAS
+    ---------------------------------------------------
+    El estado 'prorrogado' necesita entrar en la restricción CHECK del `estado`.
+    En SQLite esa restricción NO se puede alterar: no hay `ALTER TABLE ... DROP
+    CONSTRAINT`. La única forma es crear una tabla nueva con el esquema
+    correcto, copiar los datos y cambiar el nombre.
+
+    Por eso esto comprueba primero si la restricción ya incluye 'prorrogado' y,
+    si no, rehace la tabla. Es idempotente: se puede ejecutar en cada arranque.
+
+    Los datos se copian con un `INSERT ... SELECT` explícito, columna por
+    columna. Un `SELECT *` dependería del orden de las columnas, que es
+    exactamente lo que cambia al reconstruir.
+    """
+    existe = cursor.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'ferreterias'"
+    ).fetchone()
+    if not existe:
+        return
+
+    sql = existe[0] or ''
+    # Si la tabla ya está completa, no hay nada que hacer. Se comprueban las
+    # COLUMNAS DE PAGO, no solo la palabra 'prorrogado': una base creada por una
+    # versión intermedia podía tener el CHECK nuevo pero no las columnas, y
+    # saltarse la migración ahí dejaría el padrón sin datos de vencimiento.
+    columnas = {r[1] for r in cursor.execute('PRAGMA table_info(ferreterias)')}
+    if 'fecha_vencimiento' in columnas:
+        return
+
+    total = cursor.execute('SELECT COUNT(*) FROM ferreterias').fetchone()[0]
+
+    # Si la tabla vieja NO tenía la restricción de cuatro estados (porque el
+    # CHECK con 'prorrogado' no se puede alterar), hay que reconstruirla. Pero
+    # si solo le faltan columnas, `ALTER TABLE ADD COLUMN` es suficiente y más
+    # seguro: no se tocan los datos ni los índices.
+    if 'prorrogado' in (existe[0] or ''):
+        for columna, definicion in (
+            ('plan', "TEXT NOT NULL DEFAULT 'mensual'"),
+            ('fecha_vencimiento', 'TEXT'),
+            ('dias_prorroga', 'INTEGER NOT NULL DEFAULT 15'),
+            ('desde_prorroga', 'TEXT'),
+        ):
+            cursor.execute(
+                f'ALTER TABLE ferreterias ADD COLUMN {columna} {definicion}'
+            )
+        print(f'[db] ferreterias migrada con plan y vencimiento '
+              f'({total} cliente(s))')
+        return
+
+    # `ferreterias_vieja` es un nombre temporal. Se usa `_nueva` y no el nombre
+    # final para que, si algo falla a mitad, la tabla buena siga existiendo.
+    cursor.execute('ALTER TABLE ferreterias RENAME TO ferreterias_por_migrar')
+    cursor.execute('''
+        CREATE TABLE ferreterias (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            nombre TEXT NOT NULL,
+            nit TEXT DEFAULT '',
+            archivo TEXT NOT NULL,
+            usuario_dueno TEXT NOT NULL,
+            estado TEXT NOT NULL DEFAULT 'activo'
+                CHECK (estado IN ('activo', 'prorrogado', 'suspendido', 'cancelado')),
+            telefono TEXT DEFAULT '',
+            email TEXT DEFAULT '',
+            direccion TEXT DEFAULT '',
+            dias_suspendida INTEGER DEFAULT 0,
+            notas TEXT DEFAULT '',
+            creado_en TEXT NOT NULL,
+            actualizado_en TEXT NOT NULL,
+            -- ══ Datos de pago ══
+            plan TEXT NOT NULL DEFAULT 'mensual'
+                CHECK (plan IN ('mensual', 'anual')),
+            fecha_vencimiento TEXT,
+            dias_prorroga INTEGER NOT NULL DEFAULT 15,
+            -- Fecha en que entró a prórroga. NULL si no está en prórroga.
+            desde_prorroga TEXT
+        )
+    ''')
+
+    # Se copian los datos de la tabla vieja. Las columnas nuevas (plan,
+    # vencimiento, prórroga) quedan con sus valores por defecto: un cliente que
+    # ya existía no debe aparecer vencido de la noche a la mañana.
+    columnas_viejas = {
+        r[1] for r in cursor.execute('PRAGMA table_info(ferreterias_por_migrar)')
+    }
+    deseada = [
+        'id', 'nombre', 'nit', 'archivo', 'usuario_dueno', 'estado',
+        'telefono', 'email', 'direccion', 'dias_suspendida', 'notas',
+        'creado_en', 'actualizado_en',
+    ]
+    disponibles = [c for c in deseada if c in columnas_viejas]
+    cursor.execute(
+        f'INSERT INTO ferreterias ({", ".join(disponibles)}) '
+        f'SELECT {", ".join(disponibles)} FROM ferreterias_por_migrar'
+    )
+
+    cursor.execute('DROP TABLE ferreterias_por_migrar')
+    print(f'[db] ferreterias migrada con plan y vencimiento ({total} cliente(s))')
 
 
 def _sembrar_datos_por_defecto(cursor):
