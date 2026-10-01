@@ -12,7 +12,7 @@
     "test:parcial": "node _qa_entrega_parcial_runner.mjs",
     "test:reset": "node -e \"require('child_process').execFileSync('.venv/Scripts/python.exe', ['_reset_venta_prueba.py'], { stdio: 'inherit' })\"",
     "test:full": "node run-tests.mjs",
-    "test:python": ".venv/Scripts/python.exe -m pytest tests -q || .venv/Scripts/python.exe tests/test_deteccion_puerto.py"
+    "test:python": ".venv/Scripts/python.exe -m pytest tests -q --durations=10 || .venv/Scripts/python.exe tests/test_deteccion_puerto.py"
   },
   "repository": {
     "type": "git",

@@ -40,11 +40,18 @@ async function servidorResponde() {
 // Distingue NUESTRA app de cualquier otra que ocupe el puerto: el login de la
 // ferreteria trae este titulo. Evita un falso "ya esta corriendo" que haria
 // pasar la prueba contra una app ajena.
+//
+// El patron se cambio con el rebranding a FerreControl: antes buscaba
+// "Sistema Ferreteria" y el login ahora dice "Iniciar Sesion | FerreControl".
+// Si el patron no se actualiza en el mismo commit que el titulo, esta funcion
+// devuelve false siempre y `npm run test` cree que hay otra app en el puerto.
+// `tests/test_deteccion_puerto.py` fija este mismo contrato: si uno se cambia
+// sin el otro, esa prueba falla.
 async function esNuestraApp() {
   try {
     const res = await fetch(URL_LOGIN, { signal: AbortSignal.timeout(3000) });
     const html = await res.text();
-    return /Sistema Ferreter/i.test(html);
+    return /FerreControl/i.test(html);
   } catch {
     return false;
   }

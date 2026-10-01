@@ -27,7 +27,11 @@ import threading
 RAIZ = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # --- El mismo patron que usa run-tests.mjs ---------------------------------
-PATRON_TITULO = re.compile(r"Sistema Ferreter", re.IGNORECASE)
+# El login dice "Iniciar Sesion | FerreControl". Antes era "... - Sistema
+# Ferretería" y el rebrand lo cambio: si el patron no se actualiza junto, la
+# deteccion de puerto queda ciega y `npm run test` cree que hay otra app en el
+# puerto cuando en realidad es esta.
+PATRON_TITULO = re.compile(r"FerreControl", re.IGNORECASE)
 
 
 def es_nuestra_app(url):
@@ -116,7 +120,7 @@ def main():
         comprobar("impostor ajeno (200) -> es nuestra app?", es_nuestra_app(url), False)
 
         servidor.respuesta_actual = (
-            "<html><head><title>Iniciar Sesión - Sistema Ferretería</title></head></html>"
+            "<html><head><title>Iniciar Sesión | FerreControl</title></head></html>"
         )
         comprobar("login real -> es nuestra app?", es_nuestra_app(url), True)
     finally:
