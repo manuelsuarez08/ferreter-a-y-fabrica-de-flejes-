@@ -35,6 +35,7 @@ from .dian_pos import (
     NOMBRE_CONSUMIDOR_FINAL,
     NOMBRES_IMPUESTO,
     PAIS_POR_DEFECTO,
+    UNIDAD_BASE_IMPUESTO,
     TIPO_IMPUESTO_INC,
     TIPO_IMPUESTO_IVA,
     UNIDAD_POR_DEFECTO,
@@ -575,10 +576,20 @@ def _construir_adquirente(adquirente):
     """
     numero = _solo_digitos(adquirente.get('numero_documento'))
     if not numero:
+        # El consumidor final del anexo NO lleva NIT: su identificacion es de
+        # tipo 13, con el numero generico 222222222222.
+        #
+        # Antes se declaraba `'tipo_documento': 'NIT'`, que `tipo_documento_
+        # identidad()` traducía a '31' (código de NIT). El documento salía con
+        # un NIT de 12 dígitos que en realidad no es un NIT. Va '13'.
+        #
+        # Sin `cbc:CheckDigit`: el anexo dice que el consumidor final NO lleva
+        # dígito de verificación. `DV_CONSUMIDOR_FINAL` queda declarado para
+        # referencia, pero no se emite: un DV en este nodo es un rechazo.
         adquirente = {
-            'tipo_documento': 'NIT',
+            'tipo_documento': '13',
             'numero_documento': NIT_CONSUMIDOR_FINAL,
-            'digito_verificacion': DV_CONSUMIDOR_FINAL,
+            'digito_verificacion': '',
             'nombre': NOMBRE_CONSUMIDOR_FINAL,
             'direccion': '',
             'municipio': MUNICIPIO_POR_DEFECTO,
@@ -606,12 +617,19 @@ def _construir_adquirente(adquirente):
     #
     # `AdditionalAccountID` es OBLIGATORIO y dice si el adquirente es persona
     # jurídica (1) o natural (2). Sin él el documento se rechaza.
+    #
+    # `cbc:CheckDigit` es el dígito de verificación, y va SEPARADO del número.
+    # El consumidor final NO lo lleva: un NIT de 12 dígitos con DV es un
+    # documento mal formado, y por eso no se emite.
     tipo = _codigo_tipo_documento(adquirente.get('tipo_documento'))
     entidad = _cac('PartyLegalEntity')
     entidad.append(_cbc('RegistrationName',
                         str(adquirente.get('nombre') or NOMBRE_CONSUMIDOR_FINAL)))
     entidad.append(_cbc('ID', numero, schemeID=tipo, schemeName=tipo,
                         schemeAgencyID='195'))
+    dv = str(adquirente.get('digito_verificacion') or '').strip()
+    if dv and numero != NIT_CONSUMIDOR_FINAL:
+        entidad.append(_cbc('CheckDigit', dv))
     entidad.append(_cbc('AdditionalAccountID', _codigo_naturaleza(adquirente)))
     party.append(entidad)
 
@@ -643,32 +661,82 @@ def _codigo_naturaleza(adquirente):
 def _construir_direccion(datos):
     """Crea `<cac:PhysicalLocation>` con la dirección del tercero.
 
-    La DIAN valida municipio y departamento contra el catálogo DANE; si el POS
-    no los tiene configurados se usa el municipio por defecto en lugar de dejar
-    el nodo vacío (que produce rechazo por esquema).
+    En UBL 2.1 el CÓDIGO y el NOMBRE van en nodos distintos:
+
+        cbc:LocationID             código DANE del municipio
+        cbc:CityName               NOMBRE del municipio
+        cbc:CountrySubentityCode   código DANE del departamento
+        cbc:CountrySubentity       NOMBRE del departamento
+
+    Poner el código en el nodo del nombre deja "11001" donde debería decir
+    "Bogotá D.C.". La DIAN valida ambos contra el catálogo DANE.
+
+    El nombre se busca en el dato del POS (`ciudad`, `nombre_departamento`). Si
+    no está, se resuelve desde el catálogo de municipios de la DIAN; y si
+    tampoco, se deja vacío en vez de inventar: un nombre equivocado es peor que
+    un nombre ausente, porque parece configurado.
     """
     ubicacion = _cac('PhysicalLocation')
     direccion = _cac('Address')
-    direccion.append(_cbc('StreetName', str(datos.get('direccion') or 'Sin dirección')))
-    # `CityName` es el NOMBRE del municipio y el código DANE va en
-    # `cbc:LocationID`. Antes se metía el código en CityName, que es un nombre.
-    direccion.append(_cbc('LocationID', str(datos.get('municipio') or MUNICIPIO_POR_DEFECTO),
+    calle = str(datos.get('direccion') or '').strip()
+    if calle:
+        direccion.append(_cbc('StreetName', calle))
+
+    codigo_municipio = str(datos.get('municipio')
+                           or MUNICIPIO_POR_DEFECTO).strip()
+    direccion.append(_cbc('LocationID', codigo_municipio,
                           schemeID='195', schemeName='munidisco'))
-    direccion.append(_cbc('CityName', str(datos.get('ciudad') or datos.get('municipio') or MUNICIPIO_POR_DEFECTO)))
-    # `CountrySubentity` es el NOMBRE del departamento y `CountrySubentityCode`
-    # su código DANE de 2 dígitos. Antes se ponía el código en el nombre, y el
-    # código no existía.
-    direccion.append(_cbc('CountrySubentityCode',
-                          str(datos.get('departamento') or DEPARTAMENTO_POR_DEFECTO),
+
+    nombre_municipio = str(datos.get('ciudad') or '').strip() or \
+        _nombre_municipio(codigo_municipio)
+    if nombre_municipio:
+        direccion.append(_cbc('CityName', nombre_municipio))
+
+    codigo_departamento = str(datos.get('departamento')
+                             or DEPARTAMENTO_POR_DEFECTO).strip()
+    direccion.append(_cbc('CountrySubentityCode', codigo_departamento,
                           listAgencyID='195', listID='05'))
-    direccion.append(_cbc('CountrySubentity',
-                          str(datos.get('nombre_departamento') or datos.get('departamento') or DEPARTAMENTO_POR_DEFECTO)))
+
+    nombre_departamento = str(datos.get('nombre_departamento') or '').strip() or \
+        _nombre_departamento(codigo_departamento)
+    if nombre_departamento:
+        direccion.append(_cbc('CountrySubentity', nombre_departamento))
+
     pais = _cac('Country')
     pais.append(_cbc('IdentificationCode',
                      str(datos.get('pais') or PAIS_POR_DEFECTO)))
     direccion.append(pais)
     ubicacion.append(direccion)
     return ubicacion
+
+
+# Departamento por código DANE. Cubierto lo suficiente para las sedes de una
+# ferretería; si el código no está, el nombre queda vacío y se ve en el
+# documento como campo ausente, que es honesto.
+DEPARTAMENTOS_DANE = {
+    '05': 'Antioquia', '08': 'Atlántico', '11': 'Bogotá D.C.',
+    '13': 'Bolívar', '20': 'Boyacá', '25': 'Cundinamarca',
+    '41': 'Huila', '47': 'Magdalena', '52': 'Nariño',
+    '63': 'Quindío', '66': 'Risaralda', '68': 'Santander',
+    '73': 'Tolima', '76': 'Valle del Cauca',
+}
+
+# Municipio por código DANE, solo para las capitales que se usan en la práctica.
+MUNICIPIOS_DANE = {
+    '05001': 'Medellín', '08001': 'Barranquilla', '11001': 'Bogotá D.C.',
+    '13001': 'Cartagena', '20001': 'Valledupar', '23001': 'Montería',
+    '41001': 'Neiva', '47001': 'Santa Marta', '52001': 'Pasto',
+    '63001': 'Armenia', '66001': 'Pereira', '68001': 'Bucaramanga',
+    '73001': 'Ibagué', '76001': 'Cali', '76088': 'Buenaventura',
+}
+
+
+def _nombre_departamento(codigo):
+    return DEPARTAMENTOS_DANE.get(str(codigo or '').strip(), '')
+
+
+def _nombre_municipio(codigo):
+    return MUNICIPIOS_DANE.get(str(codigo or '').strip(), '')
 
 
 def _construir_responsabilidades(datos):
@@ -708,28 +776,68 @@ def _construir_impuestos_totales(totales):
     total_impuestos = iva + inc
     nodo.append(_cbc('TaxAmount', _monto(total_impuestos), currencyID='COP'))
 
-    # Resumen de IVA: un subtotal por cada tarifa aplicada.
-    for grupo in (totales.get('impuestos_iva') or []):
-        categoria, motivo = _categoria_y_motivo(grupo['tasa'])
-        nodo.append(_subtotal_impuesto(
-            TIPO_IMPUESTO_IVA, NOMBRES_IMPUESTO[TIPO_IMPUESTO_IVA],
-            grupo['base'], grupo['valor'], grupo['tasa'],
-            categoria=categoria, motivo=motivo,
-        ))
+    categorias = _categorias_de(totales)
 
-    # Resumen de INC (bolsas): también uno por tarifa.
-    for grupo in (totales.get('impuestos_inc') or []):
-        categoria, motivo = _categoria_y_motivo(grupo['tasa'])
-        nodo.append(_subtotal_impuesto(
-            TIPO_IMPUESTO_INC, NOMBRES_IMPUESTO[TIPO_IMPUESTO_INC],
-            grupo['base'], grupo['valor'], grupo['tasa'],
-            categoria=categoria, motivo=motivo,
-        ))
+    # Un `cac:TaxSubtotal` POR tributo y por tarifa. El codigo anterior metia
+    # todos los impuestos (IVA + INC) en un unico `cac:TaxSubtotal` con un solo
+    # `cbc:Percent`: la DIAN no podia saber a cual de los dos correspondia ese
+    # porcentaje. El `cac:TaxAmount` de arriba sigue siendo la SUMA de todos, que
+    # es lo que exige el anexo; el detalle va en los subtotales.
+    for subtotal in categorias:
+        nodo.append(subtotal)
     return nodo
 
 
+def _categorias_de(totales):
+    """Un `cac:TaxSubtotal` por tributo y por tarifa.
+
+    Hay tributos AD-VALOREM (se calculan con `cbc:Percent`) y ESPECÍFICOS (se
+    calculan con `cbc:PerUnitAmount` x unidad). La diferencia está en qué dato
+    viaja, no en el nombre.
+
+    `especificos` entra con la forma:
+
+        [{'tipo': '33', 'base': ..., 'valor': ..., 'valor_unitario': ...,
+          'unidad': 'LTR'}]
+    """
+    subtotales = []
+
+    for grupo in (totales.get('impuestos_iva') or []):
+        subtotales.append(_subtotal_impuesto(
+            TIPO_IMPUESTO_IVA, NOMBRES_IMPUESTO[TIPO_IMPUESTO_IVA],
+            grupo['base'], grupo['valor'], grupo['tasa'],
+            categoria=CATEGORIA_TASA_ESTANDAR,
+        ))
+
+    for grupo in (totales.get('impuestos_inc') or []):
+        subtotales.append(_subtotal_impuesto(
+            TIPO_IMPUESTO_INC, NOMBRES_IMPUESTO[TIPO_IMPUESTO_INC],
+            grupo['base'], grupo['valor'], grupo['tasa'],
+            categoria=CATEGORIA_TASA_ESTANDAR,
+        ))
+
+    # Tributos específicos (Ley 2277 de 2022 en adelante).
+    for grupo in (totales.get('impuestos_especificos') or []):
+        tipo = str(grupo.get('tipo') or '').strip()
+        if tipo not in NOMBRES_IMPUESTO:
+            # Un código que no está en el catálogo no se emite: mandarlo
+            # produce un `TaxScheme` con un ID inventado.
+            continue
+        subtotales.append(_subtotal_impuesto(
+            tipo, NOMBRES_IMPUESTO[tipo],
+            grupo.get('base', 0), grupo.get('valor', 0),
+            grupo.get('tasa', 0),
+            categoria=CATEGORIA_TASA_ESTANDAR,
+            valor_unitario=grupo.get('valor_unitario'),
+            unidad_base=(grupo.get('unidad')
+                         or UNIDAD_BASE_IMPUESTO.get(tipo, '')),
+        ))
+
+    return subtotales
+
+
 def _subtotal_impuesto(tipo, nombre, base, valor, tarifa, categoria=None,
-                       motivo=None):
+                       motivo=None, valor_unitario=None, unidad_base=None):
     """Crea un `<cac:TaxSubtotal>` (base gravable, valor y tarifa).
 
     UBL 2.1 define el orden de los hijos como una secuencia:
@@ -760,7 +868,25 @@ def _subtotal_impuesto(tipo, nombre, base, valor, tarifa, categoria=None,
     # ID va PRIMERO: es la categoria del tributo.
     if categoria:
         nodo_categoria.append(_cbc('ID', categoria))
-    nodo_categoria.append(_cbc('Percent', _monto(tarifa)))
+
+    # AD-VALOREM frente a ESPECIFICO. La diferencia no es de nombre sino de
+    # ESTRUCTURA, y es la que decide el dato que va:
+    #
+    #   ad-valorem  (IVA, ICA, ICUI): impuesto = % de la base -> cbc:Percent
+    #   especifico  (INPP, IBUA, ICL, ADV): impuesto = valor nominal por unidad
+    #                                   de medida -> cbc:PerUnitAmount
+    #
+    # Poner un porcentaje en un tributo especifico haria que la DIAN calculara un
+    # impuesto distinto al que realmente se pago. Por eso Percent solo se emite
+    # en los ad-valorem, y PerUnitAmount solo en los especificos.
+    if valor_unitario is not None:
+        # UBL ordena: BaseUnitMeasure ANTES de PerUnitAmount.
+        if unidad_base:
+            nodo_categoria.append(_cbc('BaseUnitMeasure', str(unidad_base)))
+        nodo_categoria.append(_cbc('PerUnitAmount', _monto(valor_unitario),
+                                   currencyID='COP'))
+    else:
+        nodo_categoria.append(_cbc('Percent', _monto(tarifa)))
 
     esquema = _cac('TaxScheme')
     esquema.append(_cbc('ID', tipo, schemeID='195', schemeName='01'))

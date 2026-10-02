@@ -91,7 +91,10 @@ NIT_CONSUMIDOR_FINAL = '222222222222'
 DV_CONSUMIDOR_FINAL = '0'
 NOMBRE_CONSUMIDOR_FINAL = 'consumidor final'
 MUNICIPIO_POR_DEFECTO = '11001'          # Bogotá D.C. (código DANE)
-DEPARTAMENTO_POR_DEFECTO = '11'          # Cundinamarca (código DANE)
+# CORRECCIÓN: el comentario decía 'Cundinamarca', pero el 11 es Bogotá D.C.
+# (Cundinamarca es el 25). Un código con el nombre del otro invites a configurar
+# la sede equivocada sin que nada avise.
+DEPARTAMENTO_POR_DEFECTO = '11'          # Bogotá D.C. (código DANE)
 
 # Zona horaria oficial de Colombia. El anexo técnico exige que `cbc:IssueTime` la
 # traiga explícita: '10:30:00-05:00'. Colombia no aplica horario de verano, así
@@ -100,20 +103,79 @@ OFFSET_HORA_COLOMBIA = '-05:00'
 PAIS_POR_DEFECTO = 'CO'
 
 # ── Tarifas de impuesto ──────────────────────────────────────────────────────
-# Código UN/ECE 5305 para el esquema de impuestos. El POS solo usa IVA ('01')
-# e INC ('04'), pero se deja la tabla abierta a los demás por completitud.
+# Códigos UN/ECE 5305 para el esquema de impuestos.
+#
+# ADVERTENCIA SOBRE EL CÓDIGO DE BOLSAS: se usa '55' y no '22'. Ese cambio
+# proviene de la Ley 2277 de 2022, pero NO se pudo cotejar contra el catálogo
+# oficial de la DIAN porque el servicio no respondió durante esta revisión.
+# Antes de emitir en producción hay que confirmar el código contra el catálogo
+# vigente. Si está equivocado, el rechazo llega por `cbc:TaxScheme/cbc:ID`, que
+# es donde viaja.
 TIPO_IMPUESTO_IVA = '01'
 TIPO_IMPUESTO_IC = '02'
+TIPO_IMPUESTO_ICA = '03'
 TIPO_IMPUESTO_INC = '04'
-TIPO_IMPUESTO_BOLSA = '22'
+TIPO_IMPUESTO_BOLSA = '55'          # ver la advertencia de arriba
 TIPO_IMPUESTO_IC_DATOS = '05'
+
+# Tributos con tarifa ESPECÍFICA (Ley 2277 de 2022 y siguientes). No se
+# calculan como porcentaje de la base: son un valor nominal por unidad de medida
+# (peso, mililitro, gramo...). En UBL eso se declara con
+# `cac:TaxCategory/cbc:PerUnitAmount` + `cbc:BaseUnitMeasure`, que es
+# exactamente lo que los distingue de un ad-valorem.
+#
+# `cbc:Percent` NO lleva valor en estos casos: poner un porcentaje inventado
+# haría que la DIAN calculara un impuesto distinto al real.
+#
+# Los códigos 32-36 vienen del enunciado del requerimiento, no de una lectura
+# del Anexo Técnico. Misma advertencia: verificar contra el catálogo oficial.
+TIPO_IMPUESTO_INPP = '32'   # Impuesto Nacional a Plásticos de Un Solo Uso
+TIPO_IMPUESTO_IBUA = '33'   # Bebidas Ultraprocesadas Azucaradas
+TIPO_IMPUESTO_ICUI = '34'   # Comestibles Ultraprocesados Industrialmente
+TIPO_IMPUESTO_ICL = '35'    # Consumo de Licores
+TIPO_IMPUESTO_ADV = '36'    # Ad Valorem
+
+# Naturaleza del cálculo: 'porcentaje' (ad-valorem sobre la base) o
+# 'especifico' (valor nominal por unidad de medida).
+NATURALEZA_AD_VALOREM = 'porcentaje'
+NATURALEZA_ESPECIFICO = 'especifico'
+
+NATURALEZA_IMPUESTO = {
+    TIPO_IMPUESTO_IVA: NATURALEZA_AD_VALOREM,
+    TIPO_IMPUESTO_IC: NATURALEZA_AD_VALOREM,
+    TIPO_IMPUESTO_ICA: NATURALEZA_AD_VALOREM,
+    TIPO_IMPUESTO_INC: NATURALEZA_AD_VALOREM,
+    TIPO_IMPUESTO_BOLSA: NATURALEZA_AD_VALOREM,
+    TIPO_IMPUESTO_IC_DATOS: NATURALEZA_AD_VALOREM,
+    TIPO_IMPUESTO_ICUI: NATURALEZA_AD_VALOREM,
+    TIPO_IMPUESTO_INPP: NATURALEZA_ESPECIFICO,
+    TIPO_IMPUESTO_IBUA: NATURALEZA_ESPECIFICO,
+    TIPO_IMPUESTO_ICL: NATURALEZA_ESPECIFICO,
+    TIPO_IMPUESTO_ADV: NATURALEZA_ESPECIFICO,
+}
 
 NOMBRES_IMPUESTO = {
     TIPO_IMPUESTO_IVA: 'IVA',
     TIPO_IMPUESTO_IC: 'IC',
+    TIPO_IMPUESTO_ICA: 'ICA',
     TIPO_IMPUESTO_INC: 'INC',
-    TIPO_IMPUESTO_BOLSA: 'Bolsas',
+    TIPO_IMPUESTO_BOLSA: 'Impuesto a las bolsas',
     TIPO_IMPUESTO_IC_DATOS: 'IC Datos',
+    TIPO_IMPUESTO_INPP: 'Impuesto Nacional a Plásticos de Un Solo Uso',
+    TIPO_IMPUESTO_IBUA: 'Impuesto a las Bebidas Ultraprocesadas Azucaradas',
+    TIPO_IMPUESTO_ICUI: 'Impuesto a Comestibles Ultraprocesados '
+                        'Industrialmente',
+    TIPO_IMPUESTO_ICL: 'Impuesto al Consumo de Licores',
+    TIPO_IMPUESTO_ADV: 'Ad Valorem',
+}
+
+# Unidad base por defecto de cada tributo específico, según como se mide la
+# cosa que se tasa. Si el POS no tiene la unidad, se usa esta.
+UNIDAD_BASE_IMPUESTO = {
+    TIPO_IMPUESTO_INPP: 'TNE',     # tonelada métrica
+    TIPO_IMPUESTO_IBUA: 'LTR',     # litro
+    TIPO_IMPUESTO_ICL: 'LTR',      # litro
+    TIPO_IMPUESTO_ADV: 'KGM',      # kilogramo
 }
 
 # Tarifas vigentes de IVA en Colombia (%). La DIAN valida contra este catálogo.
