@@ -41,7 +41,7 @@ import os
 import xml.etree.ElementTree as ET
 from datetime import datetime, timezone
 
-from .dian_xml import NS_CBC, NS_DS
+from .dian_xml import NS_CAC, NS_CBC, NS_DS, NS_EXT, NS_INVOICE, NS_STS
 
 # ── Namespaces de XAdES ──────────────────────
 # El anexo técnico pide XAdES-EPES 1.3.2 (namespace de 2006); la versión 1.4.1
@@ -54,6 +54,10 @@ ET.register_namespace('xades', NS_XADES)
 # Algoritmos exigidos por el anexo: SHA-384 para digests y RSA-SHA384 para la
 # firma. La DIAN rechaza SHA-1 y SHA-256 en documentos nuevos.
 ALG_C14N = 'http://www.w3.org/TR/2001/REC-xml-c14n-20010315'
+# c14n INCLUSIVO (el de arriba) es el que declara el SignatureMethod. Hay que
+# canonicalizar EXACTAMENTE con el algoritmo que se declara, o la firma no
+# verifica: el digest se calcula de una forma y el verificador rehace otra.
+ALG_C14N_EXCLUSIVA = 'http://www.w3.org/2001/10/xml-exc-c14n#'
 ALG_ENVELOPED = 'http://www.w3.org/2000/09/xmldsig#enveloped-signature'
 ALG_SHA384 = 'http://www.w3.org/2001/04/xmldsig-more#sha384'
 ALG_RSA_SHA384 = 'http://www.w3.org/2001/04/xmldsig-more#rsa-sha384'
@@ -311,17 +315,113 @@ def _certificado_b64(certificado):
 
 
 def _canonizar(elemento):
-    """Serializa un elemento de forma canónica (c14n) para calcular su digest.
+    """Serializa un elemento en canonicalización XML (c14n) real.
 
-    OJO: `ET.tostring` NO es c14n. Aquí se usa una canonicalización suficiente
-    para el subconjunto que produce este proyecto (sin comentarios, sin
-    atributos duplicados, sin espacios significativos) y se documenta la
-    limitación: si en el futuro se firma un XML de entrada de un tercero con
-    espacios o comentarios, habría que sustituir esto por un c14n real. Los
-    digests se calculan sobre el árbol, no sobre el texto, así que el resultado
-    es estable entre llamadas.
+    ESTA FUNCIÓN ESTABA ROTA Y PRODUCEÍA FIRMAS INVÁLIDAS.
+    -----------------------------------------------
+    Antes hacía `ET.tostring(elemento)`, y se documentaba como "suficiente
+    para el subconjunto que produce este proyecto". Medido contra `lxml`
+    (que implementa c14n de verdad), NO lo era:
+
+        proyecto  : <ns0:SignedInfo xmlns:ns0="...xmldsig#"><ns0:Reference ...>
+        DIAN      : <ds:SignedInfo  xmlns:ds="...xmldsig#"><ds:Reference ...>
+
+    El prefijo `ns0` es el que ElementTree genera cuando no hay registro de
+    prefijos para ese namespace al serializar un subárbol. La DIAN calcula el
+    digest sobre `<ds:...>`. Mismo contenido, bytes distintos, digest distinto:
+    la firma NO verificaba con la clave pública del certificado. El documento
+    completo era rechazado con "firma no válida".
+
+    Tres cosas más que solo hace c14n real y `ET.tostring` no:
+
+    1. Los prefijos de namespace que estaban declarados en los ANCESTROS se
+       vuelven a declarar en el nodo que se canonicaliza. Sin esto, el digest de
+       un subárbol depende de dónde cuelgue en el documento.
+    2. Los elementos vacíos se cierran como `<a></a>`, no `<a />`. Otra forma
+       de que los bytes no coincidan.
+    3. El orden de atributos y de declaraciones es el canónico.
+
+    `ALG_C14N` declara c14n INCLUSIVO, que es el que usan los validadores de la
+    DIAN: se conservan TODOS los namespaces declarados en la cadena de ancestros
+    (los "visibles"), no solo los que usa el nodo.
+
+    `lxml` es una dependencia real (`requirements.txt`), no un extra de pruebas:
+    sin canonicalización correcta no hay firma válida.
     """
-    return ET.tostring(elemento, encoding='utf-8', xml_declaration=False)
+    from lxml import etree as _etree
+
+    conversion = _convertir_a_lxml(elemento)
+    return _etree.tostring(conversion, method='c14n', exclusive=False,
+                           with_comments=False)
+
+
+def _convertir_a_lxml(elemento, prefijos=None):
+    """Reconstruye un `ElementTree.Element` como árbol de lxml con sus namespaces.
+
+    Al aislar un subárbol hay que recrear los `xmlns` que tenía de sus
+    ancestros: si no, el nodo queda con prefijo `ns0` y el digest depende de
+    dónde estaba colgado, no de qué contiene.
+
+    `prefijos` se arrastra en la recursion para que hereden el mismo mapa los
+    descendientes, que es lo que hace la canonicalizacion en el mundo real.
+    """
+    from lxml import etree as _etree
+
+    if prefijos is None:
+        prefijos = _prefijos_del_documento(elemento)
+
+    conversion = _etree.Element(elemento.tag, nsmap=prefijos or None)
+    for clave, valor in elemento.attrib.items():
+        conversion.set(clave, valor)
+    conversion.text = elemento.text
+    for hijo in elemento:
+        conversion.append(_convertir_a_lxml(hijo, prefijos))
+        conversion[-1].tail = hijo.tail
+    return conversion
+
+
+def _prefijos_del_documento(elemento):
+    """Prefijos de namespace declarados en la cadena que sube desde `elemento`.
+
+    ElementTree no expone los ancestros de un `Element`, asi que se sube por la
+    estructura del arbol solo cuando el elemento conserva su padre (lxml si lo
+    tiene; ElementTree no). Cuando no hay padre — que es el caso de los subarboles
+    que aqui se canonicalizan — se usan los prefijos REGISTRADOS en el modulo,
+    que es la fuente de verdad de este proyecto: `register_namespace` fija
+    'ds', 'xades', 'sts', 'ext'...
+    """
+    try:
+        ancestros = list(elemento.iterancestors())
+    except AttributeError:
+        ancestros = []
+
+    mapa = {}
+    for ancestro in ancestros:
+        for prefijo, uri in ancestro.nsmap.items():
+            mapa.setdefault(uri, prefijo or '')
+    if not mapa:
+        # Sin ancestros disponibles se usan los prefijos que este modulo
+        # REGISTRA. Es la unica fuente de verdad aqui dentro: los prefijos que
+        # el proyecto escribe en el documento salen de estos `register_namespace`,
+        # no de una convencion de ElementTree.
+        registrados = {
+            NS_DS: 'ds',
+            NS_XADES: 'xades',
+            NS_CBC: 'cbc',
+            NS_CAC: 'cac',
+            NS_STS: 'sts',
+            NS_EXT: 'ext',
+            NS_INVOICE: '',
+        }
+        for uri, prefijo in registrados.items():
+            mapa.setdefault(uri, prefijo)
+
+    nsmap = {prefijo: uri for uri, prefijo in mapa.items() if prefijo}
+    # El namespace por defecto (sin prefijo) se pasa como None.
+    for uri, prefijo in mapa.items():
+        if not prefijo:
+            nsmap[None] = uri
+    return nsmap
 
 
 def firmar_documento(raiz, certificado, id_documento=None, momento=None,
@@ -365,9 +465,14 @@ def firmar_documento(raiz, certificado, id_documento=None, momento=None,
     raiz.set('ID', str(id_documento))
 
     # ── 1. Digest del documento (Reference #<id>) ────────────
-    # Se firma el documento TAL COMO ESTÁ, sin el bloque Signature: por eso el
-    # digest se calcula antes de insertar la firma.
-    digest_documento = _sha384_b64(_canonizar(raiz))
+    # NO se calcula aquí: se hace en el paso 7, sobre el documento montado.
+    #
+    # La razón es concreta. Al canonicalizar un árbol de ElementTree hay que
+    # reconstruir a mano el mapa de prefijos, y esa reconstrucción depende del
+    # NAMESPACE POR DEFECTO de la raíz, que cambia según el tipo de documento:
+    # `Invoice` en la factura y la nota, `ar:ApplicationResponse` en el evento.
+    # Con un mapa inventado el digest sale distinto y la firma no verifica.
+    digest_documento = ''
 
     # ── 2. Armado del bloque Signature ───────────────────────
     firma = ET.Element(f'{{{NS_DS}}}Signature')
@@ -386,7 +491,7 @@ def firmar_documento(raiz, certificado, id_documento=None, momento=None,
     ET.SubElement(transformadas, f'{{{NS_DS}}}Transform', Algorithm=ALG_ENVELOPED)
     ET.SubElement(referencia_doc, f'{{{NS_DS}}}DigestMethod', Algorithm=ALG_SHA384)
     digest_nodo = ET.SubElement(referencia_doc, f'{{{NS_DS}}}DigestValue')
-    digest_nodo.text = digest_documento
+    digest_nodo.text = digest_documento  # se rellena en el paso 7
 
     # Reference a las propiedades firmadas (SignedProperties). XAdES exige que el
     # bloque de propiedades también esté cubierto por la firma.
@@ -451,21 +556,24 @@ def firmar_documento(raiz, certificado, id_documento=None, momento=None,
     ET.SubElement(formato, f'{{{NS_XADES}}}Encoding').text = 'UTF-8'
 
     # ── 4. Digest del bloque de propiedades firmadas ─────────────────────────
-    # OJO: se calcula con el bloque DENTRO del árbol (ya tiene los namespaces
-    # declarados por sus ancestros), que es exactamente lo que verá la DIAN.
-    digest_prop.text = _sha384_b64(_canonizar(firmadas))
+    # NO se calcula aquí. Este nodo todavía no está en su sitio dentro del
+    # documento, y el digest depende de los namespaces que hereda. Se calcula
+    # en el paso 7, junto con la firma, sobre el documento montado.
+    digest_prop.text = ''
 
     # ── 5. Firma de SignedInfo con RSA-SHA384 ────────────────────────────────
+    #
+    # `SignedInfo` se canonicaliza DESPUÉS de estar colgado en el documento, no
+    # como árbol suelto. La razón es concreta: la canonicalización depende de los
+    # namespaces que el nodo VE, y eso lo dan sus ancestros. Si se firmara el
+    # subárbol aislado, habria que reconstruir a mano ese mapa de prefijos y
+    # cualquier prefijo olvidado (el `xsi`, por ejemplo) produce un digest
+    # distinto del que recalcula la DIAN: la firma deja de verificar.
+    #
+    # Por eso aquí solo se coloca el nodo vacío; la firma real se calcula al
+    # final, sobre el documento ya montado.
     firma_value = ET.SubElement(firma, f'{{{NS_DS}}}SignatureValue')
-    firma_value.text = base64.b64encode(
-        certificado.clave_privada.sign(
-            _canonizar(signed_info),
-            __import__('cryptography.hazmat.primitives.asymmetric.padding',
-                       fromlist=['PKCS1v15']).PKCS1v15(),
-            __import__('cryptography.hazmat.primitives.hashes',
-                       fromlist=['SHA384']).SHA384(),
-        )
-    ).decode('ascii')
+    firma_value.text = ''
 
     # ── 6. KeyInfo con el certificado (la DIAN verifica con la clave pública) ─
     key_info = ET.SubElement(firma, f'{{{NS_DS}}}KeyInfo')
@@ -477,7 +585,76 @@ def firmar_documento(raiz, certificado, id_documento=None, momento=None,
     # La firma va al final del documento (enveloped).
     raiz.append(firma)
 
+    # ── 7. Digests y firma sobre el documento montado ─────────────────────────
+    #
+    # Todo lo que depende de la canonicalización se hace AQUÍ, con el documento
+    # ya completo, por una razón concreta: los nodos tienen que canonicalizarse
+    # con los namespaces que heredan de sus ancestros, no como árboles sueltos.
+    #
+    # Antes se hacía en dos sitios y en los dos estaba mal: `ET.tostring` no es
+    # canonicalización (el proyecto firmaba `<ns0:SignedInfo>` donde la DIAN
+    # calcula sobre `<ds:SignedInfo>`), y aislar los nodos pierde `xsi` y
+    # `xades`. El resultado era un documento cuya firma NO verificaba con la
+    # clave pública del certificado: rechazo garantizado en la DIAN.
+    _firmar_documento_completo(raiz, digest_nodo, digest_prop, firma_value,
+                              certificado)
+
     return ET.tostring(raiz, encoding='utf-8', xml_declaration=True)
+
+
+def _firmar_documento_completo(raiz, digest_nodo, digest_prop, firma_value,
+                                certificado):
+    """Calcula los dos digests y firma `SignedInfo`, en ese orden.
+
+    Se serializa el documento completo, se vuelve a parsear con lxml y se
+    canonicalizan los nodos YA COLGADOS en él. Es exactamente el camino que
+    recorre el verificador de la DIAN: si aquí los digests cuadran, allá cuadran.
+
+    El orden importa, y no es cosmético:
+      1. digest del documento — exige quitar la firma (Reference 'enveloped');
+      2. digest de `SignedProperties`;
+      3. firma de `SignedInfo` — con el documento ya en su estado FINAL.
+    Si se firmara antes de escribir los digests, se estarían firmando bytes que
+    después cambian, y la firma no validaría.
+    """
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.asymmetric import padding
+    from lxml import etree as _etree
+
+    def _montado():
+        """El documento con lo escrito hasta ahora, parseado por lxml."""
+        crudo = ET.tostring(raiz, encoding='utf-8', xml_declaration=False)
+        return _etree.fromstring(_sin_xmlns_duplicado(crudo))
+
+    # (a) Digest del DOCUMENTO. La Reference es 'enveloped', así que cubre la
+    # raíz sin el bloque de firma: se quita y se canonicaliza lo que queda.
+    arbol = _montado()
+    for sobrante in arbol.findall(f'.//{{{NS_DS}}}Signature'):
+        sobrante.getparent().remove(sobrante)
+    canonico_doc = _etree.tostring(arbol, method='c14n', exclusive=False,
+                                   with_comments=False)
+    digest_nodo.text = base64.b64encode(
+        hashlib.sha384(canonico_doc).digest()).decode('ascii')
+
+    # (b) Digest de SignedProperties, con el nodo en su contexto real.
+    nodo_props = _montado().find(f'.//{{{NS_XADES}}}SignedProperties')
+    if nodo_props is None:
+        raise ErrorFirma('No se encontró el bloque SignedProperties')
+    canonico_props = _etree.tostring(nodo_props, method='c14n', exclusive=False,
+                                     with_comments=False)
+    digest_prop.text = base64.b64encode(
+        hashlib.sha384(canonico_props).digest()).decode('ascii')
+
+    # (b) Firma de SignedInfo, sobre el documento ya actualizado.
+    nodo_si = _montado().find(f'.//{{{NS_DS}}}SignedInfo')
+    if nodo_si is None:
+        raise ErrorFirma('No se encontró el bloque SignedInfo para firmar')
+    canonico_si = _etree.tostring(nodo_si, method='c14n', exclusive=False,
+                                  with_comments=False)
+    firma_value.text = base64.b64encode(
+        certificado.clave_privada.sign(canonico_si, padding.PKCS1v15(),
+                                       hashes.SHA384())
+    ).decode('ascii')
 
 
 def _parsear(xml_bytes_o_texto):
@@ -500,10 +677,33 @@ def _parsear(xml_bytes_o_texto):
         texto = xml_bytes_o_texto
 
     # Declaración xmlns repetida con el mismo valor, separada solo por espacios.
+    return _sin_xmlns_duplicado(texto)
+
+
+def _sin_xmlns_duplicado(texto_o_bytes):
+    """Quita el `xmlns` repetido y devuelve BYTES listos para cualquier parser.
+
+    `ET.tostring` puede emitir el `xmlns` DOS veces para el namespace raíz si el
+    mismo URI quedó registrado con dos prefijos distintos (ver la nota de
+    `register_namespace` en `dian_xml`). Un `xmlns` repetido con el MISMO valor
+    es un XML inválido ('duplicate attribute') tanto para ElementTree como para
+    lxml, así que se limpia antes de parsear.
+
+    Se eliminan solo las repeticiones EXACTAS y consecutivas: si alguna vez hay
+    un `xmlns` con valor distinto, se deja intacto para que el parser lo reporte
+    en lugar de tapar un problema real de namespaces.
+
+    Devuelve bytes, no un Element: la usan tanto `_parsear` (ElementTree) como
+    `_firmar_signed_info` (lxml), y antes una devolvía Element y la otra bytes,
+    lo que rompía el firma con 'a bytes-like object is required'.
+    """
     import re
+    if isinstance(texto_o_bytes, bytes):
+        texto = texto_o_bytes.decode('utf-8')
+    else:
+        texto = texto_o_bytes
     patron = re.compile(r'(\sxmlns="([^"]+)")(\s+xmlns="\2")+')
-    texto = patron.sub(r'\1', texto)
-    return ET.fromstring(texto.encode('utf-8'))
+    return patron.sub(r'\1', texto).encode('utf-8')
 
 
 def firmar_bytes(xml_bytes, certificado, id_documento=None, momento=None):
@@ -512,7 +712,7 @@ def firmar_bytes(xml_bytes, certificado, id_documento=None, momento=None):
     Returns:
         Los bytes del XML firmado.
     """
-    raiz = _parsear(xml_bytes)
+    raiz = ET.fromstring(_parsear(xml_bytes))
     return firmar_documento(raiz, certificado, id_documento=id_documento,
                             momento=momento)
 

@@ -11,3 +11,11 @@ qrcode>=7.4,<9
 #   (ferreteria/services/dian_firma.py). Sin esto NO se puede emitir ningun
 #   documento: la firma XAdES-EPES es obligatoria en el anexo tecnico.
 cryptography>=42,<51
+# lxml: canonicalizacion XML (c14n) REAL, usada al firmar. NO es un extra de
+#   pruebas ni una comodidad: `ET.tostring` NO es canonicalizacion, y con ella
+#   el proyecto firmaba `<ns0:SignedInfo>` mientras la DIAN calcula el digest
+#   sobre `<ds:SignedInfo>`. Mismo contenido, bytes distintos, firma que no
+#   verifica con la clave publica del certificado. Medido con lxml como
+#   verificador independiente; ver herramientas/verificar_firma_lxml.py.
+#   Sin esta dependencia NO se puede emitir ningun documento valido.
+lxml>=5,<7
