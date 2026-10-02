@@ -276,7 +276,64 @@ def construir_invoice(documento, emisor, adquirente, items, totales, extras=None
     for indice, item in enumerate(items, start=1):
         invoice.append(_construir_linea(indice, item))
 
+    # El orden de los hijos lo DECIDE EL ESQUEMA, no el orden en que se fueron
+    # añadiendo. `Invoice` es una `xsd:sequence`: dos nodos con el contenido
+    # correcto pero en orden distinto producen un documento que no valida.
+    #
+    # Aqui se montaba `UBLExtensions` DESPUES de los totales, cuando el XSD lo
+    # quiere al principio, y `BillingReference` se anadia al final. Se reordena
+    # una vez, al final, contra la secuencia declarada abajo.
+    _normalizar_secuencia(invoice)
+
     return invoice
+
+
+# Orden real de los hijos de `Invoice` segun el XSD de UBL 2.1.
+# `xsd:sequence`: el orden NO es libre.
+SECUENCIA_INVOICE = (
+    'UBLExtensions',
+    'UBLVersionID', 'CustomizationID', 'ProfileID', 'ID', 'UUID',
+    'IssueDate', 'IssueTime', 'DueDate', 'InvoiceTypeCode', 'Note',
+    'TaxPointDate', 'DocumentCurrencyCode', 'TaxCurrencyCode',
+    'LineCountNumeric',
+    'AccountingCost', 'InvoicePeriod', 'OrderReference',
+    'BillingReference',
+    'DespatchAdvice', 'AccountingSupplierParty', 'AccountingCustomerParty',
+    'PaymentMeans',
+    'PaymentTerms', 'PrepaidPayment',
+    'AllowanceCharge', 'TaxExchangeRate', 'PricingExchangeRate',
+    'PaymentExchangeRate', 'PaymentAlternativeExchangeRate',
+    'TaxTotal', 'WithholdingTaxTotal', 'LegalMonetaryTotal',
+    'InvoiceLine',
+    'DiscrepancyResponse',
+)
+
+
+def _normalizar_secuencia(raiz):
+    """Reordena los hijos de `raiz` según el XSD, conservando el orden interno.
+
+    Los nodos desconocidos quedan donde están, al final: no se tiran, porque
+    perder contenido es peor que una posición dudosa.
+    """
+    orden = {nombre: posicion
+             for posicion, nombre in enumerate(SECUENCIA_INVOICE)}
+
+    hijos = list(raiz)
+
+    def clave(par):
+        indice, hijo = par
+        etiqueta = hijo.tag.split('}')[-1]
+        return (0, orden[etiqueta]) if etiqueta in orden else (1, indice)
+
+    ordenados = [hijo for _, hijo in sorted(enumerate(hijos), key=clave)]
+    if ordenados == hijos:
+        return False
+
+    for hijo in hijos:
+        raiz.remove(hijo)
+    for hijo in ordenados:
+        raiz.append(hijo)
+    return True
 
 
 def _scheme_name_uuid(documento):

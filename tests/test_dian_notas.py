@@ -88,15 +88,32 @@ def _nota():
 # ═════════════════════════════════════════════════════
 def test_la_nota_credito_referencia_el_cuide_original():
     """SIN la referencia al CUIDE del documento original, la DIAN no sabe a qué
-    documento corrige la nota. Este es el campo que la hace una corrección."""
+    documento corrige la nota. Este es el campo que la hace una corrección.
+
+    Va en `cac:BillingReference/cac:InvoiceDocumentReference`. Antes se usaba
+    `cac:AdditionalDocumentReference` como hijo DIRECTO de la raíz, que es donde
+    UBL 2.1 no lo coloca dentro de `Invoice`."""
     raiz = _nota()
-    ref = raiz.find(f'{{{NS_CAC}}}AdditionalDocumentReference')
-    assert ref is not None, 'falta cac:AdditionalDocumentReference'
+    ref = raiz.find(
+        f'{{{NS_CAC}}}BillingReference/{{{NS_CAC}}}InvoiceDocumentReference')
+    assert ref is not None, 'falta cac:BillingReference'
     identificador = ref.find(f'{{{NS_CBC}}}ID')
     assert identificador is not None
     assert identificador.text == 'a' * 96, 'la referencia no lleva el CUIDE original'
     fecha = ref.find(f'{{{NS_CBC}}}IssueDate')
     assert fecha is not None and fecha.text == '2026-09-28'
+
+
+def test_la_referencia_no_va_como_hijo_directo_de_la_raiz():
+    """UBL 2.1 coloca la referencia DENTRO de `BillingReference`.
+
+    `AdditionalDocumentReference` como hijo directo de `Invoice` no valida contra
+    el XSD: no es un hijo permitido ahí.
+    """
+    raiz = _nota()
+    assert raiz.find(f'{{{NS_CAC}}}AdditionalDocumentReference') is None, (
+        'la referencia no puede ir como hijo directo de la raíz')
+    assert raiz.find(f'{{{NS_CAC}}}BillingReference') is not None
 
 
 def test_la_nota_credito_declara_el_motivo():

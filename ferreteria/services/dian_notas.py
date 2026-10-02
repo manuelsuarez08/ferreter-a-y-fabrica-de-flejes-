@@ -206,14 +206,26 @@ def construir_nota_credito(documento, emisor, adquirente, items, totales,
             nodo.text = valor
 
     # ── Lo que hace que sea una CORRECCIÓN y no una venta negativa suelta ──────
-    # 1. La referencia al documento que corrige, con su CUIDE, número y fecha.
-    invoice.append(_construir_referencia_ajuste(documento))
+    #
+    # La referencia va en `cac:BillingReference/cac:InvoiceDocumentReference`, que
+    # es donde UBL 2.1 la ubica dentro de `Invoice`. Antes iba en
+    # `cac:AdditionalDocumentReference` como hijo DIRECTO de la raíz, que el XSD
+    # no permite ahí.
+    #
+    # El orden importa igual que en la firma: `Invoice` es una `xsd:sequence`, y
+    # `BillingReference` va entre `OrderReference` y `DespatchAdvice`. Si se
+    # añade al final del árbol, el documento no valida aunque el contenido sea
+    # correcto. Por eso se inserta por índice, no con `append`.
+    _insertar_en_secuencia(invoice, _construir_billing_reference(documento),
+                           'BillingReference')
 
-    # 2. El concepto de corrección del catálogo del anexo. Sin él la DIAN no sabe
-    #    POR QUÉ se corrigió: devuelve "concepto no válido".
-    #    InvoiceTypeCode ya es '01' (nota crédito) desde el generador común.
+    # El concepto de corrección. En UBL va en `cac:DiscrepancyResponse`, que es
+    # hijo de `cac:InvoiceResponse`, y ese a su vez en la posición que le toca
+    # dentro de la secuencia. Sin él la DIAN no sabe POR QUÉ se corrigió y
+    # devuelve "concepto no válido".
     if documento.get('motivo_codigo'):
-        invoice.append(_construir_discrepancia(documento))
+        _insertar_en_secuencia(invoice, _construir_discrepancia(documento),
+                               'DiscrepancyResponse')
 
     # 3. Los importes NO llevan `NegativeValue`.
     #
@@ -251,28 +263,123 @@ def _construir_discrepancia(documento):
     return grupo
 
 
-def _construir_referencia_ajuste(documento):
-    """`<cac:AdditionalDocumentReference>` que apunta al documento original.
+def _construir_billing_reference(documento):
+    """`<cac:BillingReference>` que apunta al documento que se corrige.
 
-    Lleva el CUIDE (que es como la DIAN identifica un documento equivalente),
-    el número, la fecha y el motivo de la corrección.
+    UBL 2.1 ubica la referencia a la factura dentro de
+    `cac:BillingReference/cac:InvoiceDocumentReference`, con el CUIDE, el número
+    y la fecha del documento original. Es lo que le dice a la DIAN a qué documento
+    se aplica la corrección: sin esto la nota sería una venta negativa suelta.
+
+    Antes se usaba `cac:AdditionalDocumentReference` como hijo directo de la raíz,
+    que es donde NO va.
     """
-    ref = _cac('AdditionalDocumentReference')
+    billing = ET.Element(f'{{{dian_xml.NS_CAC}}}BillingReference')
+    referencia = ET.SubElement(
+        billing, f'{{{dian_xml.NS_CAC}}}InvoiceDocumentReference')
     _agregar(
-        ref,
+        referencia,
         _cbc('ID', documento.get('cuide_referido')),
-        _cbc('DocumentTypeCode', documento.get('tipo_documento_referido') or 'POS'),
         _cbc('IssueDate', normalizar_fecha(documento.get('fecha_referido'))),
     )
+    # El número del documento original, por separado del CUIDE: el CUIDE es lo
+    # que la DIAN usa para localizarlo, el número es para el auditor.
+    if documento.get('numero_referido'):
+        _agregar(referencia, _cbc('ID', str(documento['numero_referido'])))
 
-    # Motivo: el anexo exige el código del catálogo (va en DiscrepancyResponse),
-    # y la descripción es texto libre para que el auditor entienda por qué se
-    # corrigió.
+    # Descripción libre del motivo: qué ajustó el negocio, en palabras.
     if documento.get('motivo_descripcion'):
-        nota = _cac('Note')
-        nota.append(_cbc('Description', str(documento['motivo_descripcion'])))
-        ref.append(nota)
-    return ref
+        nota = ET.SubElement(referencia, f'{{{dian_xml.NS_CAC}}}Note')
+        nota.append(_cbc('Description',
+                         str(documento['motivo_descripcion'])))
+    return billing
+
+
+# Orden real de los hijos de `Invoice` segun el XSD de UBL 2.1. Es una
+# `xsd:sequence`: el orden NO es libre, y un elemento fuera de su lugar hace que
+# el documento no valide aunque el contenido sea correcto.
+SECUENCIA_INVOICE = (
+    # `UBLExtensions` va PRIMERO. Es donde va `sts:DianExtensions`, y el anexo lo
+    # ubica al comienzo del documento; el generador comun lo anadia despues de
+    # los totales.
+    'UBLExtensions',
+    'UBLVersionID', 'CustomizationID', 'ProfileID', 'ID', 'UUID',
+    'IssueDate', 'IssueTime', 'DueDate', 'InvoiceTypeCode', 'Note',
+    'TaxPointDate', 'DocumentCurrencyCode', 'TaxCurrencyCode',
+    'LineCountNumeric',
+    'AccountingCost', 'InvoicePeriod', 'OrderReference',
+    # `BillingReference` va AQUI, entre `OrderReference` y `DespatchAdvice`.
+    'BillingReference',
+    'DespatchAdvice', 'AccountingSupplierParty', 'AccountingCustomerParty',
+    'PaymentMeans',
+    'PaymentTerms', 'PrepaidPayment',
+    'AllowanceCharge', 'TaxExchangeRate', 'PricingExchangeRate',
+    'PaymentExchangeRate', 'PaymentAlternativeExchangeRate',
+    'TaxTotal', 'WithholdingTaxTotal', 'LegalMonetaryTotal',
+    'InvoiceLine',
+    'DiscrepancyResponse',
+)
+
+
+def _normalizar_secuencia(raiz):
+    """Reordena los hijos de `raiz` según el XSD, conservando el orden interno.
+
+    No es un detalle menor: `Invoice` es una `xsd:sequence`, así que dos nodos
+    con el contenido correcto pero en orden distinto producen un documento que no
+    valida. Aquí el problema venía del generador común, que añadía
+    `UBLExtensions` al final, cuando el XSD lo quiere al principio.
+
+    Los nodos que no están en la lista NO se mueven: se quedan donde están.
+    """
+    orden = {}
+    for posicion, nombre in enumerate(SECUENCIA_INVOICE):
+        orden.setdefault(nombre, posicion)
+
+    hijos = list(raiz)
+
+    def clave(par):
+        indice, hijo = par
+        etiqueta = hijo.tag.split('}')[-1]
+        return (0, orden[etiqueta]) if etiqueta in orden else (1, indice)
+
+    ordenados = [hijo for _, hijo in sorted(enumerate(hijos), key=clave)]
+    if ordenados == hijos:
+        return False
+
+    for hijo in hijos:
+        raiz.remove(hijo)
+    for hijo in ordenados:
+        raiz.append(hijo)
+    return True
+
+
+def _insertar_en_secuencia(raiz, nodo, nombre):
+    """Coloca `nodo` en la posición que le toca dentro de `raiz`.
+
+    Se compara con `SECUENCIA_INVOICE`, no con el orden en que se construyeron
+    los nodos. Si el generador común cambia, esta lista queda desactualizada: por
+    eso, si el nombre no está en la secuencia, se avisa en vez de insertar en
+    cualquier lado.
+    """
+    if nombre not in SECUENCIA_INVOICE:
+        raise ValueError(
+            f'"{nombre}" no está en SECUENCIA_INVOICE. Si se acaba de añadir al '
+            'generador, hay que añadirlo también a la secuencia del XSD, o el '
+            'documento no valida.'
+        )
+
+    destino = SECUENCIA_INVOICE.index(nombre)
+
+    for indice, hijo in enumerate(raiz):
+        etiqueta = hijo.tag.split('}')[-1]
+        if etiqueta not in SECUENCIA_INVOICE:
+            # Nodo que no conoce la secuencia: se asume que va después.
+            raiz.insert(indice, nodo)
+            return
+        if SECUENCIA_INVOICE.index(etiqueta) > destino:
+            raiz.insert(indice, nodo)
+            return
+    raiz.append(nodo)
 
 
 def _construir_emisor(emisor):

@@ -159,7 +159,8 @@ def main():
         if 'creditnote' in nombre:
             problemas = []
 
-            if raiz.find('.//cac:AdditionalDocumentReference', NS) is None:
+            if raiz.find('.//cac:BillingReference/cac:InvoiceDocumentReference',
+                         NS) is None:
                 problemas.append('no referencia al documento que corrige')
             if raiz.find('.//cac:DiscrepancyResponse/cbc:ResponseCode',
                          NS) is None:

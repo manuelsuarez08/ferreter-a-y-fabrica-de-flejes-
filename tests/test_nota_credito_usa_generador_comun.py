@@ -245,8 +245,10 @@ def test_la_nota_conserva_su_identidad_tras_delegar(nota):
 # ═══════════════════════════════════════════
 
 def test_la_nota_referencia_el_documento_que_corrige(nota):
-    ref = nota.find(f'{{{NS_CAC}}}AdditionalDocumentReference')
-    assert ref is not None, 'sin referencia la DIAN no sabe qué documento se anula'
+    ref = nota.find(
+        f'{{{NS_CAC}}}BillingReference/{{{NS_CAC}}}InvoiceDocumentReference')
+    assert ref is not None, (
+        'sin BillingReference la DIAN no sabe qué documento se anula')
     assert ref.find(f'{{{NS_CBC}}}ID').text == 'a' * 96
     assert ref.find(f'{{{NS_CBC}}}IssueDate').text == '2026-09-30'
 
