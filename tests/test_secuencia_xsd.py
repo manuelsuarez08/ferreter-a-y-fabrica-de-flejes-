@@ -39,12 +39,16 @@ def xmls_generados():
     ejecuto, no del codigo que se esta probando. Pasa justo lo contrario de lo
     que uno cree —una prueba verde sobre un binario viejo.
     """
-    import subprocess
+    import importlib.util
 
-    subprocess.run(
-        [sys.executable,
-         os.path.join(RAIZ, 'herramientas', 'generar_xml_auditoria.py')],
-        cwd=RAIZ, capture_output=True, text=True, timeout=180)
+    # En este proceso, no en un subproceso: `subprocess.run` por módulo añadía
+    # ~1 s de arranque del intérprete a cada archivo y empujaba la suite por
+    # encima de dos minutos.
+    ruta = os.path.join(RAIZ, 'herramientas', 'generar_xml_auditoria.py')
+    spec = importlib.util.spec_from_file_location('generar_xml_auditoria', ruta)
+    modulo = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(modulo)
+    modulo.main()
 
 
 # ═══════════════════════════════════════════

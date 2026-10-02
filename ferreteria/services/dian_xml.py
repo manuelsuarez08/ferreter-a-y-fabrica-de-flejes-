@@ -710,33 +710,93 @@ def _construir_impuestos_totales(totales):
 
     # Resumen de IVA: un subtotal por cada tarifa aplicada.
     for grupo in (totales.get('impuestos_iva') or []):
+        categoria, motivo = _categoria_y_motivo(grupo['tasa'])
         nodo.append(_subtotal_impuesto(
             TIPO_IMPUESTO_IVA, NOMBRES_IMPUESTO[TIPO_IMPUESTO_IVA],
             grupo['base'], grupo['valor'], grupo['tasa'],
+            categoria=categoria, motivo=motivo,
         ))
 
     # Resumen de INC (bolsas): también uno por tarifa.
     for grupo in (totales.get('impuestos_inc') or []):
+        categoria, motivo = _categoria_y_motivo(grupo['tasa'])
         nodo.append(_subtotal_impuesto(
             TIPO_IMPUESTO_INC, NOMBRES_IMPUESTO[TIPO_IMPUESTO_INC],
             grupo['base'], grupo['valor'], grupo['tasa'],
+            categoria=categoria, motivo=motivo,
         ))
     return nodo
 
 
-def _subtotal_impuesto(tipo, nombre, base, valor, tarifa):
-    """Crea un `<cac:TaxSubtotal>` (base gravable, valor y tarifa)."""
+def _subtotal_impuesto(tipo, nombre, base, valor, tarifa, categoria=None,
+                       motivo=None):
+    """Crea un `<cac:TaxSubtotal>` (base gravable, valor y tarifa).
+
+    UBL 2.1 define el orden de los hijos como una secuencia:
+
+        TaxableAmount, TaxAmount, TierRange, TierRatePercent,
+        TransactionCurrencyTaxAmount, TaxCategory
+
+    y dentro de `cac:TaxCategory`:
+
+        ID, Name, Percent, BaseUnitMeasure, PerUnitAmount, TaxScheme,
+        TaxExemptionReasonCode, TaxExemptionReason
+
+    `cbc:ID` es la CATEGORÍA del tributo, no el impuesto: es el código
+    UN/EDIFACT 5153 ('S' tasa estandar, 'Z' tasa cero, 'E' exento, 'F' no
+    sujeito). El impuesto va en `cac:TaxScheme/cbc:ID` ('01' IVA, '04' INC).
+    Son dos cosas distintas y confundirlas es un rechazo tipico.
+
+    ANTES NO SE EMITIA NI EL ID NI EL MOTIVO DE EXENCION. Para un producto
+    exento eso dejaba un `Percent` en 0.00 sin codigo de categoria, y la DIAN
+    rechaza el documento. El catalogo tiene cientos de productos exentos, asi
+    que no era un caso teorico.
+    """
     subtotal = _cac('TaxSubtotal')
     subtotal.append(_cbc('TaxableAmount', _monto(base), currencyID='COP'))
     subtotal.append(_cbc('TaxAmount', _monto(valor), currencyID='COP'))
-    categoria = _cac('TaxCategory')
-    categoria.append(_cbc('Percent', _monto(tarifa)))
+
+    nodo_categoria = _cac('TaxCategory')
+    # ID va PRIMERO: es la categoria del tributo.
+    if categoria:
+        nodo_categoria.append(_cbc('ID', categoria))
+    nodo_categoria.append(_cbc('Percent', _monto(tarifa)))
+
     esquema = _cac('TaxScheme')
     esquema.append(_cbc('ID', tipo, schemeID='195', schemeName='01'))
     esquema.append(_cbc('Name', nombre))
-    categoria.append(esquema)
-    subtotal.append(categoria)
+    nodo_categoria.append(esquema)
+
+    # El motivo de exencion va DESPUES del TaxScheme, y es obligatorio cuando
+    # la tarifa es cero: sin el, la DIAN no sabe POR QUE no se pagó impuesto.
+    if motivo:
+        nodo_categoria.append(_cbc('TaxExemptionReason', str(motivo)))
+
+    subtotal.append(nodo_categoria)
     return subtotal
+
+
+# Categoría del tributo, código UN/EDIFACT 5153. Es distinta del impuesto:
+# el impuesto va en `cac:TaxScheme/cbc:ID` ('01' IVA, '04' INC).
+#
+#   S = tasa estándar        Z = tasa cero
+#   E = exento               F = no sujeto
+CATEGORIA_TASA_ESTANDAR = 'S'
+CATEGORIA_TASA_CERO = 'Z'
+CATEGORIA_EXENTO = 'E'
+CATEGORIA_NO_SUJETO = 'F'
+
+
+def _categoria_y_motivo(porcentaje):
+    """Deduce la categoría del tributo y el motivo a partir de la tarifa.
+
+    No se inventa el motivo de una exención legal concreta (eso lo declara el
+    negocio con el artículo del Estatuto Tributario). Aquí solo se distingue el
+    caso de tasa cero, que es el único deducible del propio dato.
+    """
+    if float(porcentaje or 0) == 0:
+        return CATEGORIA_TASA_CERO, None
+    return CATEGORIA_TASA_ESTANDAR, None
 
 
 def _construir_linea(indice, item):
@@ -763,13 +823,18 @@ def _construir_linea(indice, item):
     impuestos = _cac('TaxTotal')
     impuestos.append(_cbc('TaxAmount', _monto(iva_valor + inc_valor),
                           currencyID='COP'))
+    categoria, motivo = _categoria_y_motivo(iva_tasa)
     impuestos.append(_subtotal_impuesto(TIPO_IMPUESTO_IVA,
                                         NOMBRES_IMPUESTO[TIPO_IMPUESTO_IVA],
-                                        base, iva_valor, iva_tasa))
+                                        base, iva_valor, iva_tasa,
+                                        categoria=categoria, motivo=motivo))
     if inc_tasa:
+        categoria_inc, motivo_inc = _categoria_y_motivo(inc_tasa)
         impuestos.append(_subtotal_impuesto(TIPO_IMPUESTO_INC,
                                             NOMBRES_IMPUESTO[TIPO_IMPUESTO_INC],
-                                            base, inc_valor, inc_tasa))
+                                            base, inc_valor, inc_tasa,
+                                            categoria=categoria_inc,
+                                            motivo=motivo_inc))
     linea.append(impuestos)
 
     # Precio unitario sin impuestos (el total de la línea se recalcula arriba).
@@ -892,15 +957,60 @@ def construir_evento(cuide, numero_documento, tipo_evento, descripcion,
     doc_ref.append(_cbc('ID', str(numero_documento)))
     doc_ref.append(_cbc('UUID', str(cuide), schemeName='CUDE-SHA384'))
     doc_ref.append(_cbc('IssueDate', _fecha(fecha or ahora)))
-    if xml_documento:
+    # `is not None` y NO una comprobación de verdad: un adjunto vacío (`b''`)
+    # es falsy en Python, así que con `if xml_documento:` se saltaría la
+    # validación y se emitiría un `ExternalReference` con mime y descripción
+    # pero SIN contenido — justo el defecto que se está corrigiendo.
+    if xml_documento is not None:
+        # El documento SE EMBARCA. Antes se aceptaba el parámetro y se ignoraba:
+        # se emitía un `ExternalReference` con el mime y la descripción pero SIN
+        # CONTENIDO, y un `EncodingCode="UTF-8"` que declaraba una codificación
+        # de algo que no viajaba. La DIAN recibía un adjunto vacío.
+        #
+        # Va en base64 dentro de `cbc:URI`, que es como UBL 2.1 representa un
+        # adjunto embebido: `cac:ExternalReference` DESCRIBE un objeto, y el
+        # objeto empotrado viaja en `URI`.
         adjunto = _cac('Attachment')
         contenido = _cac('ExternalReference')
-        contenido.append(_cbc('MimeCode', 'text/xml'))
-        contenido.append(_cbc('EncodingCode', 'UTF-8'))
-        contenido.append(_cbc('Description', 'Documento Equivalente Electrónico POS'))
+        # Orden que declara UBL 2.1: URI, Hash, DocumentHash, MimeCode,
+        # EncodingCode, Description. No es libre.
+        contenido.append(_cbc('URI', _embebir_xml(xml_documento)))
+        contenido.append(_cbc('MimeCode', 'application/xml'))
+        contenido.append(_cbc('EncodingCode', 'base64'))
+        contenido.append(_cbc('Description',
+                              'Documento Equivalente Electrónico POS firmado'))
         adjunto.append(contenido)
         doc_ref.append(adjunto)
     referencia.append(doc_ref)
     raiz.append(referencia)
 
     return raiz
+
+
+def _embebir_xml(xml_documento):
+    """Codifica un XML en base64 para viajar dentro de `cbc:URI`.
+
+    UNA SOLA LÍNEA, sin saltos. Es el detalle que corrompe el adjunto: el
+    estándar parte el base64 en líneas de 76 caracteres, y si se deja así dentro
+    del XML, quien lo lee tiene que quitarlos. Un byte de espacio en medio
+    cambia el documento al que apunta el hash.
+
+    Tampoco se admite un documento vacío: declararlo sin contenido es peor que
+    no declararlo.
+    """
+    if isinstance(xml_documento, str):
+        crudo = xml_documento.encode('utf-8')
+    else:
+        crudo = xml_documento or b''
+
+    if not crudo.strip():
+        raise ValueError(
+            'El adjunto del evento llegó vacío. Se acepta el parámetro pero no '
+            'se emite un `ExternalReference` sin contenido: un adjunto declarado '
+            'y vacío es peor que un adjunto ausente, porque parece que se envió.'
+        )
+
+    import base64 as _base64
+
+    # compact=True: sin saltos de línea, que es lo que viaja dentro del XML.
+    return _base64.b64encode(crudo).decode('ascii')
