@@ -121,3 +121,4 @@ _tmp_certs/
 _patch_*.py
 _qa_*.mjs
 _qa_*.py
+_auditoria_xml/

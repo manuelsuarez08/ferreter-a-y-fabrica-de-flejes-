@@ -154,22 +154,33 @@ def revisar(ruta_xml):
     return fallos
 
 
-def main():
-    raiz = RAIZ / '_auditoria_xml'
+def revisar_todos(carpeta=None):
+    """Verifica los tres documentos firmados y devuelve el numero de fallos.
+
+    Acepta la carpeta para que la suite apunte a un temporal. Apuntar a
+    `_auditoria_xml` fijo seria comprobar el archivo de la ULTIMA ejecucion del
+    generador, no el codigo actual: un falso verde disfrazado de prueba.
+    """
+    raiz = Path(carpeta) if carpeta else RAIZ / '_auditoria_xml'
     if not raiz.exists():
-        print('No hay XML generados. Corre generar_xml_auditoria.py primero.')
+        print(f'No hay XML generados en {raiz}.')
+        print('Corre generar_xml_firmado.py primero.')
         return 1
 
     total = 0
     for nombre in ('invoice_firmado.xml', 'creditnote_firmado.xml',
-                    'evento_firmado.xml'):
+                   'evento_firmado.xml'):
         ruta = raiz / nombre
         if ruta.exists():
             total += revisar(ruta)
 
     print(f'\n{"=" * 70}')
     print('Sin discrepancias.' if not total else f'{total} discrepancias.')
-    return 1 if total else 0
+    return total
+
+
+def main():
+    return 1 if revisar_todos() else 0
 
 
 if __name__ == '__main__':

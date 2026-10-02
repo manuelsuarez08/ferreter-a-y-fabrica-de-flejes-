@@ -319,6 +319,18 @@ def _canonizar(elemento):
 
     ESTA FUNCIÓN ESTABA ROTA Y PRODUCEÍA FIRMAS INVÁLIDAS.
     -----------------------------------------------
+
+    ADVERTENCIA: ESTA FUNCIÓN NO LA USA NADIE.
+    Los digests y la firma se calculan en `_firmar_documento_completo`, que hace
+    el c14n con `lxml` directamente sobre el documento ya montado. `_canonizar`
+    se quedó sin llamadores cuando se corrigió el defecto de c14n: se arregló la
+    ruta que sí se usaba y esta copia quedó atrás.
+
+    Se conserva porque explica el defecto con detalle y ese detalle ya se
+    escribió en la ruta real. Si alguien llegara a este archivo buscando "la
+    canonicalización que usa la firma", NO es esta: es la de
+    `_firmar_documento_completo`. Borrarla es una decisión aparte.
+
     Antes hacía `ET.tostring(elemento)`, y se documentaba como "suficiente
     para el subconjunto que produce este proyecto". Medido contra `lxml`
     (que implementa c14n de verdad), NO lo era:

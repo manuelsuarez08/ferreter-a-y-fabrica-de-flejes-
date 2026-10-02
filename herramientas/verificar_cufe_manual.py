@@ -98,13 +98,21 @@ def uuid_de(raiz):
     return (nodo.get('schemeName'), nodo.text)
 
 
-def main():
+def revisar(carpeta=None):
+    """Verifica los XML de `carpeta` y DEVUELVE el numero de discrepancias.
+
+    Acepta la carpeta para que la suite pueda pasarle un temporal. Si leyerra
+    `_auditoria_xml` fijo, estarias comprobando el archivo de la ULTIMA vez que
+    se ejecuto el generador, no el codigo de ahora: un falso verde. Ese error ya
+    se cometio en este proyecto y por eso la carpeta es un parametro.
+    """
+    destino = Path(carpeta) if carpeta else SALIDA
     fallos = 0
 
     for nombre, es_evento in (('invoice.xml', False),
                               ('creditnote.xml', False),
                               ('applicationresponse.xml', True)):
-        ruta = SALIDA / nombre
+        ruta = destino / nombre
         if not ruta.exists():
             print(f'{nombre}: NO EXISTE')
             fallos += 1
@@ -184,7 +192,11 @@ def main():
         print()
 
     print('Todo coincide.' if not fallos else f'{fallos} problemas.')
-    return 1 if fallos else 0
+    return fallos
+
+
+def main():
+    return 1 if revisar() else 0
 
 
 if __name__ == '__main__':

@@ -28,6 +28,22 @@ SALIDA = RAIZ / '_auditoria_xml'
 NIT = '900187391'
 
 
+def generar(destino=None):
+    """Genera los tres documentos firmados y devuelve la carpeta donde quedaron.
+
+    `destino` permite que la suite los genere en un temporal, sin tocar el
+    directorio del proyecto. Esa separacion es la que evita que las pruebas
+    lean un archivo viejo: si el codigo cambia y nadie regenera, el verificador
+    seguiria celeryendo el binario de la vez anterior y dira que todo esta bien.
+
+    Sin `destino` se escribe en `_auditoria_xml/`, que es como se usa a mano.
+    """
+    salida = Path(destino) if destino else SALIDA
+    salida.mkdir(parents=True, exist_ok=True)
+    _generar(salida)
+    return salida
+
+
 def certificado_de_prueba(destino):
     llave = rsa.generate_private_key(public_exponent=65537, key_size=2048)
     ahora = datetime.datetime.now(datetime.timezone.utc)
@@ -53,7 +69,7 @@ def certificado_de_prueba(destino):
     return destino
 
 
-def main():
+def _generar(salida):
     temporal = tempfile.mkdtemp(prefix='firma_')
     ruta_p12 = certificado_de_prueba(os.path.join(temporal, 'firma.p12'))
     cert = dian_firma.cargar_certificado(ruta_p12, 'clave123')
@@ -99,12 +115,12 @@ def main():
 
     momento = datetime.datetime(2026, 10, 1, 15, 30, 5,
                                 tzinfo=datetime.timezone.utc)
-    SALIDA.mkdir(exist_ok=True)
+    salida.mkdir(parents=True, exist_ok=True)
 
     raiz_doc = dian_xml.construir_invoice(documento, emisor, adquirente,
                                           items, totales, extras)
     firmado = dian_firma.firmar_documento(raiz_doc, cert, momento=momento)
-    (SALIDA / 'invoice_firmado.xml').write_bytes(firmado)
+    (salida / 'invoice_firmado.xml').write_bytes(firmado)
     print(f'  invoice_firmado.xml   {len(firmado):6} bytes')
 
     documento_nc = dict(documento, numero='SETP-NC-1', tipo_documento='NC',
@@ -114,7 +130,7 @@ def main():
     raiz_nc = dian_notas.construir_nota_credito(
         documento_nc, emisor, adquirente, items, totales, extras)
     firmado_nc = dian_firma.firmar_documento(raiz_nc, cert, momento=momento)
-    (SALIDA / 'creditnote_firmado.xml').write_bytes(firmado_nc)
+    (salida / 'creditnote_firmado.xml').write_bytes(firmado_nc)
     print(f'  creditnote_firmado.xml {len(firmado_nc):6} bytes')
 
     raiz_ev = dian_xml.construir_evento(
@@ -125,11 +141,15 @@ def main():
     # apuntara a un ID que no es un ID, y el digest no cuadraba.
     firmado_ev = dian_firma.firmar_documento(
         raiz_ev, cert, id_documento='EVT-SETP-1-1', momento=momento)
-    (SALIDA / 'evento_firmado.xml').write_bytes(firmado_ev)
+    (salida / 'evento_firmado.xml').write_bytes(firmado_ev)
     print(f'  evento_firmado.xml     {len(firmado_ev):6} bytes')
 
-    print(f'\nEn: {SALIDA}')
     shutil.rmtree(temporal, ignore_errors=True)
+
+
+def main():
+    destino = generar()
+    print(f'\nEn: {destino}')
 
 
 if __name__ == '__main__':

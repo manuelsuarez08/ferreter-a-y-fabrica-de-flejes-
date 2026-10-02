@@ -155,10 +155,16 @@ def revisar_estructura(xml_bytes):
     return problemas
 
 
-def main():
-    directorio = RAIZ / '_auditoria_xml'
+def revisar_todos(carpeta=None):
+    """Verifica la estructura de las firmas y devuelve el numero de problemas.
+
+    Acepta la carpeta para que la suite apunte a un temporal y no a los
+    artefactos de la ultima ejecucion del generador.
+    """
+    directorio = Path(carpeta) if carpeta else RAIZ / '_auditoria_xml'
     if not directorio.exists():
-        print('No hay XML. Corre generar_xml_firmado.py primero.')
+        print(f'No hay XML en {directorio}.')
+        print('Corre generar_xml_firmado.py primero.')
         return 1
 
     total = 0
@@ -178,7 +184,11 @@ def main():
 
     print()
     print('Estructura correcta.' if not total else f'{total} problemas.')
-    return 1 if total else 0
+    return total
+
+
+def main():
+    return 1 if revisar_todos() else 0
 
 
 if __name__ == '__main__':

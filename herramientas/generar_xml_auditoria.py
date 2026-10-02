@@ -78,16 +78,30 @@ def _ajustes():
     return conn, cur, ruta
 
 
-def _guardar(nombre, texto):
-    os.makedirs(SALIDA_XML, exist_ok=True)
-    ruta = os.path.join(SALIDA_XML, nombre)
+def _guardar(nombre, texto, salida=None):
+    destino = salida or SALIDA_XML
+    os.makedirs(destino, exist_ok=True)
+    ruta = os.path.join(destino, nombre)
     with open(ruta, 'w', encoding='utf-8') as f:
         f.write(texto)
     print(f'  {nombre:34} {len(texto):6} bytes')
     return ruta
 
 
-def main():
+def generar(destino=None):
+    """Genera los XML sin firmar y devuelve la carpeta donde quedaron.
+
+    `destino` permite que la suite los genere en un temporal. Esa separacion es
+    la que evita el falso verde: si el codigo cambia y nadie regenera, un
+    verificador que lea el directorio del proyecto seguira comprobando el
+    binario de la vez anterior y dira que todo esta bien.
+    """
+    salida = destino or SALIDA_XML
+    _generar(salida)
+    return salida
+
+
+def _generar(salida):
     conn, cur, ruta = _ajustes()
     ajustes = dian_emision._leer_ajustes_dian(cur)
     emisor = {
@@ -154,7 +168,7 @@ def main():
 
     raiz = dian_xml.construir_invoice(doc('SETP-1'), emisor, cliente, items,
                                       totales, extras)
-    _guardar('invoice.xml', dian_xml.a_texto(raiz))
+    _guardar('invoice.xml', dian_xml.a_texto(raiz), salida)
 
     raiz = dian_xml.construir_invoice(doc('SETP-2'), emisor, cliente,
                                       [items[0]], {
@@ -167,7 +181,7 @@ def main():
                                                             'base': 100000.0,
                                                             'valor': 19000.0}],
                                           'impuestos_inc': []}, extras)
-    _guardar('invoice_simple.xml', dian_xml.a_texto(raiz))
+    _guardar('invoice_simple.xml', dian_xml.a_texto(raiz), salida)
 
     try:
         d = doc('SETP-NC-1', 'NC')
@@ -179,20 +193,25 @@ def main():
                   'motivo_descripcion': 'Devolución total'})
         raiz = dian_notas.construir_nota_credito(
             d, emisor, cliente, items, totales, extras)
-        _guardar('creditnote.xml', dian_xml.a_texto(raiz))
+        _guardar('creditnote.xml', dian_xml.a_texto(raiz), salida)
     except Exception as e:
         print(f'  creditnote.xml  ERROR: {type(e).__name__}: {e}')
 
     try:
         raiz = dian_xml.construir_evento(doc('SETP-1')['cuide'], 'SETP-1', '030',
                                           'Acuse de recibo', emisor)
-        _guardar('applicationresponse.xml', dian_xml.a_texto(raiz))
+        _guardar('applicationresponse.xml', dian_xml.a_texto(raiz), salida)
     except Exception as e:
         print(f'  applicationresponse ERROR: {type(e).__name__}: {e}')
 
-    print(f'\nEn: {SALIDA_XML}')
+    print(f'\nEn: {salida}')
     conn.close()
+
+
+def main():
+    print(f'XML de auditoría en: {generar()}')
 
 
 if __name__ == '__main__':
     main()
+
