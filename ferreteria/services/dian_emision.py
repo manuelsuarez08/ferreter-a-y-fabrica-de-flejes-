@@ -471,7 +471,18 @@ def _leer_items(cursor, id_venta, iva_porcentaje_venta, iva_por_producto=False):
         #
         # Si el negocio decidiera que el precio del producto YA incluye el
         # tributo, el desagregador correcto seria otro:
-        #     base = (precio - tributo) / (1 + iva)
+        #     base = (precio - nominal x contenido x cantidad) / (1 + iva)
+        #
+        # OJO al numero de unidades. El tributo se cobra POR UNIDAD, asi que
+        # hay que restar el de TODAS las unidades vendidas, no el de una:
+        #
+        #     3 botellas de 500 ml a 0,18 -> 0,18 x 0,5 x 3 = 0,27
+        #
+        # Restando solo 0,09 (una unidad) la base queda 7562,95 en vez de
+        # 7562,80 y el IVA se declara 0,03 por encima. Es la clase de error de
+        # centavos que este proyecto lleva varias rondas cerrando, y la razon
+        # por la que el numero de unidades va explicito en la formula.
+        #
         # Esa es una decision del negocio, no del programa. Ver
         # `TOTAL_INCLUYE_TRIBUTO_ESPECIFICO` en la nota de `_leer_items`.
         precio_base = (precio_final / (1 + iva_tasa / 100)) if iva_tasa else precio_final

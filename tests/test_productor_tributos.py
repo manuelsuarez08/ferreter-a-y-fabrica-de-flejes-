@@ -333,6 +333,39 @@ def test_el_tributo_no_altera_la_base_sino_el_total(base_con_producto_tributado)
     assert reconstruido == Decimal('9000.27')
 
 
+def test_el_tributo_es_por_unidad_y_no_por_linea(base_con_producto_tributado):
+    """El impuesto nominal se cobra POR UNIDAD, no una vez por linea.
+
+    Este test fija la trampa de la que hablo la nota del desagregador: si
+    alguien resta el tributo de UNA unidad en vez de todas, la base queda
+    7562,95 en vez de 7562,80 y el IVA se declara tres centavos por encima.
+
+    Con 3 botellas de 500 ml a 0,18 por litro:
+
+        por unidad = 0,18 x 0,5 = 0,09
+        por linea   = 0,18 x 0,5 x 3 = 0,27
+    """
+    conn, id_venta = base_con_producto_tributado
+    items = dian_emision._leer_items(conn.cursor(), id_venta, 19.0)
+    trib = items[0]['tributo_especifico']
+
+    # El valor calculado lleva YA las tres unidades.
+    assert Decimal(str(trib['valor'])) == Decimal('0.27')
+    assert Decimal(str(trib['valor'])) != Decimal('0.09')
+
+    # Y el desagregador del modelo 'precio con impuesto incluido' necesita el
+    # numero de unidades. Se escribe aqui para que la nota del codigo no se
+    # lea como si un solo tributo bastara.
+    precio_total = Decimal('9000')
+    iva = Decimal('0.19')
+    una_sola = (precio_total - Decimal('0.09')) / (1 + iva)
+    todas = (precio_total - Decimal('0.27')) / (1 + iva)
+
+    assert todas.quantize(Decimal('0.01')) == Decimal('7562.80')
+    assert una_sola.quantize(Decimal('0.01')) == Decimal('7562.95')
+    assert todas != una_sola
+
+
 def test_un_producto_sin_configurar_no_declara_tributo(tmp_path):
     """Un producto normal NO debe generar tributo especifico por defecto.
 
