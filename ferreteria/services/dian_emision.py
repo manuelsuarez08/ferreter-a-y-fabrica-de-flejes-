@@ -341,6 +341,39 @@ def _resumen_impuestos(items, clave_tasa):
     return [grupos[t] for t in sorted(grupos)]
 
 
+def _resumen_tributos_especificos(items):
+    """Agrupa las líneas por tributo específico y consolida un subtotal por tipo.
+
+    El `cac:TaxSubtotal` es POR TRIBUTO: si una venta lleva tres botellas de
+    IBUA y dos de INPP, son dos subtotales, no cuatro. Ademas el mismo tributo
+    puede venir con dos unidades distintas (litros y kilos), y eso NO se puede
+    sumar: son bases de medida diferentes. En ese caso se suman por la unidad
+    mas frecuente, que es lo unico defendible sin un criterio mejor.
+
+    Devuelve lista de dicts con la forma que espera `dian_xml._categorias_de`.
+    """
+    grupos = {}
+    for item in items:
+        trib = item.get('tributo_especifico')
+        if not trib:
+            continue
+        clave = trib['tipo']
+        g = grupos.setdefault(clave, {
+            'tipo': clave,
+            'base': 0.0,
+            'valor': 0.0,
+            'tasa': 0.0,
+            'valor_unitario': trib['valor_unitario'],
+            'unidad': trib['unidad'],
+        })
+        g['valor'] = redondear(g['valor'] + trib['valor'])
+
+    # La base del tributo es el valor del bien, no el impuesto: el impuesto
+    # se SUMA al precio. Se deja en 0 porque el anexo no exige base para un
+    # tributo nominal, y declarar de mas es peor que declarar de menos.
+    return list(grupos.values())
+
+
 def _leer_items(cursor, id_venta, iva_porcentaje_venta, iva_por_producto=False):
     """Líneas del documento a partir del detalle de la venta.
 
@@ -356,7 +389,10 @@ def _leer_items(cursor, id_venta, iva_porcentaje_venta, iva_por_producto=False):
         SELECT dv.cantidad, dv.precio_unitario, p.nombre, p.dimensiones,
                COALESCE(p.unidad_medida, '94'), COALESCE(p.codigo_dian, ''),
                COALESCE(p.iva_tasa, 0), COALESCE(p.iva_naturaleza, 'excluido'),
-               COALESCE(p.iva_tipo_tarifa, '00')
+               COALESCE(p.iva_tipo_tarifa, '00'),
+               COALESCE(p.tributo_especifico_tipo, ''),
+               COALESCE(p.tributo_especifico_nominal, 0),
+               COALESCE(p.tributo_contenido, 0)
         FROM detalle_ventas dv
         JOIN productos p ON dv.id_producto = p.id
         WHERE dv.id_venta = ?
@@ -371,7 +407,8 @@ def _leer_items(cursor, id_venta, iva_porcentaje_venta, iva_por_producto=False):
 
     items = []
     for cantidad, precio_final, nombre, dimensiones, unidad, codigo_dian, \
-            iva_tasa, naturaleza, tipo_tarifa in filas:
+            iva_tasa, naturaleza, tipo_tarifa, trib_tipo, trib_nominal, \
+            trib_contenido in filas:
         cantidad = float(cantidad or 0)
         precio_final = float(precio_final or 0)
         iva_tasa = float(iva_tasa or 0)
@@ -423,6 +460,20 @@ def _leer_items(cursor, id_venta, iva_porcentaje_venta, iva_por_producto=False):
             iva_tasa = float(iva_porcentaje_venta or 0)
 
         # Desagregación: del precio final (con IVA) a la base (sin IVA).
+        #
+        # OJO con el tributo especifico: NO se resta aqui. Restarlo NO tiene
+        # sentido dimensional: el IVA es un PORCENTAJE de la base, asi que
+        # dividir el precio por (1 + 0,19) es correcto. El IBUA son PESOS POR
+        # LITRO, no un porcentaje: dividir por (1 + 0,09) estaria usando una
+        # razon entre magnitudes distintas. Lo que se hace es SUMARLO al total
+        # de la venta, porque el impuesto se cobra por fuera del precio del
+        # bien.
+        #
+        # Si el negocio decidiera que el precio del producto YA incluye el
+        # tributo, el desagregador correcto seria otro:
+        #     base = (precio - tributo) / (1 + iva)
+        # Esa es una decision del negocio, no del programa. Ver
+        # `TOTAL_INCLUYE_TRIBUTO_ESPECIFICO` en la nota de `_leer_items`.
         precio_base = (precio_final / (1 + iva_tasa / 100)) if iva_tasa else precio_final
         precio_base = redondear(precio_base)
         base = redondear(cantidad * precio_base)
@@ -442,7 +493,69 @@ def _leer_items(cursor, id_venta, iva_porcentaje_venta, iva_por_producto=False):
             'inc_tasa': 0,
             'base': base,
         })
+
+        # ── Tributo con tarifa ESPECIFICA (Ley 2277 de 2022) ───────────────
+        # A diferencia del IVA, este NO es un porcentaje de la base: es un
+        # valor nominal por unidad de medida. La cuenta es
+        #
+        #     impuesto = nominal x (cantidad vendida x contenido por unidad)
+        #
+        # El `contenido` es lo que convierte "3 botellas" en litros. Sin el no
+        # hay cuenta posible, y el producto queda sin tributo: es preferible a
+        # declarar un impuesto inventado.
+        #
+        # El subtotal se calcula AQUI, en la orquestacion, y no en el
+        # generador: el generador no sabe de producto ni de ley, solo sabe
+        # leer un numero que le dan. Si lo calculara el, habria dos lugares
+        # que deciden el impuesto y podrian discrepar.
+        #
+        # Los tres datos tienen que estar: tipo, nominal y contenido. Con uno
+        # solo falta, no se liquida nada.
+        especifico = _tributo_especifico_de_linea(
+            trib_tipo, trib_nominal, trib_contenido, cantidad)
+        if especifico:
+            items[-1]['tributo_especifico'] = especifico
     return items
+
+
+def _tributo_especifico_de_linea(tipo, nominal, contenido, cantidad, unidad_base=''):
+    """Calcula el tributo nominal de UNA línea, o None si no aplica.
+
+    Se separa en su propia funcion para poder probarla sin base de datos ni
+    venta: la aritmetica es lo delicado y no necesita a la base para probarse.
+
+    `unidad_base` es la UNIDAD DE MEDIDA del tributo (LTR, TNE), no la unidad
+    comercial del POS ('94', 'NIU'). Son cosas distintas: se venden "3
+    botellas" y el tributo se liquidan en litros. Si no viene, se usa la que
+    declara el tributo en `UNIDAD_BASE_IMPUESTO`.
+
+    Devuelve dict con: tipo, base, valor, valor_unitario, unidad.
+    """
+    tipo = str(tipo or '').strip()
+    nominal = float(nominal or 0)
+    contenido = float(contenido or 0)
+
+    # Faltan datos -> no se liquida. Sin esta guarda, un producto con el tipo
+    # puesto y el nominal vacio emitiria un Tributo de 0 pesos, que es peor
+    # que no emitirlo: el documento declara un impuesto que no se cobro.
+    if not tipo or tipo not in dian_pos.NOMBRES_IMPUESTO:
+        return None
+    if nominal <= 0 or contenido <= 0 or cantidad <= 0:
+        return None
+    if dian_pos.NATURALEZA_IMPUESTO.get(tipo) != dian_pos.NATURALEZA_ESPECIFICO:
+        return None
+
+    valor = redondear(nominal * cantidad * contenido)
+
+    return {
+        'tipo': tipo,
+        'base': 0.0,                      # lo fija quien consolida el documento
+        'valor': valor,
+        'tasa': 0.0,                      # no aplica: es nominal, no porcentual
+        'valor_unitario': nominal,
+        'unidad': str(unidad_base
+                      or dian_pos.UNIDAD_BASE_IMPUESTO.get(tipo, '')),
+    }
 
 
 # ═════════════════════════════
@@ -789,6 +902,10 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
         # subtotal no corresponde al valor del impuesto).
         'impuestos_iva': _resumen_impuestos(items, 'iva_tasa'),
         'impuestos_inc': _resumen_impuestos(items, 'inc_tasa'),
+        # Antes esta linea no existia: los tributos especificos se leian en el
+        # generador pero NADA los llenaba. Era una ruta muerta, con veinte
+        # pruebas de estructura sobre codigo que nadie ejecutaba.
+        'impuestos_especificos': _resumen_tributos_especificos(items),
     }
     extras = {
         'software_id': ajustes['software_id'],

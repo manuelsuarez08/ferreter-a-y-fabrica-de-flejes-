@@ -463,6 +463,24 @@ def _aplicar_migraciones(cursor):
         # Acumulador de entregas por linea (para "para llevar" entregado por
         # partes). 0 = nada entregado todavia.
         ('detalle_ventas', 'cantidad_entregada', 'INTEGER NOT NULL DEFAULT 0'),
+        # ── Tributos con tarifa ESPECIFICA (Ley 2277 de 2022) ────────────────
+        # El IVA se liquida como PORCENTAJE de la base; estos tributos se
+        # liquidan como valor NOMINAL por unidad de medida (litro, gramo). Son
+        # cosas distintas y el generador las emite con nodos distintos.
+        #
+        # Quedan VACIOS por defecto, y vacio significa "no se liquida": un
+        # producto sin estos tres datos no genera subtotal especifico. Es
+        # deliberado: preferimos no declarar un tributo a declararlo con una
+        # tarifa inventada. Para activarlo hay que rellenar los tres campos.
+        ('productos', 'tributo_especifico_tipo', 'TEXT'),
+        # Valor nominal por unidad, en pesos. NO es un dato comercial: lo fija
+        # la ley. Se configura una vez y no se negocia.
+        ('productos', 'tributo_especifico_nominal', 'REAL'),
+        # Cuanto contiene UNA unidad comercial en la unidad de medida del
+        # tributo. Sin esto el nominal no se puede multiplicar por nada: se
+        # venderian "3 unidades" y no se sabe si son 3 litros o 3 botellas de
+        # 500 ml.
+        ('productos', 'tributo_contenido', 'REAL'),
         # ── Datos fiscales DIAN del tercero (anexo técnico) ─────────────────
         # Tipo de persona: 'Natural' | 'Juridica'. Define si el NIT lleva DV.
         ('clientes', 'tipo_persona', "TEXT DEFAULT 'Natural'"),
