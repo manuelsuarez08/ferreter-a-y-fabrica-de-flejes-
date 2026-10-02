@@ -110,7 +110,8 @@ def _generar(salida):
         'municipio': '11001', 'departamento': '11', 'pais': 'CO',
         'regimen_fiscal': 'Responsable de IVA', 'responsabilidades': ['O-13'],
         'telefono': '3001234567', 'email': 'facturacion@audit.co',
-        'ciiu': '4665', 'ciudad': 'Bogota D.C.',
+        'ciiu': '4665', 'ciudad': 'Bogotá D.C.',
+        'prefijo': 'SETP',
     }
     cliente = {
         'tipo_documento': 'NIT', 'numero_documento': '830114978',

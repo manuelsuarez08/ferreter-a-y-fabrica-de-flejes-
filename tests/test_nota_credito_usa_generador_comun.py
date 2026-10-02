@@ -121,19 +121,44 @@ def test_el_emisor_usa_party_legal_entity(nota):
 
     company = entidad.find(f'{{{NS_CBC}}}CompanyID')
     assert company is not None
-    assert company.get('schemeID') == '4'
+    # Anexo Tecnico V1.9, pagina 44 (FAJ45-FAJ48): el juego de atributos es
+    # agencyID 195, agencyName "CO, DIAN ...", schemeName "31" y schemeID con
+    # el DV. Antes esta prueba exigia schemeID="4", que no aparece ni una vez en
+    # las 753 paginas del Anexo.
+    assert company.get('schemeName') == '31'
+    assert company.get('schemeAgencyID') == '195'
+    assert company.get('schemeAgencyName', '').startswith('CO, DIAN')
+    assert company.get('schemeID')
 
 
 def test_el_emisor_declara_el_ciiu(nota):
     """`cbc:IndustryClassificationCode` es obligatorio.
 
-    Sin dato real no se emite el nodo: declararlo vacío es peor que omitirlo,
-    porque un nodo presente con valor vacío se lee como "configurado y vacío".
+    Anexo Tecnico V1.9, pagina 34 (FAJ04) da el xpath literal:
+
+        /Invoice/cac:AccountingSupplierParty/cac:Party/cbc:IndustryClassificationCode
+
+    Es hijo de `cac:Party`, NO de `cac:PartyLegalEntity`. La busqueda se hace con
+    el xpath del Anexo y no con `.//` a proposito: un `.//` la encontraria igual
+    aunque estuviera en el grupo equivocado, que es el defecto que ya se corrigio
+    una vez.
+
+    Sin dato real no se emite el nodo: declararlo vacio es peor que omitirlo,
+    porque un nodo presente con valor vacio se lee como "configurado y vacio".
     """
-    codigo = nota.find(f'.//{{{NS_CAC}}}PartyLegalEntity'
+    codigo = nota.find(f'.//{{{NS_CAC}}}AccountingSupplierParty'
+                       f'/{{{NS_CAC}}}Party'
                        f'/{{{NS_CBC}}}IndustryClassificationCode')
-    assert codigo is not None, 'el emisor no declara la actividad económica'
+    assert codigo is not None, 'el emisor no declara la actividad economica'
+    assert (codigo.text or '').strip(), \
+        'el nodo CIIU esta presente pero vacio: eso se lee como "configurado y vacio"'
     assert codigo.text == '4665'
+
+    # Y no debe estar DENTRO de la entidad legal: es otro grupo.
+    dentro = nota.find(f'.//{{{NS_CAC}}}PartyLegalEntity'
+                       f'/{{{NS_CBC}}}IndustryClassificationCode')
+    assert dentro is None, \
+        'el CIIU es hijo de cac:Party (FAJ04, pagina 34), no de PartyLegalEntity'
 
 
 def test_el_adquirente_declara_si_es_juridica_o_natural(nota):

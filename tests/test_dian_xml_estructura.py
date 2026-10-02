@@ -270,23 +270,49 @@ def test_4_la_razon_social_va_registro_name(emisor, adquirente):
     assert m.group(1) == 'FERRETERIA PRUEBA SA'
 
 
-def test_4_el_nit_va_en_company_id_con_scheme_4(emisor, adquirente):
-    """El NIT va en CompanyID con @schemeID="4" (CorporateScheme)."""
+def test_4_el_nit_va_en_company_id_con_los_atributos_del_anexo(emisor, adquirente):
+    """El NIT va en `cbc:CompanyID`, dentro de `cac:PartyLegalEntity`.
+
+    Anexo Tecnico V1.9, pagina 44:
+      FAJ45  @schemeAgencyID   = "195"
+      FAJ46  @schemeAgencyName = "CO, DIAN (Dirección de Impuestos y Aduanas Nacionales)"
+      FAJ47  @schemeID         = el digito de verificacion
+      FAJ48  @schemeName       = "31"
+
+    Esta prueba exigia antes `@schemeID="4"` con `@schemeName="CorporateScheme"`.
+    Ninguno de los dos valores aparece en las 753 paginas del Anexo: el codigo
+    correcto es 31 y la agencia es la DIAN. Lo que se compara son los atributos
+    por separado y no el texto entero, porque su ORDEN no lo fija la norma.
+    """
     xml = _xml(emisor, adquirente)
 
     m = re.search(r'<cbc:CompanyID([^>]*)>([^<]*)</cbc:CompanyID>', xml)
     assert m, 'FALTA cbc:CompanyID'
-    assert 'schemeID="4"' in m.group(1)
+    atributos = m.group(1)
+
     assert m.group(2) == NIT
+    assert 'schemeAgencyID="195"' in atributos
+    assert 'schemeAgencyName="CO, DIAN' in atributos
+    assert f'schemeID="{DV}"' in atributos, 'el DV va en @schemeID (FAJ47)'
+    assert 'schemeName="31"' in atributos
+    assert 'CorporateScheme' not in atributos
 
 
-def test_4_el_dv_va_aparte_en_corporate_id(emisor, adquirente):
-    """El DV no se pega al NIT: va en `cbc:CorporateID`."""
+def test_4_el_dv_va_en_el_atributo_y_no_en_corporate_id(emisor, adquirente):
+    """El DV NO va en `cbc:CorporateID`: ese elemento no aparece en el Anexo.
+
+    Este test exigia la existencia de `cbc:CorporateID` con el DV. Se cambio
+    cuando se cotejo el documento: el DV es el @schemeID de `cbc:CompanyID`
+    (FAJ47), y `cbc:CorporateID` es un nodo que la norma no define. Emitirlo es
+    un rechazo por etiqueta desconocida.
+    """
     xml = _xml(emisor, adquirente)
 
-    m = re.search(r'<cbc:CorporateID>([^<]*)</cbc:CorporateID>', xml)
-    assert m, 'FALTA cbc:CorporateID con el digito de verificacion'
-    assert m.group(1) == DV
+    assert 'CorporateID' not in xml, \
+        'cbc:CorporateID no existe en el Anexo: el DV va en @schemeID'
+
+    m = re.search(r'<cbc:CompanyID([^>]*)>', xml)
+    assert m and f'schemeID="{DV}"' in m.group(1)
 
 
 def test_5_el_emisor_declara_su_ciiu(emisor, adquirente):
@@ -380,12 +406,32 @@ def test_7_el_departamento_trae_codigo_y_nombre(emisor, adquirente):
         'FALTA cbc:CountrySubentity (el nombre del departamento)'
 
 
-def test_7_el_municipio_trae_codigo_dane_en_location_id(emisor, adquirente):
+def test_7_el_municipio_trae_codigo_dane_en_cbc_id(emisor, adquirente):
+    """FAJ09 (Anexo V1.9): el codigo del municipio va en `cbc:ID` del Address.
+
+    Este test buscaba `cbc:LocationID`, que no es el nodo que declara el Anexo.
+    UBL si tiene `cbc:LocationID`, pero es un IDENTIFICADOR DE UBICACION
+    ("a location where something is located"), no el codigo DANE del municipio;
+    usarlo confunde dos cosas distintas. El codigo va en `cbc:ID`.
+    """
     xml = _xml(emisor, adquirente)
 
-    m = re.search(r'<cbc:LocationID[^>]*>([^<]*)</cbc:LocationID>', xml)
-    assert m, 'FALTA cbc:LocationID con el codigo DANE del municipio'
+    # Se recorta el bloque de la DIRECCION del cliente y se busca el `cbc:ID`
+    # DENTRO de el. Un `re.search` sobre el XML entero es incorrecto aqui:
+    # devolveria el primer `cbc:ID` del documento, que es el del FACTURANTE y
+    # tiene forma distinta. Ese fue el fallo de esta prueba cuando se escribio.
+    direccion = re.search(
+        r'<cac:Address>.*?</cac:Address>', xml, re.DOTALL)
+    assert direccion, 'no se encontro el bloque cac:Address'
+    bloque = direccion.group(0)
+
+    m = re.search(r'<cbc:ID[^>]*>([^<]*)</cbc:ID>', bloque)
+    assert m, 'FALTA cbc:ID con el codigo DANE del municipio'
     assert m.group(1) == '11001'
+    assert '<cbc:LocationID' not in xml, \
+        'cbc:LocationID no es el codigo del municipio: ese va en cbc:ID'
+    assert '<cbc:CityName>11001' not in xml, \
+        'el codigo del municipio no es el nombre de la ciudad'
 
 
 def test_7_el_ciudad_es_el_nombre_no_el_codigo(emisor, adquirente):
@@ -394,7 +440,7 @@ def test_7_el_ciudad_es_el_nombre_no_el_codigo(emisor, adquirente):
 
     m = re.search(r'<cbc:CityName>([^<]*)</cbc:CityName>', xml)
     assert m, 'FALTA cbc:CityName'
-    assert m.group(1) == 'Bogota D.C.'
+    assert m.group(1) == 'Bogotá D.C.'
     assert m.group(1) != '11001', 'CityName no puede ser el codigo'
 
 

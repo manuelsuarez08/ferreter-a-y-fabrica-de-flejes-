@@ -12,6 +12,7 @@ Este archivo cubre:
 from __future__ import annotations
 
 import os
+import re
 import sqlite3
 import sys
 
@@ -225,10 +226,27 @@ def test_el_proveedor_no_se_confunde_con_el_emisor():
     xml = _texto_documento(documento)
     assert '<sts:SoftwareProvider>DESARROLLO SAS</sts:SoftwareProvider>' in xml
     # El emisor sigue siendo la ferretería, en su propio bloque. Su NIT va en
-    # `cbc:CompanyID` con `@schemeID="4"` (CorporateScheme), dentro de
-    # `cac:PartyLegalEntity`: es la forma en que UBL 2.1 modela una empresa.
+    # `cbc:CompanyID` dentro de `cac:PartyLegalEntity`, con el juego de
+    # atributos que exige el Anexo Tecnico V1.9, pagina 44:
+    #   FAJ45 @schemeAgencyID   = "195"
+    #   FAJ46 @schemeAgencyName = "CO, DIAN (...)"
+    #   FAJ47 @schemeID         = digito de verificacion
+    #   FAJ48 @schemeName       = "31"
     # Ojo: el NIT del proveedor va en SoftwareProviderID, no aquí.
-    assert (f'<cbc:CompanyID schemeID="4">{NIT_EMISOR}</cbc:CompanyID>') in xml
+    #
+    # Se comprueba la forma por ATRIBUTOS y no por texto exacto: el orden de los
+    # atributos no lo fija la norma, y una comparacion de string completa
+    # fallaria en cuanto el serializador cambiara el orden, sin que el
+    # documento fuera incorrecto.
+    m = re.search(r'<cbc:CompanyID([^>]*)>([^<]*)</cbc:CompanyID>', xml)
+    assert m, 'FALTA cbc:CompanyID'
+    atributos = m.group(1)
+    assert m.group(2) == NIT_EMISOR
+    assert 'schemeAgencyID="195"' in atributos
+    assert 'schemeAgencyName="CO, DIAN' in atributos
+    assert 'schemeName="31"' in atributos
+    assert 'CorporateScheme' not in atributos, \
+        '"CorporateScheme" no aparece ni una vez en las 753 paginas del Anexo'
     assert NIT_EMISOR not in documento['empresa_software']
     # Y el NIT del proveedor NO aparece como identificación del emisor.
     assert xml.count(NIT_EMISOR) == 1

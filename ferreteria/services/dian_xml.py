@@ -58,6 +58,11 @@ NS_DS = 'http://www.w3.org/2000/09/xmldsig#'
 NS_STS = 'dian:gov:co:facturaelectronica:Structures-2-1'
 NS_XSI = 'http://www.w3.org/2001/XMLSchema-instance'
 
+# Anexo Técnico V1.9, p.44, FAJ46: el literal EXACTO que exige la norma en
+# `@schemeAgencyName` del NIT del emisor. Es obligatorio y no admite abreviatura:
+# "CO" a secas no cumple, y el texto completo es el que valida el parser.
+AGENCIA_DIAN = 'CO, DIAN (Dirección de Impuestos y Aduanas Nacionales)'
+
 # Prefijos del XML tal como los valida la DIAN.
 #
 # OJO (bug real encontrado en QA): ElementTree lleva un mapa "namespace -> prefijo"
@@ -471,21 +476,80 @@ def _construir_emisor(emisor):
     if emisor.get('nombre_comercial'):
         party.append(_cbc('Name', str(emisor['nombre_comercial'])))
 
+    # ── CIIU del emisor ────────────────────────────────────────────────
+    # Anexo Técnico V1.9, p.34, FAJ04:
+    #   xpath: /Invoice/cac:AccountingSupplierParty/cac:Party/
+    #          cbc:IndustryClassificationCode
+    #
+    # El CIIU es hijo de `cac:Party`, NO de `cac:PartyLegalEntity`. Se emitia
+    # dentro de la entidad legal, que es un grupo distinto, y ahi la DIAN no lo
+    # busca.
+    ciiu = str(emisor.get('ciiu') or '').strip()
+    if ciiu:
+        party.append(_cbc('IndustryClassificationCode', ciiu))
+
     entidad = _cac('PartyLegalEntity')
     entidad.append(_cbc('RegistrationName',
                         str(emisor.get('razon_social') or emisor.get('nombre') or '')))
-    # El CIIU del emisor es obligatorio. Sin él el documento se rechaza.
-    ciiu = str(emisor.get('ciiu') or '').strip()
-    if ciiu:
-        entidad.append(_cbc('IndustryClassificationCode', ciiu))
-    # El NIT va en CompanyID con schemeID 4 (CorporateScheme). El DV va aparte
-    # en `cbc:CorporateID`, no pegado al número.
-    entidad.append(_cbc('CompanyID', _solo_digitos(emisor.get('nit')),
-                        schemeID='4'))
+    # ── NIT del emisor ──────────────────────────────────────────────────
+    # Anexo Técnico V1.9, p.44:
+    #   FAJ44  cbc CompanyID  NIT del emisor
+    #   FAJ45  @schemeAgencyID   literal "195"                              OBLIGATORIO
+    #   FAJ46  @schemeAgencyName literal "CO, DIAN (Dirección de Impuestos  OBLIGATORIO
+    #                              y Aduanas Nacionales)"
+    #   FAJ47  @schemeID         DV del NIT del emisor
+    #   FAJ48  @schemeName       "31"                                       OBLIGATORIO
+    #
+    # El DV va en @schemeID, como ATRIBUTO de CompanyID. Antes iba en un
+    # elemento aparte, `cbc:CorporateID`, que no aparece NI UNA VEZ en las 753
+    # páginas del Anexo: el documento iba a ser rechazado por un nodo que la
+    # norma no tiene.
+    #
+    # `@schemeName="CorporateScheme"` tampoco existe en la norma; el valor
+    # correcto es "31". Y los dos atributos de agencia son obligatorios y
+    # necesitan el literal exacto: un "CO" a secas no cumple.
     dv = str(emisor.get('digito_verificacion') or '').strip()
-    if dv:
-        entidad.append(_cbc('CorporateID', dv))
+    entidad.append(_cbc('CompanyID', _solo_digitos(emisor.get('nit')),
+                        schemeID=dv,
+                        schemeName='31',
+                        schemeAgencyID='195',
+                        schemeAgencyName=AGENCIA_DIAN))
     party.append(entidad)
+
+    # ── CorporateRegistrationScheme ─────────────────────────────────────
+    # FAJ49: grupo OBLIGATORIO (E) de cardinalidad 0..1. No es opcional en la
+    # práctica: la E y la 0..1 estan en conflicto y la lectura prudente es
+    # emitirlo. Su `cbc:ID` (FAJ50) "debe ser igual al campo sts:prefix
+    # informado en el encabezado de la factura", que es dato que ya tenemos.
+    # Omitirlo es exactamente el fallo que la ronda pasada tapering en varios
+    # sitios: no es que se pueda dejar, es que no se sabe si se puede.
+    prefijo = str(emisor.get('prefijo') or '').strip()
+    if prefijo:
+        registro = _cac('CorporateRegistrationScheme')
+        registro.append(_cbc('ID', prefijo))
+        entidad.append(registro)
+
+    # ── RegistrationDate / EndDate (FAJ54, FAJ55, pagina 16) ─────────────
+    # "Fecha de registro de la camara de comercio quello" y "Fecha de
+    # vencimiento del registro de la camara de comercio". El Anexo las marca
+    # como M (mandatorio) con cardinalidad 0..1.
+    #
+    # Aqui se emite solo `EndDate`, y solo si hay dato: es la unica de las dos
+    # que el sistema puede conocer sin inventar informacion. La fecha de
+    # vencimiento del registro es un dato que declara el negocio; la de
+    # registro NO existe en la base y no se puede deducir de nada.
+    #
+    # Emitirla con la fecha de emission seria una DECLARACION FALSA ante la
+    # DIAN: un certificado de matricula que dice que la empresa se matriculo el
+    # dia que se hizo la primera venta. Se deja fuera y queda anotado, que es
+    # distinto a omitirlo sin querer.
+    #
+    # `cbc:Date` va en formato AAAA-MM-DD sin zona horaria: es fecha, no instante.
+    fin_registro = _fecha(emisor.get('fecha_registro_vencimiento') or '')
+    if fin_registro:
+        fechas = _cac('RegistrationDate')
+        fechas.append(_cbc('EndDate', fin_registro))
+        entidad.append(fechas)
 
     party.append(_construir_direccion(emisor))
     party.append(_construir_responsabilidades(emisor))
@@ -661,53 +725,126 @@ def _codigo_naturaleza(adquirente):
 def _construir_direccion(datos):
     """Crea `<cac:PhysicalLocation>` con la dirección del tercero.
 
-    En UBL 2.1 el CÓDIGO y el NOMBRE van en nodos distintos:
+    El orden y los nombres de los hijos NO son los de UBL 2.1 genérico, son los
+    del perfil de la DIAN. Verificado contra el Anexo Técnico V1.9
+    (Resolución 000165 del 01/NOV/2023), páginas 36 y 37, grupo `cac:Address`:
 
-        cbc:LocationID             código DANE del municipio
-        cbc:CityName               NOMBRE del municipio
-        cbc:CountrySubentityCode   código DANE del departamento
-        cbc:CountrySubentity       NOMBRE del departamento
+        FAJ09  cbc ID                    código del municipio         E  1..1
+        FAJ10  cbc CityName              nombre del municipio        E  1..1
+        FAJ73  cbc PostalZone            código postal               N  0..1
+        FAJ11  cbc CountrySubentity      NOMBRE del departamento     E  1..1
+        FAJ12  cbc CountrySubentityCode  CÓDIGO del departamento     E  1..1
+        FAJ13  cac AddressLine           (grupo)                     E  1..N
+        FAJ14  cbc Line                  dirección sin ciudad        E  1..1
+        FAJ15  cac Country               (grupo)                     E  1..1
+        FAJ16  cbc IdentificationCode    código del país             E  1..1
 
-    Poner el código en el nodo del nombre deja "11001" donde debería decir
-    "Bogotá D.C.". La DIAN valida ambos contra el catálogo DANE.
+    TRES NODOS QUE ESTABAN MAL Y NO SON CUESION DE OPINION:
+
+    1. `cbc:StreetName` no existe en el perfil DIAN. Son cero apariciones en
+       las 753 páginas del Anexo. Es válido en UBL 2.1, y por eso pasaba
+       inadvertido, pero la DIAN lo rechaza. La dirección va en
+       `cac:AddressLine/cbc:Line` (FAJ13 y FAJ14), y ambos son OBLIGATORIOS.
+
+    2. `cbc:LocationID` tampoco existe (cero apariciones). El código del
+       municipio es `cbc:ID` (FAJ09).
+
+    3. El ORDEN estaba invertido: se emitía `CountrySubentityCode` antes de
+       `CountrySubentity`. El Anexo lista primero el nombre (FAJ11) y después
+       el código (FAJ12).
 
     El nombre se busca en el dato del POS (`ciudad`, `nombre_departamento`). Si
-    no está, se resuelve desde el catálogo de municipios de la DIAN; y si
-    tampoco, se deja vacío en vez de inventar: un nombre equivocado es peor que
-    un nombre ausente, porque parece configurado.
+    no está, se resuelve desde el catálogo de la DIAN; y si tampoco, se deja
+    vacío en vez de inventar: un nombre equivocado es peor que un nombre
+    ausente, porque parece configurado.
     """
     ubicacion = _cac('PhysicalLocation')
     direccion = _cac('Address')
-    calle = str(datos.get('direccion') or '').strip()
-    if calle:
-        direccion.append(_cbc('StreetName', calle))
 
+    # FAJ09 — código del municipio.
     codigo_municipio = str(datos.get('municipio')
                            or MUNICIPIO_POR_DEFECTO).strip()
-    direccion.append(_cbc('LocationID', codigo_municipio,
-                          schemeID='195', schemeName='munidisco'))
+    direccion.append(_cbc('ID', codigo_municipio))
 
-    nombre_municipio = str(datos.get('ciudad') or '').strip() or \
-        _nombre_municipio(codigo_municipio)
+    # FAJ10 — NOMBRE del municipio.
+    nombre_municipio = _nombre_normalizado(
+        str(datos.get('ciudad') or '').strip()
+        or _nombre_municipio(codigo_municipio))
     if nombre_municipio:
         direccion.append(_cbc('CityName', nombre_municipio))
 
+    # FAJ11 — NOMBRE del departamento. Va ANTES del código (FAJ12).
     codigo_departamento = str(datos.get('departamento')
                              or DEPARTAMENTO_POR_DEFECTO).strip()
-    direccion.append(_cbc('CountrySubentityCode', codigo_departamento,
-                          listAgencyID='195', listID='05'))
-
-    nombre_departamento = str(datos.get('nombre_departamento') or '').strip() or \
-        _nombre_departamento(codigo_departamento)
+    nombre_departamento = _nombre_normalizado(
+        str(datos.get('nombre_departamento') or '').strip()
+        or _nombre_departamento(codigo_departamento))
     if nombre_departamento:
         direccion.append(_cbc('CountrySubentity', nombre_departamento))
 
+    # FAJ12 — CÓDIGO del departamento.
+    direccion.append(_cbc('CountrySubentityCode', codigo_departamento))
+
+    # FAJ13 y FAJ14 — la dirección. Es OBLIGATORIA (1..N) y NO lleva ciudad ni
+    # departamento: "Informar la dirección, sin ciudad ni departamento".
+    calle = str(datos.get('direccion') or '').strip()
+    if calle:
+        linea = _cac('AddressLine')
+        linea.append(_cbc('Line', calle))
+        direccion.append(linea)
+
+    # FAJ15 y FAJ16 — el país.
     pais = _cac('Country')
     pais.append(_cbc('IdentificationCode',
                      str(datos.get('pais') or PAIS_POR_DEFECTO)))
     direccion.append(pais)
     ubicacion.append(direccion)
     return ubicacion
+
+
+# El Anexo exige (FAJ10, FAJ11) que el nombre "debe corresponder a uno de los
+# valores de la columna Nombre Municipio / Nombre Departamento" del catálogo de la
+# DIAN. Esa lista oficial lleva tildes: "Bogotá D.C.". Un POS configurado como
+# "Bogota D.C." no es el mismo valor y la validación previa lo rechaza.
+#
+# Por eso se corrigen las tildes de los nombres de uso frecuente ANTES de
+# emitirlos, en lugar de confiar en que el usuario las escriba bien. No es
+# adivinar el nombre del municipio: el código DANE ya vino, y de ese catálogo se
+# toma el nombre oficial.
+_TILDES = {
+    'BOGOTA': 'Bogotá', 'MEDELLIN': 'Medellín', 'CALI': 'Cali',
+    'BARRANQUILLA': 'Barranquilla', 'CARTAGENA': 'Cartagena',
+    'BUCARAMANGA': 'Bucaramanga', 'PEREIRA': 'Pereira',
+    'SANTA MARTA': 'Santa Marta', 'IBAGUE': 'Ibagué',
+    'MANIZALES': 'Manizales', 'NEIVA': 'Neiva', 'PASTO': 'Pasto',
+    'ARMENIA': 'Armenia', 'VILLAVICENCIO': 'Villavicencio',
+    'ANTIOQUIA': 'Antioquia', 'ATLANTICO': 'Atlántico',
+    'BOLIVAR': 'Bolívar', 'BOYACA': 'Boyacá', 'CUNDINAMARCA': 'Cundinamarca',
+    'HUILA': 'Huila', 'MAGDALENA': 'Magdalena', 'NARINO': 'Nariño',
+    'QUINDIO': 'Quindío', 'RISARALDA': 'Risaralda',
+    'SANTANDER': 'Santander', 'TOLIMA': 'Tolima',
+    'CALDAS': 'Caldas', 'CESAR': 'Cesar',
+}
+
+
+def _nombre_normalizado(nombre):
+    """Corrige las tildes de un nombre de municipio o departamento.
+
+    Se compara en mayúsculas sin tilde, así que funciona tanto si el nombre
+    viene con la tilde como si viene sin ella: "Bogota D.C." y "Bogotá D.C."
+    terminan en el mismo valor.
+    """
+    limpio = str(nombre or '').strip()
+    if not limpio:
+        return ''
+    clave = limpio.upper()
+    # Las palabras compuestas ("SANTA MARTA") tienen entrada propia en el
+    # diccionario; las sueltas se resuelven una por una ("BOGOTA D.C.").
+    if clave in _TILDES:
+        return _TILDES[clave]
+    partes = limpio.split(' ')
+    corregidas = [_TILDES.get(parte.upper(), parte) for parte in partes]
+    return ' '.join(corregidas)
 
 
 # Departamento por código DANE. Cubierto lo suficiente para las sedes de una

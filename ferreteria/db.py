@@ -594,6 +594,14 @@ def _aplicar_migraciones(cursor):
         # `codigo_municipio` (que ya existe) es el DANE y va en `cbc:LocationID`.
         ('dian_ciiu', "TEXT DEFAULT ''"),
         ('dian_ciudad', "TEXT DEFAULT ''"),
+        # Vencimiento del registro en camara de comercio. Va al
+        # `cac:PartyLegalEntity/cac:RegistrationDate/cbc:EndDate` (Anexo
+        # Tecnico V1.9, pagina 16, FAJ55).
+        #
+        # Es un dato que declara el negocio. La fecha de REGISTRO (FAJ54) no se
+        # guarda: no existe en la base y no se puede deducir de nada, asi que
+        # emitirla equivaldria a declarar una matricula falsa ante la DIAN.
+        ('fecha_registro_vencimiento', "TEXT DEFAULT ''"),
         # ── Identidad del PROVEEDOR de software (el desarrollador, no la
         # ferretería). El anexo técnico exige identificarla en el nodo
         # SoftwareProvider/SoftwareProviderID del XML. Antes esos datos eran

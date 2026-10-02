@@ -171,7 +171,16 @@ def _leer_emisor(cursor):
                -- El CIIU del emisor y el NOMBRE del municipio son obligatorios
                -- en el XML. Se leen si existen; en una base vieja la migracion
                -- de columnas los agrega vacios y el documento se completa luego.
-               COALESCE(dian_ciiu, ''), COALESCE(dian_ciudad, '')
+               COALESCE(dian_ciiu, ''), COALESCE(dian_ciudad, ''),
+                -- Vencimiento del registro en camara de comercio. Va al
+                -- `cac:RegistrationDate/cbc:EndDate` del emisor (Anexo Tecnico
+                -- V1.9, pagina 16, FAJ55). Vacio = no se emite, que es distinto
+                -- de emitirlo con una fecha inventada.
+                COALESCE(fecha_registro_vencimiento, ''),
+                -- El prefijo de la resolucion va al `CorporateRegistrationScheme`
+                -- del emisor (Anexo Tecnico V1.9, pagina 15). Sin el, el
+                -- documento no declara el prefijo que le autorizo la DIAN.
+                COALESCE(dian_prefijo, '')
         FROM configuracion WHERE id = 1
         """
     ).fetchone()
@@ -179,7 +188,7 @@ def _leer_emisor(cursor):
         raise ErrorEmision('No hay datos de configuración del negocio')
 
     nombre, nit, dv, direccion, telefono, email, municipio, departamento, \
-        regimen, responsabilidades, ciiu, ciudad = fila
+        regimen, responsabilidades, ciiu, ciudad, prefijo, fin_registro = fila
 
     if not dian_pos.solo_digitos(nit):
         raise ErrorEmision(
@@ -200,6 +209,8 @@ def _leer_emisor(cursor):
         'direccion': str(direccion or '').strip(),
         'ciiu': str(ciiu or '').strip(),
         'ciudad': str(ciudad or '').strip(),
+        'prefijo': str(prefijo or '').strip(),
+        'fecha_registro_vencimiento': str(fin_registro or '').strip(),
         'telefono': str(telefono or '').strip(),
         'email': str(email or '').strip(),
         'municipio': str(municipio or '').strip() or dian_pos.MUNICIPIO_POR_DEFECTO,

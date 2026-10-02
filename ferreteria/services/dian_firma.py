@@ -1,4 +1,4 @@
-"""Firma digital XAdES-EPES del Documento Equivalente Electrónico POS.
+﻿"""Firma digital XAdES-EPES del Documento Equivalente Electrónico POS.
 
 Implementa la firma que la DIAN exige (Anexo Técnico 1.0, sección de firma
 electrónica) sobre el certificado de firma electrónica del facturador:
@@ -314,127 +314,6 @@ def _certificado_b64(certificado):
     return base64.b64encode(der).decode('ascii')
 
 
-def _canonizar(elemento):
-    """Serializa un elemento en canonicalización XML (c14n) real.
-
-    ESTA FUNCIÓN ESTABA ROTA Y PRODUCEÍA FIRMAS INVÁLIDAS.
-    -----------------------------------------------
-
-    ADVERTENCIA: ESTA FUNCIÓN NO LA USA NADIE.
-    Los digests y la firma se calculan en `_firmar_documento_completo`, que hace
-    el c14n con `lxml` directamente sobre el documento ya montado. `_canonizar`
-    se quedó sin llamadores cuando se corrigió el defecto de c14n: se arregló la
-    ruta que sí se usaba y esta copia quedó atrás.
-
-    Se conserva porque explica el defecto con detalle y ese detalle ya se
-    escribió en la ruta real. Si alguien llegara a este archivo buscando "la
-    canonicalización que usa la firma", NO es esta: es la de
-    `_firmar_documento_completo`. Borrarla es una decisión aparte.
-
-    Antes hacía `ET.tostring(elemento)`, y se documentaba como "suficiente
-    para el subconjunto que produce este proyecto". Medido contra `lxml`
-    (que implementa c14n de verdad), NO lo era:
-
-        proyecto  : <ns0:SignedInfo xmlns:ns0="...xmldsig#"><ns0:Reference ...>
-        DIAN      : <ds:SignedInfo  xmlns:ds="...xmldsig#"><ds:Reference ...>
-
-    El prefijo `ns0` es el que ElementTree genera cuando no hay registro de
-    prefijos para ese namespace al serializar un subárbol. La DIAN calcula el
-    digest sobre `<ds:...>`. Mismo contenido, bytes distintos, digest distinto:
-    la firma NO verificaba con la clave pública del certificado. El documento
-    completo era rechazado con "firma no válida".
-
-    Tres cosas más que solo hace c14n real y `ET.tostring` no:
-
-    1. Los prefijos de namespace que estaban declarados en los ANCESTROS se
-       vuelven a declarar en el nodo que se canonicaliza. Sin esto, el digest de
-       un subárbol depende de dónde cuelgue en el documento.
-    2. Los elementos vacíos se cierran como `<a></a>`, no `<a />`. Otra forma
-       de que los bytes no coincidan.
-    3. El orden de atributos y de declaraciones es el canónico.
-
-    `ALG_C14N` declara c14n INCLUSIVO, que es el que usan los validadores de la
-    DIAN: se conservan TODOS los namespaces declarados en la cadena de ancestros
-    (los "visibles"), no solo los que usa el nodo.
-
-    `lxml` es una dependencia real (`requirements.txt`), no un extra de pruebas:
-    sin canonicalización correcta no hay firma válida.
-    """
-    from lxml import etree as _etree
-
-    conversion = _convertir_a_lxml(elemento)
-    return _etree.tostring(conversion, method='c14n', exclusive=False,
-                           with_comments=False)
-
-
-def _convertir_a_lxml(elemento, prefijos=None):
-    """Reconstruye un `ElementTree.Element` como árbol de lxml con sus namespaces.
-
-    Al aislar un subárbol hay que recrear los `xmlns` que tenía de sus
-    ancestros: si no, el nodo queda con prefijo `ns0` y el digest depende de
-    dónde estaba colgado, no de qué contiene.
-
-    `prefijos` se arrastra en la recursion para que hereden el mismo mapa los
-    descendientes, que es lo que hace la canonicalizacion en el mundo real.
-    """
-    from lxml import etree as _etree
-
-    if prefijos is None:
-        prefijos = _prefijos_del_documento(elemento)
-
-    conversion = _etree.Element(elemento.tag, nsmap=prefijos or None)
-    for clave, valor in elemento.attrib.items():
-        conversion.set(clave, valor)
-    conversion.text = elemento.text
-    for hijo in elemento:
-        conversion.append(_convertir_a_lxml(hijo, prefijos))
-        conversion[-1].tail = hijo.tail
-    return conversion
-
-
-def _prefijos_del_documento(elemento):
-    """Prefijos de namespace declarados en la cadena que sube desde `elemento`.
-
-    ElementTree no expone los ancestros de un `Element`, asi que se sube por la
-    estructura del arbol solo cuando el elemento conserva su padre (lxml si lo
-    tiene; ElementTree no). Cuando no hay padre — que es el caso de los subarboles
-    que aqui se canonicalizan — se usan los prefijos REGISTRADOS en el modulo,
-    que es la fuente de verdad de este proyecto: `register_namespace` fija
-    'ds', 'xades', 'sts', 'ext'...
-    """
-    try:
-        ancestros = list(elemento.iterancestors())
-    except AttributeError:
-        ancestros = []
-
-    mapa = {}
-    for ancestro in ancestros:
-        for prefijo, uri in ancestro.nsmap.items():
-            mapa.setdefault(uri, prefijo or '')
-    if not mapa:
-        # Sin ancestros disponibles se usan los prefijos que este modulo
-        # REGISTRA. Es la unica fuente de verdad aqui dentro: los prefijos que
-        # el proyecto escribe en el documento salen de estos `register_namespace`,
-        # no de una convencion de ElementTree.
-        registrados = {
-            NS_DS: 'ds',
-            NS_XADES: 'xades',
-            NS_CBC: 'cbc',
-            NS_CAC: 'cac',
-            NS_STS: 'sts',
-            NS_EXT: 'ext',
-            NS_INVOICE: '',
-        }
-        for uri, prefijo in registrados.items():
-            mapa.setdefault(uri, prefijo)
-
-    nsmap = {prefijo: uri for uri, prefijo in mapa.items() if prefijo}
-    # El namespace por defecto (sin prefijo) se pasa como None.
-    for uri, prefijo in mapa.items():
-        if not prefijo:
-            nsmap[None] = uri
-    return nsmap
-
 
 def firmar_documento(raiz, certificado, id_documento=None, momento=None,
                      politica_url=POLITICA_URL, politica_digest=POLITICA_DIGEST):
@@ -654,6 +533,32 @@ def _firmar_documento_completo(raiz, digest_nodo, digest_prop, firma_value,
       3. firma de `SignedInfo` — con el documento ya en su estado FINAL.
     Si se firmara antes de escribir los digests, se estarían firmando bytes que
     después cambian, y la firma no validaría.
+
+    EL c14n DE ESTA FUNCIÓN ES EL QUE USA LA FIRMA. No hay otro.
+    --------------------------------------------------------------------
+    Aquí hubo antes un `_canonizar()` propio que hacía `ET.tostring(elemento)` y
+    documentaba eso como "suficiente". NO lo era, y producía firmas que la DIAN
+    rechazaba:
+
+        proyecto  : <ns0:SignedInfo xmlns:ns0="...xmldsig#"><ns0:Reference ...>
+        DIAN      : <ds:SignedInfo  xmlns:ds="...xmldsig#"><ds:Reference ...>
+
+    El prefijo `ns0` es el que ElementTree genera al serializar un subárbol
+    aislado: ignora los `register_namespace` del módulo. Mismo contenido, bytes
+    distintos, digest distinto. La firma no verificaba con la clave pública.
+
+    Lo que hace esta función y `ET.tostring` no puede:
+      1. canonicaliza con `lxml`, que implementa C14N de verdad;
+      2. canonicaliza el documento con sus ancestros colgando, así que el nodo
+         ve los `xmlns` que hereda (un subárbol aislado no los ve);
+      3. cierra los vacíos como `<a></a>`, no `<a />`;
+      4. ordena atributos y declaraciones de forma canónica.
+
+    `_canonizar` se eliminó. No la llamaba nadie, y una copia vieja de la
+    canonicalización con 40 líneas de docstring invita a pensar que es la real.
+    Si algún día vuelve a aparecer una segunda forma de canonicalizar, la
+    prueba que lo detecta es `tests/test_ci_verificadores.py`: sabotea esta
+    ruta y exige que el verificador externo encuentre la discrepancia.
     """
     from cryptography.hazmat.primitives import hashes
     from cryptography.hazmat.primitives.asymmetric import padding

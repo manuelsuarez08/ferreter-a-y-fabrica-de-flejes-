@@ -238,13 +238,21 @@ def test_emisor_con_scheme_agency_dian():
     Antes iba en `cbc:ID` dentro de `cac:PartyIdentification`, que no es la forma
     en que UBL 2.1 modela una empresa. `schemeAgencyID="195"` (DIAN) lo lleva el
     identificador del ADQUIRENTE, no el del emisor.
+
+    El juego de atributos es el del Anexo Tecnico V1.9, pagina 44 (FAJ45-FAJ48):
+    agencyID 195, agencyName "CO, DIAN ...", schemeName "31" y schemeID con el
+    digito de verificacion. Esta prueba exigia `schemeID="4"` con
+    CorporateScheme: ninguno de los dos valores existe en las 753 paginas.
     """
     raiz = _factura()
     nodo = raiz.find(
         f'.//{{{NS_CAC}}}AccountingSupplierParty//{{{NS_CBC}}}CompanyID')
     assert nodo is not None, 'falta cbc:CompanyID en el emisor'
-    assert nodo.get('schemeID') == '4', 'el NIT va con schemeID CorporateScheme'
     assert nodo.text == '900187391'
+    assert nodo.get('schemeID') == '2', 'FAJ47: el @schemeID es el DV'
+    assert nodo.get('schemeName') == '31', 'FAJ48: literal "31"'
+    assert nodo.get('schemeAgencyID') == '195', 'FAJ45'
+    assert nodo.get('schemeAgencyName', '').startswith('CO, DIAN'), 'FAJ46'
 
     # La razón social va en RegistrationName dentro de PartyLegalEntity.
     legal = raiz.find(
@@ -256,18 +264,28 @@ def test_emisor_con_scheme_agency_dian():
 def test_adquirente_con_scheme_agency_dian():
     raiz = _factura()
     nodo = raiz.find(
-        f'.//{{{NS_CAC}}}AccountingCustomerParty//{{{NS_CBC}}}ID')
+        f'.//{{{NS_CAC}}}AccountingCustomerParty'
+        f'/{{{NS_CAC}}}Party/{{{NS_CAC}}}PartyLegalEntity/{{{NS_CBC}}}ID')
     assert nodo is not None
     assert nodo.get('schemeAgencyID') == '195'
     assert nodo.text == '830114978'
 
 
 def test_cliente_generico_si_no_hay_adquirente():
-    """Sin datos del comprador se usa el consumidor final (NIT 222222222222)."""
+    """Sin datos del comprador se usa el consumidor final (NIT 222222222222).
+
+    El xpath es EXPLICITO y no `.//cbc:ID`. Con un `.//` la busqueda devuelve el
+    PRIMERO del documento, que es el `cbc:ID` de la DIRECCION (el codigo DANE
+    del municipio) y no el del consumidor final. Las dos cosas son `cbc:ID` y las
+    dos existen, asi que el aserto pasaba por el nodo equivocado y el defecto
+    real quedaba invisible.
+    """
     raiz = dian_xml.construir_invoice(
         _documento(), _emisor(), {}, _items(), _totales())
     nodo = raiz.find(
-        f'.//{{{NS_CAC}}}AccountingCustomerParty//{{{NS_CBC}}}ID')
+        f'.//{{{NS_CAC}}}AccountingCustomerParty'
+        f'/{{{NS_CAC}}}Party/{{{NS_CAC}}}PartyLegalEntity/{{{NS_CBC}}}ID')
+    assert nodo is not None
     assert nodo.text == '222222222222'
 
 
