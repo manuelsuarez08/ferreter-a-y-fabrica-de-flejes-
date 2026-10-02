@@ -126,3 +126,4 @@ _auditoria_xml/
 docs/anexo_tecnico_v1_9.txt
 # El PDF del Anexo no se versiona: son 11 MB y es material de la DIAN,
 # no fuente del proyecto.
+_pruebas/
