@@ -262,12 +262,74 @@ def test_el_motivo_va_en_discrepancy_response(nota):
     assert respuesta.find(f'{{{NS_CBC}}}ResponseCode').text == '1'
 
 
-def test_los_importes_de_la_nota_van_en_negativo(nota):
-    """La nota RESTA del documento original: `NegativeValue="true"`."""
+def test_los_importes_de_la_nota_van_en_positivo(nota):
+    """Los montos de UBL 2.1 son MAGNITUDES: van positivos.
+
+    CORRECCIÓN: se ponía `NegativeValue="true"` en los cuatro totales y una prueba
+    lo fijaba. UBL 2.1 declara el signo solo en `PayableRoundingAmount` ("the
+    rounding amount (positive or negative)"), y no existe en el anexo figura para
+    una nota crédito con importes negativos: la DIAN lo rechaza por aritmética.
+
+    Que la nota reste lo dicen el `InvoiceTypeCode` '01', el concepto de
+    corrección y la referencia al documento que se corrige, no un signo.
+    """
     monetary = nota.find(f'{{{NS_CAC}}}LegalMonetaryTotal')
-    for monto in monetary:
-        assert monto.get('NegativeValue') == 'true', \
-            f'{monto.tag.split("}")[1]} no va en negativo'
+    montos = list(monetary)
+    assert montos, 'la nota no tiene totales'
+
+    for monto in montos:
+        etiqueta = monto.tag.split('}')[-1]
+        assert monto.get('NegativeValue') is None, (
+            f'{etiqueta} lleva NegativeValue; en UBL 2.1 el único monto que '
+            'admite negativo es PayableRoundingAmount')
+        # Y el valor debe ser un número, no un texto con signo pegado.
+        assert float(monto.text) >= 0, f'{etiqueta} es negativo: {monto.text}'
+
+
+def test_el_rounding_si_podria_ir_en_negativo(nota):
+    """La EXCEPCIÓN de la norma: `PayableRoundingAmount` sí admite signo.
+
+    No se usa en este documento, pero queda fijada para que nadie "corrija" los
+    importes de la nota por analogía con este campo.
+    """
+    import xml.etree.ElementTree as ET
+
+    from ferreteria.services import dian_xml
+
+    documento = {
+        'numero': 'SETP-NC-9', 'fecha': '2026-10-01', 'hora': '10:30:00',
+        'cuide': 'f' * 96, 'tipo_ambiente': '2',
+        'cuide_referido': 'e' * 96, 'fecha_referido': '2026-09-30',
+        'motivo_codigo': '1',
+    }
+    emisor = {'nit': '900187391', 'digito_verificacion': '2',
+              'razon_social': 'PRUEBA SAS', 'direccion': 'CALLE 1',
+              'municipio': '11001', 'departamento': '11', 'pais': 'CO',
+              'regimen_fiscal': 'Responsable de IVA',
+              'responsabilidades': ['O-13']}
+    total = {'line_extension_amount': 100000.0,
+             'tax_exclusive_amount': 100000.0,
+             'tax_inclusive_amount': 119000.0,
+             'payable_amount': 119000.0, 'iva_valor': 19000.0, 'inc_valor': 0,
+             'impuestos_iva': [{'tasa': 19.0, 'base': 100000.0,
+                                'valor': 19000.0}],
+             'impuestos_inc': []}
+    raiz = dian_notas.construir_nota_credito(
+        documento, emisor,
+        {'numero_documento': '830114978', 'nombre': 'CLIENTE',
+         'direccion': 'AV 6', 'municipio': '11001', 'departamento': '11',
+         'pais': 'CO'},
+        [{'descripcion': 'X', 'cantidad': 1.0, 'precio_unitario': 100000.0,
+          'unidad': '94', 'descuento': 0, 'iva_tasa': 19.0, 'inc_tasa': 0,
+          'base': 100000.0}],
+        total, {})
+
+    monetary = raiz.find(f'{{{NS_CAC}}}LegalMonetaryTotal')
+    etiquetas = [m.tag.split('}')[-1] for m in monetary]
+
+    # El campo ni siquiera se emite: declararlo vacío sería peor que omitirlo.
+    assert 'PayableRoundingAmount' not in etiquetas
+    assert all(m.get('NegativeValue') is None for m in monetary)
 
 
 def test_las_lineas_no_llevan_el_signo_de_negativo(nota):

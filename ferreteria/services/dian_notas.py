@@ -215,12 +215,24 @@ def construir_nota_credito(documento, emisor, adquirente, items, totales,
     if documento.get('motivo_codigo'):
         invoice.append(_construir_discrepancia(documento))
 
-    # 3. Importes en negativo: la nota RESTA del documento original. En UBL el
-    #    atributo es `NegativeValue="true"` en cada monto, no un signo pegado.
-    monetary = invoice.find(f'{{{dian_xml.NS_CAC}}}LegalMonetaryTotal')
-    if monetary is not None:
-        for monto in monetary:
-            monto.set('NegativeValue', 'true')
+    # 3. Los importes NO llevan `NegativeValue`.
+    #
+    # CORRECCIÓN: antes se ponía `NegativeValue="true"` en los cuatro montos de
+    # `LegalMonetaryTotal`. Eso viola la asignación de UBL 2.1, donde el único
+    # monto que se declara positivo O NEGATIVO es `PayableRoundingAmount`
+    # ("the rounding amount (positive or negative) added to produce the line
+    # extension amount"). Los demás son magnitudes: van positivos siempre.
+    #
+    # El error era plausible porque `NegativeValue` EXISTE en `cbc:Amount` y se
+    # ve como la forma "correcta" de restar. Pero un documento con todos sus
+    # totales en negativo es un documento que la DIAN rechaza por aritmética: no
+    # hay figura en el anexo para una nota crédito con importes negativos.
+    #
+    # La resta la expresa el TIPO de documento, no el signo:
+    #   - `cbc:InvoiceTypeCode` = '01' (nota crédito que corrige a un documento);
+    #   - `cac:DiscrepancyResponse/cbc:ResponseCode`, el concepto de corrección;
+    #   - `cac:AdditionalDocumentReference` al documento que se corrige.
+    # Eso es lo que le dice a la DIAN "esto revierte, no esto vende".
 
     return invoice
 
@@ -379,8 +391,12 @@ def _subtotal_impuesto(tipo, nombre, base, valor, tarifa):
 
 
 def _construir_linea(indice, item):
-    """`<cac:InvoiceLine>` de la nota. El importe va POSITIVO; lo que lo hace
-    resta es el `NegativeValue` del total y el tipo de documento '01'."""
+    """`<cac:InvoiceLine>` de la nota. El importe va POSITIVO.
+
+    Que la nota reste del documento original lo dicen el tipo de documento
+    (`InvoiceTypeCode` '01'), el concepto de corrección y la referencia, no un
+    signo: los montos de UBL 2.1 son magnitudes.
+    """
     cantidad = float(item.get('cantidad') or 0)
     precio = float(item.get('precio_unitario') or 0)
     base = float(item.get('base') or 0) or (redondear(cantidad * precio))

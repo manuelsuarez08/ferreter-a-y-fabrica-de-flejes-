@@ -123,15 +123,23 @@ def test_la_nota_credito_es_de_tipo_correccion():
     assert codigo is not None and codigo.text == '01'
 
 
-def test_el_total_de_la_nota_va_en_negativo():
-    """La nota RESTA del documento original: `NegativeValue` lo declara."""
+def test_el_total_de_la_nota_va_en_positivo():
+    """El total NO lleva `NegativeValue`: es una magnitud, no un saldo.
+
+    CORRECCIÓN: esta prueba exigía `NegativeValue="true"` y con ella se fijó el
+    error. UBL 2.1 solo admite signo en `PayableRoundingAmount`; el resto de los
+    montos son magnitudes. Que la nota reste lo dice el `InvoiceTypeCode` '01',
+    el concepto de corrección y la referencia al documento corregido.
+    """
     raiz = _nota()
     payable = raiz.find(
         f'{{{NS_CAC}}}LegalMonetaryTotal/{{{NS_CBC}}}PayableAmount')
     assert payable is not None
-    assert payable.get('NegativeValue') == 'true', (
-        'el total de la nota crédito debe llevar NegativeValue=true'
+    assert payable.get('NegativeValue') is None, (
+        'PayableAmount no admite NegativeValue en UBL 2.1; el signo lo lleva '
+        'la resta de los conceptos, y solo PayableRoundingAmount puede ser negativo'
     )
+    assert float(payable.text) > 0
 
 
 def test_los_totales_de_la_nota_van_en_legal_monetary_total():

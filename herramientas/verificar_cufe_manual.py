@@ -165,11 +165,18 @@ def main():
                          NS) is None:
                 problemas.append('no declara el concepto de corrección')
             montos = raiz.findall('.//cac:LegalMonetaryTotal/*', NS)
-            if [m.get('NegativeValue') for m in montos] != ['true'] * len(montos):
-                problemas.append('los importes no van en negativo')
+            # UBL 2.1: los montos son MAGNITUDES. El unico que admite signo es
+            # PayableRoundingAmount. La nota resta por su TIPO (InvoiceTypeCode
+            # '01'), su concepto de correccion y su referencia, no por un signo.
+            if any(m.get('NegativeValue') for m in montos):
+                problemas.append('un monto lleva NegativeValue; UBL 2.1 solo '
+                                 'lo permite en PayableRoundingAmount')
+            elif any(float(m.text) < 0 for m in montos):
+                problemas.append('un monto es negativo; UBL 2.1 los declara '
+                                 'positivos')
 
-            print('   nota crédito: '
-                  + ('referencia + concepto + importes negativo OK'
+            print('   nota credito: '
+                  + ('referencia + concepto + importes positivos OK'
                      if not problemas else 'FALTA -> ' + '; '.join(problemas)))
             fallos += len(problemas)
 
