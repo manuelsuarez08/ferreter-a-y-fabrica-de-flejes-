@@ -238,3 +238,103 @@ def test_la_hora_de_firma_es_utc(firmados):
     assert hora is not None, 'falta xades:SigningTime'
     assert hora.text.endswith('Z'), hora.text
     assert len(hora.text) == 20, f'formato inesperado: {hora.text}'
+
+# ═══════════════════════════════════════════
+# 5. La estructura de ds:Signature contra el XSD
+# ═══════════════════════════════════════════
+
+@pytest.mark.parametrize('nombre', ['invoice_firmado.xml',
+                                    'creditnote_firmado.xml',
+                                    'evento_firmado.xml'])
+def test_la_estructura_de_la_firma_cumple_el_xsd(firmados, nombre):
+    """Que la firma verifique NO basta: el bloque debe ser válido como estructura.
+
+    `ds:Signature` es una SECUENCIA. El XSD declara:
+    SignedInfo, SignatureValue, KeyInfo?, Object*
+
+    El proyecto generaba `SignedInfo -> Object -> SignatureValue -> KeyInfo`: el
+    documento no validaba contra el XSD y un validador estricto lo rechazaba
+    ANTES de mirar la rúbrica. La firma de ese documento sí verificaba, que es
+    justo por lo que hacía falta una comprobación aparte.
+    """
+    validador = _carg('validar_estructura_firma')
+    problemas = validador.revisar_estructura((firmados / nombre).read_bytes())
+
+    assert problemas == [], (
+        f'{nombre} no cumple el XSD de XMLDSig: {problemas}')
+
+
+def test_el_orden_de_los_hijos_es_el_del_xsd(firmados):
+    """El orden exacto, escrito a mano para que el fallo sea evidente."""
+    from lxml import etree
+
+    NS = {'ds': 'http://www.w3.org/2000/09/xmldsig#'}
+    arbol = etree.fromstring((firmados / 'invoice_firmado.xml').read_bytes())
+    firma = arbol.find('.//ds:Signature', NS)
+    hijos = [h.tag.split('}')[-1] for h in firma]
+
+    assert hijos == ['SignedInfo', 'SignatureValue', 'KeyInfo', 'Object'], \
+        f'orden inválido: {hijos}'
+
+
+def test_el_issuer_serial_tiene_la_forma_que_exige_el_xsd(firmados):
+    """`ds:IssuerSerial` es un `X509IssuerSerialType`: nombre y número de serie.
+
+    Antes iba ahí un base64 del emisor como texto suelto, que no valida y no
+    permite a la DIAN resolver la cadena de confianza del firmante.
+    """
+    from lxml import etree
+
+    NS = {'ds': 'http://www.w3.org/2000/09/xmldsig#'}
+    arbol = etree.fromstring((firmados / 'invoice_firmado.xml').read_bytes())
+
+    serial = arbol.find('.//ds:IssuerSerial', NS)
+    assert serial is not None, 'falta ds:IssuerSerial'
+
+    hijos = [h.tag.split('}')[-1] for h in serial]
+    assert hijos == ['X509IssuerName', 'X509SerialNumber'], hijos
+
+    numero = serial.find('ds:X509SerialNumber', NS).text
+    assert numero.isdigit(), f'el número de serie debe ser entero: {numero}'
+
+    nombre = serial.find('ds:X509IssuerName', NS).text
+    assert nombre, 'el nombre del emisor no puede ir vacío'
+
+
+def test_el_numero_de_serie_corresponde_al_certificado(firmados):
+    """No basta con que sea un entero: tiene que ser el del certificado."""
+    import base64
+    from cryptography import x509
+    from lxml import etree
+
+    NS = {'ds': 'http://www.w3.org/2000/09/xmldsig#'}
+    arbol = etree.fromstring((firmados / 'invoice_firmado.xml').read_bytes())
+
+    cert = x509.load_der_x509_certificate(base64.b64decode(
+        arbol.find('.//ds:X509Certificate', NS).text))
+    declarado = arbol.find('.//ds:X509SerialNumber', NS).text
+
+    assert int(declarado) == cert.serial_number
+
+
+def test_la_reference_al_documento_declara_el_transform_enveloped(firmados):
+    """Es lo que dice que la firma cubre el documento SIN el bloque de firma.
+
+    Sin ese transform el digest incluiría la propia firma y nunca podría
+    cuadrar; el proyecto sí lo declaraba y esta prueba lo fija para que no se
+    pierda al tocar el bloque de firma.
+    """
+    from lxml import etree
+
+    NS = {'ds': 'http://www.w3.org/2000/09/xmldsig#'}
+    arbol = etree.fromstring((firmados / 'invoice_firmado.xml').read_bytes())
+    doc_id = arbol.get('ID')
+
+    ref = [r for r in arbol.findall('.//ds:Reference', NS)
+           if r.get('URI') == f'#{doc_id}']
+    assert ref, f'no hay Reference que apunte a #{doc_id}'
+
+    transform = ref[0].find('ds:Transforms/ds:Transform', NS)
+    assert transform is not None, 'falta el transform'
+    assert transform.get('Algorithm') == \
+        'http://www.w3.org/2000/09/xmldsig#enveloped-signature'

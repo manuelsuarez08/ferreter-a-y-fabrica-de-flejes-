@@ -504,7 +504,21 @@ def firmar_documento(raiz, certificado, id_documento=None, momento=None,
     digest_prop = ET.SubElement(referencia_prop, f'{{{NS_DS}}}DigestValue')
 
     # ── 3. Bloque XAdES con las propiedades firmadas ─────────────────────────
-    objeto = ET.SubElement(firma, f'{{{NS_DS}}}Object')
+    #
+    # ORDEN QUE EXIGE EL XSD: `ds:Signature` es una secuencia, y el orden de sus
+    # hijos NO es libre. El schema (`SignatureType`) declara:
+    #
+    #     SignedInfo, SignatureValue, KeyInfo?, Object*
+    #
+    # Este bloque se construye DESACOPLADO (`ET.Element`, no `SubElement`) y se
+    # añade a `firma` al final, después de `KeyInfo`. Antes se creaba con
+    # `SubElement` al principio, lo que dejaba el orden real
+    # SignedInfo -> Object -> SignatureValue -> KeyInfo: el documento no validaba
+    # contra el XSD y un validador estricto lo rechazaba ANTES de mirar la firma.
+    #
+    # Un validador que solo comprueba la rúbrica criptográfica no ve este fallo,
+    # que es exactamente por lo que hacía falta mirar el XSD y no solo la firma.
+    objeto = ET.Element(f'{{{NS_DS}}}Object')
     cualificadas = ET.SubElement(objeto, f'{{{NS_XADES}}}QualifyingProperties',
                                  Target=f'#{id_documento}')
     firmadas = ET.SubElement(cualificadas, f'{{{NS_XADES}}}SignedProperties',
@@ -528,11 +542,20 @@ def firmar_documento(raiz, certificado, id_documento=None, momento=None,
                        fromlist=['Encoding']).Encoding.DER
         )
     )
-    # Emisor del certificado: ayuda a la DIAN a resolver la cadena de confianza.
-    emisor = ET.SubElement(certificado_firmante, f'{{{NS_XADES}}}IssuerSerialV2')
-    emisor.text = base64.b64encode(
-        certificado.certificado.issuer.public_bytes()
-    ).decode('ascii')
+    # Emisor y número de serie del certificado (obligatorio en XAdES-V2).
+    #
+    # ESTRUCTURA CORRECTA según XAdES-XMLDSig: `ds:IssuerSerial` es un
+    # `X509IssuerSerialType`, que es una SECUENCIA con dos hijos:
+    #   <ds:X509IssuerName>    el Distinguished Name, en texto
+    #   <ds:X509SerialNumber>  el número de serie, como ENTERO
+    #
+    # Antes se ponía un base64 del emisor como texto suelto. No valida contra el
+    # XSD y la DIAN no puede resolver la cadena de confianza del firmante.
+    emisor = ET.SubElement(certificado_firmante, f'{{{NS_DS}}}IssuerSerial')
+    ET.SubElement(emisor, f'{{{NS_DS}}}X509IssuerName').text = (
+        certificado.certificado.issuer.rfc4514_string())
+    ET.SubElement(emisor, f'{{{NS_DS}}}X509SerialNumber').text = str(
+        certificado.certificado.serial_number)
 
     # Política de firma (EPES = Explicit Policy based Electronic Signature).
     politica = ET.SubElement(props_firma, f'{{{NS_XADES}}}SignaturePolicyIdentifier')
@@ -581,6 +604,9 @@ def firmar_documento(raiz, certificado, id_documento=None, momento=None,
     ET.SubElement(x509_data, f'{{{NS_DS}}}X509Certificate').text = (
         _certificado_b64(certificado.certificado)
     )
+
+    # El `Object` va AL FINAL: es lo último en la secuencia del XSD.
+    firma.append(objeto)
 
     # La firma va al final del documento (enveloped).
     raiz.append(firma)
