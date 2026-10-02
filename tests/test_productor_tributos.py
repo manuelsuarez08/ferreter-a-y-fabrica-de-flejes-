@@ -404,4 +404,83 @@ def test_un_producto_sin_configurar_no_declara_tributo(tmp_path):
     items = dian_emision._leer_items(conn.cursor(), vid, 19.0)
 
     assert 'tributo_especifico' not in items[0]
-    assert dian_emision._resumen_tributos_especificos(items) == []
+    assert dian_emision._resumen_tributos_especificos(items) == []# ══════════════════════════════════════════════════════════════
+# 5. La frontera: los tributos siguen APAGADOS
+# ══════════════════════════════════════════════════════════════
+
+def test_las_columnas_nacen_vacias_en_la_semilla():
+    """Ningun producto debe venir con un tributo especifico puesto.
+
+    Los 1461 productos del catalogo son de ferreteria: cemento, tuberias,
+    pintura. Ninguno es una bebida azucarada. Si la migration hubiera puesto un
+    valor por defecto, TODOS los documentos empezarian a declarar IBUA.
+
+    Se comprueba sobre la SEMILLA, que es la base de la que se clona cada
+    instancia de cliente: es el punto donde un valor por defecto equivocado se
+    multiplicaria por todos los tenants futuros.
+    """
+    import sqlite3 as _s3
+
+    conn = _s3.connect(os.path.join(RAIZ, 'ferreteria-semilla.db'))
+    try:
+        configurados = conn.execute("""
+            SELECT COUNT(*) FROM productos
+            WHERE tributo_especifico_tipo IS NOT NULL
+               OR tributo_especifico_nominal IS NOT NULL
+               OR tributo_contenido IS NOT NULL
+        """).fetchone()[0]
+    finally:
+        conn.close()
+
+    assert configurados == 0, (
+        f'{configurados} productos de la semilla traen tributo especifico '
+        'puesto: se declararia un impuesto que no existe'
+    )
+
+
+def test_la_semilla_no_altera_un_documento_sin_tributo():
+    """La garantia de la ronda anterior: un documento sin tributos no cambia.
+
+    Un producto normal tiene que seguir dando el mismo XML byte a byte que
+    antes de esta ronda. Si el productor metiera un subtotal de cero, cada
+    factura de la ferreteria quedaria alterada.
+    """
+    totales = {'impuestos_iva': [{'tasa': 19.0, 'base': 100000.0,
+                                  'valor': 19000.0}],
+               'impuestos_inc': [], 'impuestos_especificos': []}
+    raiz = ET.fromstring(dian_xml.a_texto(
+        dian_xml._construir_impuestos_totales(totales)))
+
+    subtotales = raiz.findall('cac:TaxSubtotal', NS)
+    assert len(subtotales) == 1
+    assert subtotales[0].find(
+        'cac:TaxCategory/cac:TaxScheme/cbc:ID', NS).text == '01'
+
+
+def test_el_codigo_no_dice_que_el_iva_grave_sobre_el_tributo():
+    """Guarda de honestidad tecnica, no de comportamiento.
+
+    El modelo implementado deja el IVA sobre la base del bien y suma el
+    tributo por fuera. Eso es COHERENTE, pero no esta verificado contra la
+    norma: el servicio de la DIAN no respondio y no hay copia del Anexo V1.9.
+
+    Si alguien llegara a este archivo creyendo que la separacion es la regla
+    legal, tomaria una decision sobre una lectura propia. Se deja escrito que
+    es una eleccion dimensional. El fallo de esta prueba es de contenido, y
+    por eso mira el docstring en vez de ejecutar el codigo.
+    """
+    import inspect
+
+    texto = inspect.getdoc(dian_emision._leer_items) or ''
+    minusculas = texto.lower()
+
+    # El docstring tiene que NOMBRAR LAS DOS cosas que no se han resuelto, no
+    # solo advertir en general. Un aviso generico tipo "ojo, revisar" se
+    # vuelve invisible en dos meses; uno que dice "el nominal no esta
+    # verificado" y "el IVA no tiene regla confirmada" se puede buscar.
+    assert 'nominal' in minusculas, 'no advierte del valor nominal sin verificar'
+    assert ('no se pudo cotejar' in minusculas
+            or 'no se han resuelto' in minusculas), \
+        'no advierte de que el tratamiento fiscal NO esta verificado'
+    assert 'dimensional' in minusculas, \
+        'no aclara que la separacion responde a la dimension, no a la norma'

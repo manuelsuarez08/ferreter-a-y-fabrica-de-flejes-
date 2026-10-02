@@ -383,6 +383,27 @@ def _leer_items(cursor, id_venta, iva_porcentaje_venta, iva_por_producto=False):
     él. Por eso aquí se DESAGREGA: base = precio final / (1 + tasa). Si no se
     hiciera, el total del documento quedaría inflado (se le sumaría el IVA dos
     veces) y la DIAN rechazaría el cuadre.
+
+    ADVERTENCIA SOBRE EL TRATAMIENTO FISCAL (leer antes de tocar esto)
+    ------------------------------------------------------------------
+    Hay dos cosas en esta función que NO se han resuelto y que no puede
+    resolver el código:
+
+    1. Si el IVA debe gravar sobre la base antes o después de aplicar el
+       tributo específico. Aquí se separa de forma coherente: el IVA va sobre la
+       base del bien y el tributo se suma por fuera. Eso responde a la
+       DIMENSIONALIDAD de cada magnitud (el IVA es un porcentaje, el IBUA son
+       pesos por litro), no a una lectura del reglamento. No se pudo cotejar
+       con el decreto reglamentario de la Ley 2277 de 2022 porque el servicio
+       de la DIAN no respondió y no hay copia oficial del Anexo V1.9.
+
+    2. El valor nominal de cada tributo. Las columnas quedan vacías y un
+       producto sin los tres datos no genera subtotal. Deben rellenarse con
+       las tarifas oficiales verificadas, nunca de memoria.
+
+    Quien active los tributos específicos tiene que resolver las dos antes.
+    Una estructura XML correcta con una tarifa equivocada es una declaración
+    fiscal falsa, que es peor que no declarar el tributo.
     """
     filas = cursor.execute(
         """
@@ -469,8 +490,19 @@ def _leer_items(cursor, id_venta, iva_porcentaje_venta, iva_por_producto=False):
         # de la venta, porque el impuesto se cobra por fuera del precio del
         # bien.
         #
-        # Si el negocio decidiera que el precio del producto YA incluye el
-        # tributo, el desagregador correcto seria otro:
+        # SI EL IVA DEBE GRAVAR SOBRE O DEBAJO DEL TRIBUTO ESPECIFICO, NO SE
+        # HA RESUELTO. Lo que hay aqui es una eleccion COHERENTE y
+        # dimensionalmente correcta, no una lectura del reglamento.
+        #
+        # La forma implementada deja el IVA sobre la base del bien y suma el
+        # tributo por fuera. Que ese sea el tratamiento que exige la norma
+        # depende de como este redacto el decreto reglamentario de la Ley
+        # 2277 de 2022, y eso no se pudo cotejar: el servicio de la DIAN no
+        # respondio y no hay copia oficial del Anexo V1.9 a mano.
+        #
+        # SI el regimen correcto fuera al reves (IVA sobre base + tributo), el
+        # desagregador seria este, no el de arriba:
+        #
         #     base = (precio - nominal x contenido x cantidad) / (1 + iva)
         #
         # OJO al numero de unidades. El tributo se cobra POR UNIDAD, asi que
@@ -483,8 +515,10 @@ def _leer_items(cursor, id_venta, iva_porcentaje_venta, iva_por_producto=False):
         # centavos que este proyecto lleva varias rondas cerrando, y la razon
         # por la que el numero de unidades va explicito en la formula.
         #
-        # Esa es una decision del negocio, no del programa. Ver
-        # `TOTAL_INCLUYE_TRIBUTO_ESPECIFICO` en la nota de `_leer_items`.
+        # Quien active esta rama debe resolver antes las DOS cosas que faltan:
+        # el valor nominal oficial de cada tributo y el tratamiento del IVA
+        # respecto del especifico. Ninguna de las dos la puede decidir el
+        # codigo.
         precio_base = (precio_final / (1 + iva_tasa / 100)) if iva_tasa else precio_final
         precio_base = redondear(precio_base)
         base = redondear(cantidad * precio_base)
