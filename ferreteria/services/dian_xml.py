@@ -764,25 +764,36 @@ def _construir_responsabilidades(datos):
 
 
 def _construir_impuestos_totales(totales):
-    """Crea `<cac:TaxTotal>` con el resumen de IVA e INC del documento.
+    """Crea `<cac:TaxTotal>` con la suma de TODOS los tributos del documento.
 
     Declara UN `cac:TaxSubtotal` POR TARIFA. La DIAN no acepta un unico
     subtotal con la tasa mas alta cuando la venta mezcla tarifas (19% y 5%) o
     tiene productos exentos: cada subtotal lleva su base y su valor.
+
+    `cbc:TaxAmount` es la SUMA de lo que declaran todos los `TaxSubtotal`. Si no
+    coincidieran, el documento se contradice a si mismo: la DIAN veria un total
+    de 19000 y dos subtotales que suman 19250.
     """
     nodo = _cac('TaxTotal')
-    iva = float(totales.get('iva_valor') or 0)
-    inc = float(totales.get('inc_valor') or 0)
-    total_impuestos = iva + inc
+
+    # Se suman los valores de los subtotales, NO los campos sueltos `iva_valor`
+    # e `inc_valor`. Motivo: esos dos campos soloemian IVA e INC, asi que un
+    # tributo especifico (INPP, IBUA, ICL, ADV) quedaba fuera del total
+    # mientras su subtotal si aparecia. Era una inconsistencia real, medida
+    # 19000.00 contra subtotales que sumaban 19250.00.
+    subtotales = _categorias_de(totales)
+    total_impuestos = sum(
+        float(subtotal.findtext(f'{{{NS_CBC}}}TaxAmount') or 0)
+        for subtotal in subtotales
+    )
     nodo.append(_cbc('TaxAmount', _monto(total_impuestos), currencyID='COP'))
 
-    categorias = _categorias_de(totales)
+    categorias = subtotales
 
     # Un `cac:TaxSubtotal` POR tributo y por tarifa. El codigo anterior metia
     # todos los impuestos (IVA + INC) en un unico `cac:TaxSubtotal` con un solo
     # `cbc:Percent`: la DIAN no podia saber a cual de los dos correspondia ese
-    # porcentaje. El `cac:TaxAmount` de arriba sigue siendo la SUMA de todos, que
-    # es lo que exige el anexo; el detalle va en los subtotales.
+    # porcentaje.
     for subtotal in categorias:
         nodo.append(subtotal)
     return nodo
