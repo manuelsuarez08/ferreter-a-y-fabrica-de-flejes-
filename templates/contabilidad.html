@@ -1,0 +1,602 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Contabilidad | FerreControl</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background: #f4f6f9; }
+    .tarjeta { background: #fff; border-radius: .75rem; border: 1px solid #e6e9ef; }
+    .mono { font-family: ui-monospace, "Cascadia Mono", Consolas, monospace; }
+    .tabla-scroll { max-height: 30rem; overflow-y: auto; }
+    .num { text-align: right; font-variant-numeric: tabular-nums; }
+    .cuenta-codigo { font-family: ui-monospace, Consolas, monospace; font-size: .82rem; }
+    .kpi { border-left: 4px solid #1F4E79; }
+    /* La columna de saldo se resalta porque es la que el contador lee primero. */
+    .saldo { font-weight: 600; }
+    .fila-anulada { background: #fff5f5; color: #8a4b4b; }
+  </style>
+</head>
+<body>
+<nav class="navbar navbar-dark bg-dark px-3">
+  <span class="navbar-brand mb-0 h1">Contabilidad</span>
+  <div class="d-flex align-items-center gap-3">
+    <span class="text-light small">{{ usuario }} ({{ rol }})</span>
+    <a class="btn btn-sm btn-outline-light" href="/">Volver al POS</a>
+  </div>
+</nav>
+
+<div class="container-fluid py-4">
+
+  <!-- ── Filtro de período ────────────────────────────────────────────── -->
+  <div class="row g-3 mb-3">
+    <div class="col-12">
+      <div class="tarjeta p-3">
+        <div class="d-flex flex-wrap gap-2 align-items-end">
+          <div>
+            <label class="form-label small mb-1">Período</label>
+            <input type="month" id="filtro-periodo" class="form-control form-control-sm">
+          </div>
+          <div>
+            <label class="form-label small mb-1">Desde</label>
+            <input type="date" id="filtro-desde" class="form-control form-control-sm">
+          </div>
+          <div>
+            <label class="form-label small mb-1">Hasta</label>
+            <input type="date" id="filtro-hasta" class="form-control form-control-sm">
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="cargarTodo()">Aplicar</button>
+          <button class="btn btn-outline-secondary btn-sm" onclick="limpiarFiltro()">Mes actual</button>
+          <span id="aviso-periodo" class="text-muted small ms-2"></span>
+          <div class="ms-auto d-flex gap-2">
+            <button class="btn btn-outline-success btn-sm"
+                    onclick="exportarActiva()"
+                    title="Descarga en CSV (se abre en Excel)">
+              Exportar a Excel</button>
+            <button id="btn-cierre" class="btn btn-outline-danger btn-sm"
+                    onclick="cerrarEjercicio()">Cerrar ejercicio…</button>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Aviso del cierre (resultado de la operacion) -->
+  <div id="aviso-cierre" class="alert d-none" role="alert"></div>
+
+  <!-- ── Pestañas ─────────────────────────────────────────────────────── -->
+  <ul class="nav nav-tabs mb-3" role="tablist">
+    <li class="nav-item"><button class="nav-link active" data-bs-toggle="tab"
+        data-bs-target="#tab-balance">Balance de comprobación</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab"
+        data-bs-target="#tab-resultados">Estado de resultados</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab"
+        data-bs-target="#tab-general">Balance general</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab"
+        data-bs-target="#tab-diario">Libro diario</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab"
+        data-bs-target="#tab-mayor">Libro mayor</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab"
+        data-bs-target="#tab-iva">IVA</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab"
+        data-bs-target="#tab-libro-iva">Libro de IVA</button></li>
+    <li class="nav-item"><button class="nav-link" data-bs-toggle="tab"
+        data-bs-target="#tab-retenciones">Retenciones</button></li>
+  </ul>
+
+  <div class="tab-content">
+
+    <!-- Balance de comprobación -->
+    <div class="tab-pane fade show active" id="tab-balance">
+      <div class="row g-3 mb-3">
+        <div class="col-md-3"><div class="tarjeta kpi p-3">
+          <div class="text-muted small">Total débitos</div>
+          <div id="kpi-debitos" class="fs-5 num">—</div></div></div>
+        <div class="col-md-3"><div class="tarjeta kpi p-3">
+          <div class="text-muted small">Total créditos</div>
+          <div id="kpi-creditos" class="fs-5 num">—</div></div></div>
+        <div class="col-md-3"><div class="tarjeta p-3">
+          <div class="text-muted small">Cuadre</div>
+          <div id="kpi-cuadre" class="fs-5">—</div></div></div>
+      </div>
+      <div class="tarjeta p-0 tabla-scroll">
+        <table class="table table-sm table-hover mb-0">
+          <thead class="table-light sticky-top"><tr>
+            <th>Cuenta</th><th>Nombre</th><th>Clase</th>
+            <th class="num">Débitos</th><th class="num">Créditos</th>
+            <th class="num">Saldo</th>
+          </tr></thead>
+          <tbody id="cuerpo-balance"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Estado de resultados -->
+    <div class="tab-pane fade" id="tab-resultados">
+      <div class="row g-3 mb-3">
+        <div class="col-md-4"><div class="tarjeta kpi p-3">
+          <div class="text-muted small">Total ingresos</div>
+          <div id="kpi-ingresos" class="fs-5 num">—</div></div></div>
+        <div class="col-md-4"><div class="tarjeta p-3">
+          <div class="text-muted small">Costos y gastos</div>
+          <div id="kpi-costos" class="fs-5 num">—</div></div></div>
+        <div class="col-md-4"><div class="tarjeta p-3">
+          <div class="text-muted small">Utilidad del período</div>
+          <div id="kpi-utilidad" class="fs-5 num">—</div></div></div>
+      </div>
+      <div class="row g-3">
+        <div class="col-lg-6">
+          <div class="tarjeta p-0">
+            <div class="p-2 border-bottom fw-semibold">Ingresos</div>
+            <table class="table table-sm mb-0"><tbody id="cuerpo-ingresos"></tbody></table>
+          </div>
+        </div>
+        <div class="col-lg-6">
+          <div class="tarjeta p-0">
+            <div class="p-2 border-bottom fw-semibold">Costos y gastos</div>
+            <table class="table table-sm mb-0"><tbody id="cuerpo-costos"></tbody></table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Balance general -->
+    <div class="tab-pane fade" id="tab-general">
+      <div class="row g-3 mb-3">
+        <div class="col-md-3"><div class="tarjeta kpi p-3">
+          <div class="text-muted small">Total activo</div>
+          <div id="kpi-activo" class="fs-5 num">—</div></div></div>
+        <div class="col-md-3"><div class="tarjeta p-3">
+          <div class="text-muted small">Total pasivo</div>
+          <div id="kpi-pasivo" class="fs-5 num">—</div></div></div>
+        <div class="col-md-3"><div class="tarjeta p-3">
+          <div class="text-muted small">Total patrimonio</div>
+          <div id="kpi-patrimonio" class="fs-5 num">—</div></div></div>
+        <div class="col-md-3"><div class="tarjeta p-3">
+          <div class="text-muted small">Ecuación contable</div>
+          <div id="kpi-ecuacion" class="fs-5">—</div></div></div>
+      </div>
+      <div class="row g-3">
+        <div class="col-lg-4">
+          <div class="tarjeta p-0">
+            <div class="p-2 border-bottom fw-semibold">Activo</div>
+            <table class="table table-sm mb-0"><tbody id="cuerpo-activo"></tbody></table>
+          </div>
+        </div>
+        <div class="col-lg-4">
+          <div class="tarjeta p-0">
+            <div class="p-2 border-bottom fw-semibold">Pasivo</div>
+            <table class="table table-sm mb-0"><tbody id="cuerpo-pasivo"></tbody></table>
+          </div>
+        </div>
+        <div class="col-lg-4">
+          <div class="tarjeta p-0">
+            <div class="p-2 border-bottom fw-semibold">Patrimonio</div>
+            <table class="table table-sm mb-0"><tbody id="cuerpo-patrimonio"></tbody></table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Libro diario -->
+    <div class="tab-pane fade" id="tab-diario">
+      <div class="tarjeta p-0 tabla-scroll">
+        <table class="table table-sm mb-0">
+          <thead class="table-light sticky-top"><tr>
+            <th style="width:7rem">Fecha</th><th style="width:5rem">Comp.</th>
+            <th style="width:4rem">No.</th><th>Descripción</th>
+            <th class="num" style="width:7rem">Débito</th>
+            <th class="num" style="width:7rem">Crédito</th>
+          </tr></thead>
+          <tbody id="cuerpo-diario"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Libro mayor -->
+    <div class="tab-pane fade" id="tab-mayor">
+      <div class="tarjeta p-3 mb-3">
+        <div class="d-flex flex-wrap gap-2 align-items-end">
+          <div style="min-width:22rem">
+            <label class="form-label small mb-1">Cuenta</label>
+            <select id="filtro-cuenta" class="form-select form-select-sm"></select>
+          </div>
+          <button class="btn btn-primary btn-sm" onclick="cargarMayor()">Ver movimientos</button>
+          <span id="mayor-titulo" class="text-muted small ms-2"></span>
+        </div>
+      </div>
+      <div class="tarjeta p-0 tabla-scroll">
+        <table class="table table-sm mb-0">
+          <thead class="table-light sticky-top"><tr>
+            <th style="width:7rem">Fecha</th><th style="width:5rem">Comp.</th>
+            <th style="width:4rem">No.</th><th>Descripción</th>
+            <th>Tercero</th>
+            <th class="num" style="width:7rem">Débito</th>
+            <th class="num" style="width:7rem">Crédito</th>
+            <th class="num" style="width:8rem">Saldo</th>
+          </tr></thead>
+          <tbody id="cuerpo-mayor"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Informe de IVA -->
+    <div class="tab-pane fade" id="tab-iva">
+      <div class="row g-3 mb-3">
+        <div class="col-md-3"><div class="tarjeta kpi p-3">
+          <div class="text-muted small">IVA generado (ventas)</div>
+          <div id="kpi-iva-gen" class="fs-5 num">—</div></div></div>
+        <div class="col-md-3"><div class="tarjeta p-3">
+          <div class="text-muted small">IVA descontable (compras)</div>
+          <div id="kpi-iva-desc" class="fs-5 num">—</div></div></div>
+        <div class="col-md-3"><div class="tarjeta p-3">
+          <div class="text-muted small">Saldo a pagar / a favor</div>
+          <div id="kpi-iva-saldo" class="fs-5 num">—</div></div></div>
+      </div>
+      <div class="row g-3">
+        <div class="col-lg-6">
+          <div class="tarjeta p-0">
+            <div class="p-2 border-bottom fw-semibold">IVA generado</div>
+            <table class="table table-sm mb-0">
+              <thead class="table-light"><tr><th>Cuenta</th><th>Nombre</th>
+                <th class="num">Base</th><th class="num">Impuesto</th></tr></thead>
+              <tbody id="cuerpo-iva-gen"></tbody></table>
+          </div>
+        </div>
+        <div class="col-lg-6">
+          <div class="tarjeta p-0">
+            <div class="p-2 border-bottom fw-semibold">IVA descontable</div>
+            <table class="table table-sm mb-0">
+              <thead class="table-light"><tr><th>Cuenta</th><th>Nombre</th>
+                <th class="num">Base</th><th class="num">Impuesto</th></tr></thead>
+              <tbody id="cuerpo-iva-desc"></tbody></table>
+          </div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Libro de IVA (detalle por documento) -->
+    <div class="tab-pane fade" id="tab-libro-iva">
+      <div class="alert alert-info py-2 small">
+        Detalle documento por documento para el formato DIAN de información
+        exógena. <strong>No es el archivo oficial</strong>: el contador debe
+        mapearlo a los conceptos de la resolución vigente antes de presentarlo.
+      </div>
+      <div class="row g-3 mb-3">
+        <div class="col-md-3"><div class="tarjeta kpi p-3">
+          <div class="text-muted small">Documentos</div>
+          <div id="kpi-liva-docs" class="fs-5 num">—</div></div></div>
+        <div class="col-md-3"><div class="tarjeta p-3">
+          <div class="text-muted small">Base gravable</div>
+          <div id="kpi-liva-base" class="fs-5 num">—</div></div></div>
+        <div class="col-md-3"><div class="tarjeta p-3">
+          <div class="text-muted small">IVA generado</div>
+          <div id="kpi-liva-iva" class="fs-5 num">—</div></div></div>
+        <div class="col-md-3"><div class="tarjeta p-3">
+          <div class="text-muted small">Total facturado</div>
+          <div id="kpi-liva-total" class="fs-5 num">—</div></div></div>
+      </div>
+      <div class="tarjeta p-0 tabla-scroll">
+        <table class="table table-sm mb-0">
+          <thead class="table-light sticky-top"><tr>
+            <th>Fecha</th><th>Doc.</th><th>Número</th><th>Tipo ID</th>
+            <th>Documento</th><th>Nombre</th><th class="num">Tarifa</th>
+            <th class="num">Base</th><th class="num">IVA</th>
+            <th class="num">Retefuente</th><th class="num">ReteICA</th>
+            <th class="num">Total</th>
+          </tr></thead>
+          <tbody id="cuerpo-libro-iva"></tbody>
+        </table>
+      </div>
+    </div>
+
+    <!-- Informe de retenciones -->
+    <div class="tab-pane fade" id="tab-retenciones">
+      <div class="row g-3 mb-3">
+        <div class="col-md-4"><div class="tarjeta kpi p-3">
+          <div class="text-muted small">Total retenido</div>
+          <div id="kpi-ret-total" class="fs-5 num">—</div></div></div>
+        <div class="col-md-4"><div class="tarjeta p-3">
+          <div class="text-muted small">Terceros</div>
+          <div id="kpi-ret-terceros" class="fs-5 num">—</div></div></div>
+      </div>
+      <div class="tarjeta p-0 tabla-scroll">
+        <table class="table table-sm mb-0">
+          <thead class="table-light sticky-top"><tr>
+            <th>Documento (NIT/CC)</th><th>Nombre</th>
+            <th class="num">Retefuente</th><th class="num">ReteIVA</th>
+            <th class="num">ReteICA</th><th class="num">Total</th>
+          </tr></thead>
+          <tbody id="cuerpo-retenciones"></tbody>
+        </table>
+      </div>
+    </div>
+
+  </div>
+</div>
+
+<script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+<script>
+const money = (v) => (v === null || v === undefined)
+  ? '—' : Number(v).toLocaleString('es-CO', {minimumFractionDigits: 2, maximumFractionDigits: 2});
+const esc = (t) => String(t ?? '').replace(/[&<>"']/g, m =>
+  ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]));
+
+// Construye el query string del período. Si hay desde/hasta se usan; si no, el
+// selector de mes. Se centraliza para que TODAS las peticiones del período
+// miren exactamente el mismo rango (si cada pestaña lo calculara por su cuenta
+// podrían verse datos de meses distintos en la misma pantalla).
+function qsPeriodo() {
+  const desde = document.getElementById('filtro-desde').value;
+  const hasta = document.getElementById('filtro-hasta').value;
+  if (desde && hasta) return `desde=${desde}&hasta=${hasta}`;
+  const periodo = document.getElementById('filtro-periodo').value;
+  return periodo ? `periodo=${periodo}` : '';
+}
+
+function fila(cuenta, nombre, saldo, extra = '') {
+  return `<tr><td class="cuenta-codigo">${esc(cuenta)}</td><td>${esc(nombre)}</td>` +
+         `<td>${extra}</td><td class="num saldo">${money(saldo)}</td></tr>`;
+}
+
+async function cargarBalance() {
+  const r = await fetch(`/api/contabilidad/balance-comprobacion?${qsPeriodo()}`);
+  const d = await r.json();
+  document.getElementById('kpi-debitos').textContent = money(d.total_debito);
+  document.getElementById('kpi-creditos').textContent = money(d.total_credito);
+  document.getElementById('kpi-cuadre').innerHTML = d.cuadra
+    ? '<span class="badge bg-success">CUADRA</span>'
+    : '<span class="badge bg-danger">DESCUADRA</span>';
+  document.getElementById('cuerpo-balance').innerHTML = d.cuentas.map(c =>
+    `<tr><td class="cuenta-codigo">${esc(c.cuenta)}</td><td>${esc(c.nombre || '')}</td>` +
+    `<td>${esc(c.clase)}</td><td class="num">${money(c.debitos)}</td>` +
+    `<td class="num">${money(c.creditos)}</td>` +
+    `<td class="num saldo">${money(c.saldo)}</td></tr>`).join('')
+    || '<tr><td colspan="6" class="text-muted text-center py-3">Sin movimientos en el período</td></tr>';
+}
+
+async function cargarResultados() {
+  const r = await fetch(`/api/contabilidad/estado-resultados?${qsPeriodo()}`);
+  const d = await r.json();
+  document.getElementById('kpi-ingresos').textContent = money(d.total_ingresos);
+  document.getElementById('kpi-costos').textContent = money(d.total_costos_gastos);
+  const util = document.getElementById('kpi-utilidad');
+  util.textContent = money(d.utilidad);
+  util.className = 'fs-5 num ' + (d.utilidad < 0 ? 'text-danger' : 'text-success');
+  document.getElementById('cuerpo-ingresos').innerHTML = d.ingresos.map(c =>
+    fila(c.cuenta, c.nombre, c.saldo)).join('')
+    || '<tr><td class="text-muted text-center py-3">Sin ingresos</td></tr>';
+  document.getElementById('cuerpo-costos').innerHTML = d.costos_gastos.map(c =>
+    fila(c.cuenta, c.nombre, c.saldo)).join('')
+    || '<tr><td class="text-muted text-center py-3">Sin costos ni gastos</td></tr>';
+}
+
+async function cargarGeneral() {
+  const r = await fetch(`/api/contabilidad/balance-general?${qsPeriodo()}`);
+  const d = await r.json();
+  document.getElementById('kpi-activo').textContent = money(d.total_activo);
+  document.getElementById('kpi-pasivo').textContent = money(d.total_pasivo);
+  document.getElementById('kpi-patrimonio').textContent = money(d.total_patrimonio);
+  document.getElementById('kpi-ecuacion').innerHTML = d.cuadra
+    ? '<span class="badge bg-success">CUADRA</span>'
+    : '<span class="badge bg-danger">DESCUADRA</span>';
+  document.getElementById('cuerpo-activo').innerHTML = d.activo.map(c =>
+    fila(c.cuenta, c.nombre, c.saldo)).join('')
+    || '<tr><td class="text-muted text-center py-3">—</td></tr>';
+  document.getElementById('cuerpo-pasivo').innerHTML = d.pasivo.map(c =>
+    fila(c.cuenta, c.nombre, c.saldo)).join('')
+    || '<tr><td class="text-muted text-center py-3">—</td></tr>';
+  // El resultado del ejercicio se muestra como línea propia del patrimonio:
+  // es la utilidad que aún no se ha cerrado contra las cuentas de patrimonio.
+  const pat = d.patrimonio.map(c => fila(c.cuenta, c.nombre, c.saldo)).join('');
+  document.getElementById('cuerpo-patrimonio').innerHTML =
+    pat + fila('—', 'Resultado del ejercicio', d.resultado_ejercicio);
+}
+
+async function cargarDiario() {
+  const r = await fetch(`/api/contabilidad/libro-diario?${qsPeriodo()}`);
+  const d = await r.json();
+  const filas = [];
+  for (const a of d.asientos) {
+    filas.push(`<tr class="table-light fw-semibold">
+      <td>${esc(a.fecha)}</td><td>${esc(a.tipo_comprobante)}</td>
+      <td>${esc(a.numero)}</td><td>${esc(a.descripcion)}</td>
+      <td class="num">${money(a.total_debito)}</td>
+      <td class="num">${money(a.total_credito)}</td></tr>`);
+    for (const l of a.lineas) {
+      filas.push(`<tr>
+        <td></td><td></td><td></td>
+        <td class="ps-4">${esc(l.cuenta)} ${esc(l.descripcion || '')}</td>
+        <td class="num">${l.debito ? money(l.debito) : ''}</td>
+        <td class="num">${l.credito ? money(l.credito) : ''}</td></tr>`);
+    }
+  }
+  document.getElementById('cuerpo-diario').innerHTML = filas.join('')
+    || '<tr><td colspan="6" class="text-muted text-center py-3">Sin asientos en el período</td></tr>';
+}
+
+async function cargarCuentas() {
+  const r = await fetch('/api/contabilidad/plan-cuentas');
+  const d = await r.json();
+  const sel = document.getElementById('filtro-cuenta');
+  // Solo cuentas de movimiento: asentar/consultar una agrupadora no aporta.
+  sel.innerHTML = '<option value="">Seleccione una cuenta…</option>' +
+    d.cuentas.filter(c => c.maneja_movimiento).map(c =>
+      `<option value="${esc(c.codigo)}">${esc(c.codigo)} — ${esc(c.nombre)}</option>`).join('');
+}
+
+async function cargarMayor() {
+  const cuenta = document.getElementById('filtro-cuenta').value;
+  if (!cuenta) return;
+  const r = await fetch(`/api/contabilidad/libro-mayor?${qsPeriodo()}&cuenta=${encodeURIComponent(cuenta)}`);
+  const d = await r.json();
+  document.getElementById('mayor-titulo').textContent =
+    `${d.cuenta} ${d.nombre || ''} — saldo final: ${money(d.saldo_final)}`;
+  document.getElementById('cuerpo-mayor').innerHTML = d.movimientos.map(m =>
+    `<tr><td>${esc(m.fecha)}</td><td>${esc(m.tipo_comprobante)}</td>
+     <td>${esc(m.numero)}</td><td>${esc(m.descripcion || '')}</td>
+     <td>${esc(m.tercero_numero || '')}</td>
+     <td class="num">${m.debito ? money(m.debito) : ''}</td>
+     <td class="num">${m.credito ? money(m.credito) : ''}</td>
+     <td class="num saldo">${money(m.saldo)}</td></tr>`).join('')
+    || '<tr><td colspan="8" class="text-muted text-center py-3">Sin movimientos</td></tr>';
+}
+
+async function cargarIva() {
+  const r = await fetch(`/api/contabilidad/informe-iva?${qsPeriodo()}`);
+  const d = await r.json();
+  document.getElementById('kpi-iva-gen').textContent = money(d.total_generado);
+  document.getElementById('kpi-iva-desc').textContent = money(d.total_descontable);
+  const saldo = document.getElementById('kpi-iva-saldo');
+  // Saldo positivo = a pagar a la DIAN; negativo = saldo a favor.
+  saldo.textContent = money(d.saldo_a_pagar);
+  saldo.className = 'fs-5 num ' +
+    (d.saldo_a_pagar > 0 ? 'text-danger' : 'text-success');
+  const filaIva = (c) =>
+    `<tr><td class="cuenta-codigo">${esc(c.cuenta)}</td><td>${esc(c.nombre || '')}</td>` +
+    `<td class="num">${money(c.base)}</td>` +
+    `<td class="num saldo">${money(c.impuesto)}</td></tr>`;
+  document.getElementById('cuerpo-iva-gen').innerHTML =
+    d.generado.map(filaIva).join('')
+    || '<tr><td colspan="4" class="text-muted text-center py-3">Sin IVA generado</td></tr>';
+  document.getElementById('cuerpo-iva-desc').innerHTML =
+    d.descontable.map(filaIva).join('')
+    || '<tr><td colspan="4" class="text-muted text-center py-3">Sin IVA descontable</td></tr>';
+}
+
+async function cargarRetenciones() {
+  const r = await fetch(`/api/contabilidad/informe-retenciones?${qsPeriodo()}`);
+  const d = await r.json();
+  document.getElementById('kpi-ret-total').textContent = money(d.total_retenido);
+  document.getElementById('kpi-ret-terceros').textContent = d.por_tercero.length;
+  document.getElementById('cuerpo-retenciones').innerHTML =
+    d.por_tercero.map(t =>
+      `<tr><td class="cuenta-codigo">${esc(t.documento)}</td><td>${esc(t.nombre)}</td>` +
+      `<td class="num">${money(t.retefuente)}</td>` +
+      `<td class="num">${money(t.reteiva)}</td>` +
+      `<td class="num">${money(t.reteica)}</td>` +
+      `<td class="num saldo">${money(t.total)}</td></tr>`).join('')
+    || '<tr><td colspan="6" class="text-muted text-center py-3">Sin retenciones en el período</td></tr>';
+}
+
+async function cerrarEjercicio() {
+  const anio = new Date().getFullYear();
+  // Doble confirmación: el cierre afecta el resultado del negocio y no se puede
+  // deshacer desde esta pantalla (habría que anular el asiento a mano).
+  if (!confirm(`¿Cerrar el ejercicio ${anio}?\n\n` +
+               'Esto traslada ingresos, costos y gastos a patrimonio y deja las ' +
+               'cuentas de resultado en cero. Solo debe hacerse al terminar el año.')) {
+    return;
+  }
+  const aviso = document.getElementById('aviso-cierre');
+  const btn = document.getElementById('btn-cierre');
+  btn.disabled = true;
+  try {
+    const r = await fetch('/api/contabilidad/cerrar-ejercicio', {
+      method: 'POST',
+      headers: {'Content-Type': 'application/json'},
+      body: JSON.stringify({desde: `${anio}-01-01`, hasta: `${anio}-12-31`}),
+    });
+    const d = await r.json();
+    aviso.className = r.ok ? 'alert alert-success' : 'alert alert-warning';
+    aviso.textContent = d.mensaje || d.error || 'Resultado inesperado';
+    aviso.classList.remove('d-none');
+    if (r.ok) cargarTodo();
+  } catch (e) {
+    aviso.className = 'alert alert-danger';
+    aviso.textContent = 'Error de red al cerrar el ejercicio: ' + e;
+    aviso.classList.remove('d-none');
+  } finally {
+    btn.disabled = false;
+  }
+}
+
+// Exporta a CSV el reporte de la pestaña ACTIVA. Se mapea el id del panel al
+// nombre que espera el backend; la pestaña de libro mayor exige la cuenta
+// seleccionada (si no hay, se avisa en vez de descargar un archivo vacío).
+function exportarActiva() {
+  const panel = document.querySelector('.tab-pane.active');
+  const mapa = {
+    'tab-balance': 'comprobacion',
+    'tab-iva': 'iva',
+    'tab-libro-iva': 'libro_iva',
+    'tab-retenciones': 'retenciones',
+    'tab-diario': 'diario',
+    'tab-mayor': 'mayor',
+  };
+  // El estado de resultados y el balance general no tienen exportación propia
+  // (sus cuentas ya están en el balance de comprobación): se avisa y no se
+  // descarga un archivo que el contador no pidió.
+  if (panel && (panel.id === 'tab-resultados' || panel.id === 'tab-general')) {
+    alert('El estado de resultados y el balance general no tienen exportación ' +
+          'propia. Su detalle por cuenta está en el balance de comprobación.');
+    return;
+  }
+  const reporte = panel ? mapa[panel.id] : null;
+  if (!reporte) { alert('No hay un reporte exportable en esta pestaña.'); return; }
+
+  let extra = '';
+  if (reporte === 'mayor') {
+    const cuenta = document.getElementById('filtro-cuenta').value;
+    if (!cuenta) {
+      alert('Seleccione una cuenta para exportar el libro mayor.');
+      return;
+    }
+    extra = `&cuenta=${encodeURIComponent(cuenta)}`;
+  }
+  // Se navega a la URL de descarga: el Content-Disposition: attachment hace que
+  // el navegador la baje sin moverse de la página.
+  window.location = `/api/contabilidad/exportar/${reporte}?${qsPeriodo()}${extra}`;
+}
+
+async function cargarLibroIva() {
+  const r = await fetch(`/api/contabilidad/libro-iva?${qsPeriodo()}`);
+  const d = await r.json();
+  document.getElementById('kpi-liva-docs').textContent = d.documentos.length;
+  document.getElementById('kpi-liva-base').textContent = money(d.totales.base);
+  document.getElementById('kpi-liva-iva').textContent = money(d.totales.iva);
+  document.getElementById('kpi-liva-total').textContent = money(d.totales.total);
+  document.getElementById('cuerpo-libro-iva').innerHTML = d.documentos.map(x =>
+    `<tr><td>${esc(x.fecha)}</td><td>${esc(x.tipo_documento)}</td>` +
+    `<td>${esc(x.numero_dian || '—')}</td><td>${esc(x.tipo_identificacion)}</td>` +
+    `<td class="cuenta-codigo">${esc(x.documento)}</td><td>${esc(x.nombre)}</td>` +
+    `<td class="num">${money(x.tarifa)}%</td>` +
+    `<td class="num">${money(x.base)}</td>` +
+    `<td class="num">${money(x.iva)}</td>` +
+    `<td class="num">${money(x.retefuente)}</td>` +
+    `<td class="num">${money(x.reteica)}</td>` +
+    `<td class="num saldo">${money(x.total)}</td></tr>`).join('')
+    || '<tr><td colspan="12" class="text-muted text-center py-3">Sin documentos en el período</td></tr>';
+}
+
+function cargarTodo() {
+  const desde = document.getElementById('filtro-desde').value;
+  const hasta = document.getElementById('filtro-hasta').value;
+  document.getElementById('aviso-periodo').textContent =
+    (desde && hasta) ? `Rango: ${desde} a ${hasta}` : 'Mes seleccionado';
+  cargarBalance(); cargarResultados(); cargarGeneral(); cargarDiario();
+  cargarIva(); cargarRetenciones(); cargarLibroIva();
+  if (document.getElementById('filtro-cuenta').value) cargarMayor();
+}
+
+function limpiarFiltro() {
+  const hoy = new Date();
+  document.getElementById('filtro-periodo').value =
+    `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}`;
+  document.getElementById('filtro-desde').value = '';
+  document.getElementById('filtro-hasta').value = '';
+  cargarTodo();
+}
+
+// Arranque: mes actual y catálogo de cuentas.
+(() => {
+  const hoy = new Date();
+  document.getElementById('filtro-periodo').value =
+    `${hoy.getFullYear()}-${String(hoy.getMonth() + 1).padStart(2, '0')}`;
+  cargarCuentas();
+  cargarTodo();
+})();
+</script>
+</body>
+</html>

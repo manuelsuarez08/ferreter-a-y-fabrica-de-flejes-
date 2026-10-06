@@ -994,6 +994,477 @@ def _sembrar_datos_por_defecto(cursor):
         )
 
 
+def _crear_tablas_contabilidad(cursor):
+    """Esquema del módulo de contabilidad (partida doble).
+
+    Cinco tablas, sin dependencias nuevas:
+
+    `plan_cuentas`
+        Plan Único de Cuentas (PUC colombiano, Decreto 2650 de 1993),
+        jerárquico por `codigo`. Solo las cuentas con `maneja_movimiento = 1`
+        pueden usarse en un asiento: las agrupadoras solo suman.
+    `centros_costo`
+        Dimensiones de costeo (almacén, taller, mostrador...). Opcional por línea.
+    `asientos_contables`
+        Encabezado del comprobante. `origen`/`origen_id` enlazan con el hecho que
+        lo generó (venta, gasto, cierre...) para poder auditarlo.
+    `asiento_detalle`
+        Líneas débito/crédito. Una línea es débito O crédito, nunca los dos.
+    `parametrizacion_contable`
+        Mapeo evento -> cuentas. Es lo que hace AUTOMÁTICO el asiento: el
+        servicio `services.contabilidad.generar_asiento` lee estas reglas y
+        arma las líneas sin que ningún handler sepa de cuentas.
+    """
+    # ── Plan de cuentas (PUC) ────────────────────────────────────────────────
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS plan_cuentas (
+            codigo        TEXT PRIMARY KEY,
+            nombre        TEXT NOT NULL,
+            -- Clase 1..7 del PUC: Activo, Pasivo, Patrimonio, Ingresos,
+            -- Gastos, Costos de venta, Costos de producción.
+            clase         TEXT NOT NULL,
+            -- Naturaleza: los activos/costos/gastos aumentan al débito;
+            -- pasivos/patrimonio/ingresos aumentan al crédito. Define el signo
+            -- del saldo en los reportes.
+            naturaleza    TEXT NOT NULL
+                CHECK (naturaleza IN ('debito', 'credito')),
+            nivel         INTEGER NOT NULL DEFAULT 1,
+            padre         TEXT REFERENCES plan_cuentas (codigo),
+            -- 1 = cuenta de movimiento (hoja/auxiliar). Solo estas se pueden
+            -- usar en `asiento_detalle`: asentar en una agrupadora descuadra
+            -- el balance de comprobación.
+            maneja_movimiento INTEGER NOT NULL DEFAULT 0
+                CHECK (maneja_movimiento IN (0, 1)),
+            requiere_tercero  INTEGER NOT NULL DEFAULT 0
+                CHECK (requiere_tercero IN (0, 1)),
+            requiere_centro   INTEGER NOT NULL DEFAULT 0
+                CHECK (requiere_centro IN (0, 1)),
+            activo        INTEGER NOT NULL DEFAULT 1,
+            creado        TEXT,
+            actualizado   TEXT
+        )
+    ''')
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_puc_padre ON plan_cuentas (padre)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_puc_clase ON plan_cuentas (clase, nivel)")
+
+    # ── Centros de costo ─────────────────────────────────────────────────────
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS centros_costo (
+            id          INTEGER PRIMARY KEY AUTOINCREMENT,
+            codigo      TEXT UNIQUE NOT NULL,
+            nombre      TEXT NOT NULL,
+            descripcion TEXT DEFAULT '',
+            activo      INTEGER NOT NULL DEFAULT 1,
+            creado      TEXT
+        )
+    ''')
+
+    # ── Asientos contables (encabezado) ──────────────────────────────────────
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS asientos_contables (
+            id               INTEGER PRIMARY KEY AUTOINCREMENT,
+            -- Tipo de comprobante. La numeración contable es legal: no se repite
+            -- ni se puede alterar; por eso el consecutivo va en el servicio
+            -- DENTRO de la misma transacción que inserta el asiento.
+            tipo_comprobante TEXT NOT NULL DEFAULT 'CE'
+                CHECK (tipo_comprobante IN ('CE', 'CI', 'CD', 'CT', 'NA')),
+            numero           INTEGER NOT NULL,
+            fecha            TEXT NOT NULL,
+            periodo          TEXT NOT NULL,
+            descripcion      TEXT NOT NULL,
+            origen           TEXT NOT NULL DEFAULT 'manual'
+                CHECK (origen IN ('manual', 'venta', 'costo_venta', 'compra',
+                                  'gasto', 'nota_credito', 'cierre_caja',
+                                  'cierre_ejercicio', 'abono',
+                                  'retencion_fuente', 'retencion_ica',
+                                  'nomina', 'ajuste')),
+            origen_id        INTEGER,
+            -- Un asiento en borrador NO afecta los reportes. Se contabiliza al
+            -- pasar a 'contabilizado'.
+            estado           TEXT NOT NULL DEFAULT 'contabilizado'
+                CHECK (estado IN ('borrador', 'contabilizado', 'anulado')),
+            total_debito     REAL NOT NULL DEFAULT 0,
+            total_credito    REAL NOT NULL DEFAULT 0,
+            usuario          TEXT,
+            creado           TEXT NOT NULL,
+            actualizado      TEXT,
+            anulado_motivo   TEXT,
+            UNIQUE (tipo_comprobante, numero)
+        )
+    ''')
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_asiento_fecha "
+        "ON asientos_contables (fecha)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_asiento_periodo "
+        "ON asientos_contables (periodo, estado)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_asiento_origen "
+        "ON asientos_contables (origen, origen_id)")
+
+    # ── Detalle del asiento (débito/crédito) ─────────────────────────────────
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS asiento_detalle (
+            id              INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_asiento      INTEGER NOT NULL,
+            cuenta          TEXT NOT NULL,
+            -- Tercero de la línea (cliente/proveedor/empleado). Se guarda el
+            -- documento porque el tercero puede no estar en `clientes`.
+            tercero_tipo    TEXT,
+            tercero_numero  TEXT,
+            tercero_nombre  TEXT,
+            id_centro_costo INTEGER REFERENCES centros_costo (id),
+            descripcion     TEXT DEFAULT '',
+            debito          REAL NOT NULL DEFAULT 0 CHECK (debito  >= 0),
+            credito         REAL NOT NULL DEFAULT 0 CHECK (credito >= 0),
+            -- Base gravable asociada (IVA/INC): la base del impuesto en la línea.
+            base_gravable   REAL DEFAULT 0,
+            -- Regla de partida doble a nivel de fila: débito O crédito.
+            -- Va al final y después de declarar todas las columnas: en SQLite
+            -- una restricción de tabla no puede intercalarse entre columnas.
+            CONSTRAINT chk_detalle_debito_xor_credito
+                CHECK (NOT (debito > 0 AND credito > 0)),
+            FOREIGN KEY (id_asiento) REFERENCES asientos_contables (id),
+            FOREIGN KEY (cuenta) REFERENCES plan_cuentas (codigo),
+            FOREIGN KEY (id_centro_costo) REFERENCES centros_costo (id)
+        )
+    ''')
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_adetalle_asiento "
+        "ON asiento_detalle (id_asiento)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_adetalle_cuenta "
+        "ON asiento_detalle (cuenta)")
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_adetalle_tercero "
+        "ON asiento_detalle (tercero_numero)")
+
+    # ── Parametrización: mapeo evento -> cuentas ─────────────────────────────
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS parametrizacion_contable (
+            id             INTEGER PRIMARY KEY AUTOINCREMENT,
+            evento         TEXT NOT NULL,
+            -- Condición para elegir la regla: '*' (siempre), 'efectivo' /
+            -- 'credito' (forma de pago en ventas) o la categoría del gasto.
+            condicion      TEXT NOT NULL DEFAULT '*',
+            cuenta_debito  TEXT,
+            cuenta_credito TEXT,
+            -- Campo del dict `montos` del que sale el valor de la línea.
+            campo_monto    TEXT NOT NULL DEFAULT 'total',
+            -- Desglose de impuesto asociado: NULL | 'iva' | 'inc' | 'base'.
+            componente     TEXT,
+            porcentaje     REAL DEFAULT 0,
+            requiere_tercero INTEGER NOT NULL DEFAULT 0,
+            id_centro_costo  INTEGER REFERENCES centros_costo (id),
+            orden          INTEGER NOT NULL DEFAULT 0,
+            -- Menor `prioridad` = gana. Permite una regla genérica y
+            -- sobrescribirla por categoría.
+            prioridad      INTEGER NOT NULL DEFAULT 100,
+            activo         INTEGER NOT NULL DEFAULT 1,
+            observaciones  TEXT DEFAULT '',
+            FOREIGN KEY (cuenta_debito)  REFERENCES plan_cuentas (codigo),
+            FOREIGN KEY (cuenta_credito) REFERENCES plan_cuentas (codigo),
+            FOREIGN KEY (id_centro_costo) REFERENCES centros_costo (id)
+        )
+    ''')
+    cursor.execute(
+        "CREATE INDEX IF NOT EXISTS idx_param_evento "
+        "ON parametrizacion_contable (evento, condicion, activo)")
+
+    _migrar_check_origen_cierre_ejercicio(cursor)
+
+
+def _migrar_check_origen_cierre_ejercicio(cursor):
+    """Añade 'cierre_ejercicio' al CHECK de `asientos_contables.origen`.
+
+    SQLite NO permite modificar una restricción CHECK con ALTER TABLE. La única
+    forma de ensancharla es recrear la tabla: se crea una nueva con el CHECK
+    correcto, se copian los datos, se cambia el nombre y se recrean los índices.
+    Se hace SOLO si hace falta (si el CHECK viejo todavía no admite el valor),
+    para no pagar el costo de recrear una tabla grande en cada arranque.
+
+    Es idempotente y transaccional-friendly: si la tabla ya tiene el CHECK nuevo,
+    retorna sin tocar nada.
+    """
+    fila = cursor.execute(
+        "SELECT sql FROM sqlite_master "
+        "WHERE type = 'table' AND name = 'asientos_contables'"
+    ).fetchone()
+    if not fila or not fila[0]:
+        return
+    if "'cierre_ejercicio'" in fila[0]:
+        return  # ya migrada
+
+    # Se desactivan las claves foráneas durante la recreación: `asiento_detalle`
+    # referencia `asientos_contables(id)` y el renombrado dejaría la referencia
+    # apuntando a la tabla equivocada si SQLite reescribe el esquema por su cuenta.
+    # (PRAGMA foreign_keys es una operación de conexión; se restaura al final.)
+    cursor.execute('PRAGMA foreign_keys = OFF')
+    try:
+        cursor.execute('''
+            CREATE TABLE asientos_contables_nueva (
+                id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                tipo_comprobante TEXT NOT NULL DEFAULT 'CE'
+                    CHECK (tipo_comprobante IN ('CE', 'CI', 'CD', 'CT', 'NA')),
+                numero           INTEGER NOT NULL,
+                fecha            TEXT NOT NULL,
+                periodo          TEXT NOT NULL,
+                descripcion      TEXT NOT NULL,
+                origen           TEXT NOT NULL DEFAULT 'manual'
+                    CHECK (origen IN ('manual', 'venta', 'costo_venta', 'compra',
+                                      'gasto', 'nota_credito', 'cierre_caja',
+                                      'cierre_ejercicio', 'abono',
+                                      'retencion_fuente', 'retencion_ica',
+                                      'nomina', 'ajuste')),
+                origen_id        INTEGER,
+                estado           TEXT NOT NULL DEFAULT 'contabilizado'
+                    CHECK (estado IN ('borrador', 'contabilizado', 'anulado')),
+                total_debito     REAL NOT NULL DEFAULT 0,
+                total_credito    REAL NOT NULL DEFAULT 0,
+                usuario          TEXT,
+                creado           TEXT NOT NULL,
+                actualizado      TEXT,
+                anulado_motivo   TEXT,
+                UNIQUE (tipo_comprobante, numero)
+            )
+        ''')
+        cursor.execute('''
+            INSERT INTO asientos_contables_nueva
+                (id, tipo_comprobante, numero, fecha, periodo, descripcion, origen,
+                 origen_id, estado, total_debito, total_credito, usuario, creado,
+                 actualizado, anulado_motivo)
+            SELECT id, tipo_comprobante, numero, fecha, periodo, descripcion, origen,
+                   origen_id, estado, total_debito, total_credito, usuario, creado,
+                   actualizado, anulado_motivo
+            FROM asientos_contables
+        ''')
+        cursor.execute('DROP TABLE asientos_contables')
+        cursor.execute(
+            'ALTER TABLE asientos_contables_nueva RENAME TO asientos_contables')
+        # Los índices se recrean: al dropear la tabla se perdieron.
+        for sentencia in (
+            'CREATE INDEX IF NOT EXISTS idx_asiento_fecha '
+            'ON asientos_contables (fecha)',
+            'CREATE INDEX IF NOT EXISTS idx_asiento_periodo '
+            'ON asientos_contables (periodo, estado)',
+            'CREATE INDEX IF NOT EXISTS idx_asiento_origen '
+            'ON asientos_contables (origen, origen_id)',
+        ):
+            cursor.execute(sentencia)
+    finally:
+        cursor.execute('PRAGMA foreign_keys = ON')
+
+
+# Catálogo del PUC comercial estándar (Decreto 2650 de 1993) recortado a las
+# cuentas que una ferretería realmente mueve. Formato:
+#   (codigo, nombre, clase, naturaleza, nivel, padre, maneja_movimiento,
+#    requiere_tercero, requiere_centro)
+PLAN_CUENTAS_FERRETERIA = (
+    # ── Clase 1: Activo ──
+    ('1', 'ACTIVO', '1', 'debito', 1, None, 0, 0, 0),
+    ('11', 'Disponible', '1', 'debito', 2, '1', 0, 0, 0),
+    ('1105', 'Caja', '1', 'debito', 3, '11', 0, 0, 0),
+    ('110505', 'Caja general', '1', 'debito', 4, '1105', 1, 0, 0),
+    ('110510', 'Caja menor', '1', 'debito', 4, '1105', 1, 0, 0),
+    ('1110', 'Bancos', '1', 'debito', 3, '11', 0, 0, 0),
+    ('111005', 'Banco cuenta corriente', '1', 'debito', 4, '1110', 1, 0, 0),
+    ('111010', 'Banco cuenta de ahorros', '1', 'debito', 4, '1110', 1, 0, 0),
+    ('13', 'Deudores', '1', 'debito', 2, '1', 0, 0, 0),
+    ('1305', 'Clientes', '1', 'debito', 3, '13', 0, 1, 0),
+    ('130505', 'Clientes nacionales', '1', 'debito', 4, '1305', 1, 1, 0),
+    ('1355', 'Anticipo de impuestos', '1', 'debito', 3, '13', 0, 0, 0),
+    ('135515', 'Retención en la fuente', '1', 'debito', 4, '1355', 1, 1, 0),
+    ('135517', 'Retención de IVA', '1', 'debito', 4, '1355', 1, 1, 0),
+    ('135518', 'Retención de ICA', '1', 'debito', 4, '1355', 1, 1, 0),
+    ('14', 'Inventarios', '1', 'debito', 2, '1', 0, 0, 0),
+    ('1435', 'Mercancías no fabricadas por la empresa', '1', 'debito', 3, '14', 1, 0, 0),
+    # ── Clase 2: Pasivo ──
+    ('2', 'PASIVO', '2', 'credito', 1, None, 0, 0, 0),
+    ('22', 'Proveedores', '2', 'credito', 2, '2', 0, 0, 0),
+    ('2205', 'Proveedores nacionales', '2', 'credito', 3, '22', 1, 1, 0),
+    ('23', 'Cuentas por pagar', '2', 'credito', 2, '2', 0, 0, 0),
+    ('2335', 'Costos y gastos por pagar', '2', 'credito', 3, '23', 1, 1, 0),
+    ('2365', 'Retención en la fuente', '2', 'credito', 3, '23', 1, 1, 0),
+    ('2367', 'Retención de IVA', '2', 'credito', 3, '23', 1, 1, 0),
+    ('2368', 'Retención de ICA', '2', 'credito', 3, '23', 1, 1, 0),
+    ('24', 'Impuestos, gravámenes y tasas', '2', 'credito', 2, '2', 0, 0, 0),
+    ('2404', 'De IVA', '2', 'credito', 3, '24', 1, 0, 0),
+    ('2408', 'De impuesto al consumo', '2', 'credito', 3, '24', 1, 0, 0),
+    ('25', 'Obligaciones laborales', '2', 'credito', 2, '2', 0, 0, 0),
+    ('2505', 'Salarios por pagar', '2', 'credito', 3, '25', 1, 1, 0),
+    # ── Clase 3: Patrimonio ──
+    ('3', 'PATRIMONIO', '3', 'credito', 1, None, 0, 0, 0),
+    ('31', 'Capital social', '3', 'credito', 2, '3', 0, 0, 0),
+    ('3115', 'Aportes sociales', '3', 'credito', 3, '31', 1, 0, 0),
+    ('36', 'Resultados del ejercicio', '3', 'credito', 2, '3', 0, 0, 0),
+    ('3605', 'Utilidad del ejercicio', '3', 'credito', 3, '36', 1, 0, 0),
+    ('3606', 'Pérdida del ejercicio', '3', 'debito', 3, '36', 1, 0, 0),
+    # ── Clase 4: Ingresos ──
+    ('4', 'INGRESOS', '4', 'credito', 1, None, 0, 0, 0),
+    ('41', 'Ingresos operacionales', '4', 'credito', 2, '4', 0, 0, 0),
+    ('4135', 'Comercio al por mayor y al por menor', '4', 'credito', 3, '41', 1, 0, 0),
+    ('4175', 'Devoluciones en ventas', '4', 'debito', 3, '41', 1, 0, 0),
+    ('42', 'Ingresos no operacionales', '4', 'credito', 2, '4', 0, 0, 0),
+    ('4295', 'Ingresos diversos', '4', 'credito', 3, '42', 1, 0, 0),
+    # ── Clase 5: Gastos ──
+    ('5', 'GASTOS', '5', 'debito', 1, None, 0, 0, 0),
+    ('51', 'Gastos operacionales de administración', '5', 'debito', 2, '5', 0, 0, 0),
+    ('5105', 'Gastos de personal', '5', 'debito', 3, '51', 0, 0, 0),
+    ('510506', 'Sueldos', '5', 'debito', 4, '5105', 1, 0, 0),
+    ('5135', 'Servicios', '5', 'debito', 3, '51', 0, 0, 0),
+    ('513505', 'Arrendamientos', '5', 'debito', 4, '5135', 1, 0, 0),
+    ('513510', 'Servicios públicos', '5', 'debito', 4, '5135', 1, 0, 0),
+    ('513520', 'Transporte, fletes y acarreos', '5', 'debito', 4, '5135', 1, 0, 0),
+    ('5195', 'Gastos diversos', '5', 'debito', 3, '51', 1, 0, 0),
+    # ── Clase 6: Costos de venta ──
+    ('6', 'COSTOS DE VENTA', '6', 'debito', 1, None, 0, 0, 0),
+    ('61', 'Costo de venta', '6', 'debito', 2, '6', 0, 0, 0),
+    ('6135', 'Costo de venta — comercio al por menor', '6', 'debito', 3, '61', 1, 0, 0),
+)
+
+
+# Reglas por defecto: traducen los hechos del negocio (venta, costo de venta,
+# gasto, retención...) a cuentas. Formato:
+#   (evento, condicion, cuenta_debito, cuenta_credito, campo_monto, componente,
+#    orden, prioridad, requiere_tercero)
+REGLAS_CONTABLES_DEFECTO = (
+    # VENTA EN EFECTIVO. El asiento debe cuadrar así (ejemplo: total 119.000,
+    # subtotal 100.000, IVA 19.000):
+    #     Débito  110505 Caja         119.000  (lo que entra: el TOTAL, con IVA)
+    #     Crédito 4135   Ingresos     100.000  (solo el valor sin impuesto)
+    #     Crédito 2404   IVA por pagar 19.000  (el impuesto NO es ingreso)
+    # Por eso el débito usa `total` y los créditos van por separado: uno con
+    # `subtotal` y otro con `iva`. Poner el débito en `subtotal` descuadraba
+    # (faltaban justamente los 19.000 del IVA).
+    ('venta', 'efectivo', '110505', None, 'total', None, 10, 50, 0),
+    ('venta', 'efectivo', None, '4135', 'subtotal', None, 20, 50, 0),
+    ('venta', 'efectivo', None, '2404', 'iva', 'iva', 30, 50, 0),
+    # VENTA A CRÉDITO: en vez de caja, queda una cuenta por cobrar (clientes).
+    ('venta', 'credito', '130505', None, 'total', None, 10, 50, 1),
+    ('venta', 'credito', None, '4135', 'subtotal', None, 20, 50, 0),
+    ('venta', 'credito', None, '2404', 'iva', 'iva', 30, 50, 0),
+    # Regla genérica de venta (cualquier forma de pago no cubierta arriba).
+    ('venta', '*', '110505', None, 'total', None, 10, 90, 0),
+    ('venta', '*', None, '4135', 'subtotal', None, 20, 90, 0),
+    ('venta', '*', None, '2404', 'iva', 'iva', 30, 90, 0),
+    # COSTO DE VENTA: sale el inventario y se reconoce el costo (para la utilidad).
+    ('costo_venta', '*', '6135', '1435', 'costo', None, 10, 50, 0),
+    # RETENCIÓN EN LA FUENTE: la ferretería la sufre, así que se abona a la cuenta
+    # por cobrar/depósito y queda como activo (anticipo de impuestos).
+    #
+    # `requiere_tercero = 1`: la línea del anticipo (135515/135518) debe llevar
+    # el documento del tercero que prácticó la retención. Sin él, los
+    # certificados de retención a fin de año y la información exógena (por NIT)
+    # no se pueden consolidar: el asiento diría QUE se retuvo pero no A QUIÉN.
+    ('retencion_fuente', '*', '135515', '130505', 'retencion_fuente', None, 10, 50, 1),
+    ('retencion_ica', '*', '135518', '130505', 'retencion_ica', None, 10, 50, 1),
+    # GASTO: por defecto sale de caja y va a gastos diversos. Cada categoría
+    # concreta se puede sobrescribir con una regla de menor `prioridad`
+    # (ver GASTOS por categoría abajo).
+    ('gasto', '*', '5195', '110505', 'monto', None, 10, 90, 0),
+    # Categorías de gasto más comunes de una ferretería.
+    ('gasto', 'arriendo', '513505', '110505', 'monto', None, 10, 40, 0),
+    ('gasto', 'arrendamiento', '513505', '110505', 'monto', None, 10, 40, 0),
+    ('gasto', 'servicios', '513510', '110505', 'monto', None, 10, 40, 0),
+    ('gasto', 'servicios publicos', '513510', '110505', 'monto', None, 10, 40, 0),
+    ('gasto', 'transporte', '513520', '110505', 'monto', None, 10, 40, 0),
+    ('gasto', 'fletes', '513520', '110505', 'monto', None, 10, 40, 0),
+    ('gasto', 'nomina', '510506', '110505', 'monto', None, 10, 40, 0),
+    ('gasto', 'sueldos', '510506', '110505', 'monto', None, 10, 40, 0),
+)
+
+
+def _sembrar_contabilidad(cursor):
+    """Siembra el PUC y las reglas por defecto (idempotente).
+
+    `INSERT OR IGNORE` sobre claves únicas/primarias: no pisa lo que el contador
+    ya haya configurado a mano. Se ejecuta en cada arranque, así que una
+    instalación nueva queda lista sin intervención y una existente no se altera.
+    """
+    ahora = datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+
+    for (codigo, nombre, clase, naturaleza, nivel, padre,
+         maneja, req_tercero, req_centro) in PLAN_CUENTAS_FERRETERIA:
+        cursor.execute(
+            "INSERT OR IGNORE INTO plan_cuentas "
+            "(codigo, nombre, clase, naturaleza, nivel, padre, maneja_movimiento, "
+            " requiere_tercero, requiere_centro, activo, creado) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1, ?)",
+            (codigo, nombre, clase, naturaleza, nivel, padre,
+             maneja, req_tercero, req_centro, ahora),
+        )
+
+    # Centros de costo típicos de una ferretería con taller de figurado.
+    for codigo, nombre, descripcion in (
+        ('CC-MOSTRADOR', 'Mostrador', 'Ventas de mostrador'),
+        ('CC-ALMACEN', 'Almacén', 'Bodega y despacho'),
+        ('CC-TALLER', 'Taller de figurado', 'Fabricación de fleje y figurado'),
+        ('CC-ADMIN', 'Administración', 'Gastos administrativos'),
+    ):
+        cursor.execute(
+            "INSERT OR IGNORE INTO centros_costo "
+            "(codigo, nombre, descripcion, activo, creado) VALUES (?, ?, ?, 1, ?)",
+            (codigo, nombre, descripcion, ahora),
+        )
+
+    # Las reglas NO tienen una clave única natural, así que se protege la
+    # idempotencia comprobando si ya existe una regla ACTIVA identificada por
+    # TODA su firma (evento + condición + cuentas + campo + componente).
+    #
+    # OJO: no basta con mirar (evento, condicion). Un mismo evento tiene VARIAS
+    # reglas por condición: la venta en efectivo necesita una línea para la caja
+    # /ingreso y OTRA para el IVA por pagar. Si se deduplicara solo por
+    # (evento, condicion), la segunda regla se descartaría en silencio y el IVA
+    # nunca se contabilizaría. La firma completa distingue ambas.
+    for (evento, condicion, debito, credito, campo, componente,
+         orden, prioridad, req_tercero) in REGLAS_CONTABLES_DEFECTO:
+        existe = cursor.execute(
+            "SELECT 1 FROM parametrizacion_contable "
+            "WHERE evento = ? AND condicion = ? AND activo = 1 "
+            "  AND COALESCE(cuenta_debito, '') = COALESCE(?, '') "
+            "  AND COALESCE(cuenta_credito, '') = COALESCE(?, '') "
+            "  AND campo_monto = ? "
+            "  AND COALESCE(componente, '') = COALESCE(?, '') "
+            "LIMIT 1",
+            (evento, condicion, debito, credito, campo, componente),
+        ).fetchone()
+        if existe:
+            continue
+        cursor.execute(
+            "INSERT INTO parametrizacion_contable "
+            "(evento, condicion, cuenta_debito, cuenta_credito, campo_monto, "
+            " componente, orden, prioridad, requiere_tercero, activo) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 1)",
+            (evento, condicion, debito, credito, campo, componente,
+             orden, prioridad, req_tercero),
+        )
+
+    # ═════════════════════════════════════════════════════
+    # MIGRACIÓN: exigir tercero en las reglas de retención
+    # ═════════════════════════════════════════════════════
+    # Las instalaciones anteriores sembraron las reglas de retención con
+    # `requiere_tercero = 0`. Como las reglas NO se recrean (la inserción de
+    # arriba respeta lo ya existente), cambiar la tupla de `REGLAS_CONTABLES_
+    # DEFECTO` NO corrige una base ya desplegada: hay que forzar el flag.
+    #
+    # Se actualiza por CUENTA (135515/135518) y no por evento, porque la
+    # exigencia es de la cuenta de anticipo, no del nombre del hecho: así cubre
+    # también cualquier regla de retención futura (p. ej. retención de IVA
+    # 135517) sin tener que enumerar cada evento.
+    #
+    # Idempotente: solo toca filas que hoy estén en 0.
+    cursor.execute(
+        "UPDATE parametrizacion_contable SET requiere_tercero = 1 "
+        "WHERE requiere_tercero = 0 "
+        "  AND (cuenta_debito  IN ('135515', '135517', '135518') "
+        "       OR cuenta_credito IN ('135515', '135517', '135518') "
+        "       OR cuenta_debito  IN ('2365', '2367', '2368') "
+        "       OR cuenta_credito IN ('2365', '2367', '2368'))"
+    )
+
+
 def init_db():
     """Construye/actualiza el esquema completo de la base de datos."""
     conn = get_db()
@@ -1005,7 +1476,9 @@ def init_db():
     _crear_tablas_pedidos(cursor)
     _crear_tablas_cotizaciones(cursor)
     _crear_tablas_dian(cursor)
+    _crear_tablas_contabilidad(cursor)
     _aplicar_migraciones(cursor)
+    _sembrar_contabilidad(cursor)
     _sembrar_datos_por_defecto(cursor)
 
     crear_indices(cursor)

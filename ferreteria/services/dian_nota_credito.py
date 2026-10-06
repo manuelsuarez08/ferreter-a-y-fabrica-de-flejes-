@@ -14,12 +14,18 @@ EMITIDA y produce el documento electrónico que la DIAN exige para revertirla:
       6. Firma con el .p12 (XAdES-EPES).
       7. Envía por SendBillSync (o SendTestSetAsync en habilitación con set).
       8. Guarda el veredicto.
-      9. Si la DIAN ACEPTA, revierte la venta y devuelve el stock.
+      9. Si la DIAN ACEPTA, revierte la venta, devuelve el stock Y revierte los
+         asientos contables (asiento espejo). El evento fiscal y el contable
+         ocurren juntos.
 
 PUNTO CLAVE: la venta NO se anula hasta que la nota crédito es aceptada por la
 DIAN. Antes de eso el documento original sigue vigente y la venta no se toca.
 Es lo contrario de lo que hacía el POS antes de este módulo, que marcaba
 `anulada` sin preguntar a la DIAN.
+
+La reversión contable vive en `revertir_venta` (no en el endpoint) porque es el
+punto común del envío directo y del reintento de la cola tras una contingencia:
+así una nota aceptada al reenviarse también ajusta el libro mayor.
 
 Si el envío falla (sin red), el documento queda en 'contingencia' y la venta NO
 se revierte: cuando vuelva la conexión se reintenta y, al aceptarse, se aplica
@@ -35,6 +41,9 @@ from . import dian_firma
 from . import dian_notas
 from . import dian_pos
 from . import dian_soap
+# Se importa el MÓDULO contable (no la función) para poder capturar
+# `contabilidad.ErrorContabilidad` y revertir el asiento junto con la venta.
+from . import contabilidad
 from .dian_emision import (
     ErrorEmision,
     _cargar_certificado,
@@ -265,12 +274,19 @@ def _asignar_numero(conn, ajustes):
 # Reversión de la venta e inventario
 # ═════════════════════════════════════════════════════
 def revertir_venta(conn, id_venta, usuario, motivo):
-    """Marca la venta como revertida y devuelve el stock.
+    """Marca la venta como revertida, devuelve el stock y revierte los asientos.
 
     SOLO se llama cuando la nota crédito fue ACEPTADA por la DIAN. Hasta ese
     momento la venta sigue vigente.
 
-    Idempotente: si la venta ya está revertida, no devuelve el stock dos veces.
+    Este es el ÚNICO punto por el que pasa la reversión de una venta emitida:
+    lo usan tanto el envío directo (`_enviar`) como el reintento de la cola tras
+    una contingencia. Por eso el asiento contable se revierte AQUÍ y no en el
+    endpoint: de lo contrario, una nota que se acepta al reenviarse desde la
+    contingencia devolvería el stock pero dejaría el libro mayor intacto.
+
+    Idempotente: si la venta ya está revertida, no devuelve el stock ni revierte
+    los asientos dos veces.
     """
     venta = conn.execute(
         'SELECT anulada FROM ventas WHERE id = ?', (id_venta,)
@@ -278,7 +294,7 @@ def revertir_venta(conn, id_venta, usuario, motivo):
     if not venta:
         raise ErrorEmision(f'La venta #{id_venta} no existe')
     if venta[0]:
-        # Ya revertida: no se vuelve a tocar el stock.
+        # Ya revertida: no se vuelve a tocar el stock ni la contabilidad.
         return False
 
     detalles = conn.execute(
@@ -303,6 +319,19 @@ def revertir_venta(conn, id_venta, usuario, motivo):
         'UPDATE ventas SET anulada = 1, motivo_anulacion = ?,'
         ' saldo_pendiente = 0 WHERE id = ?',
         (f'Revertida por nota crédito: {motivo}', id_venta))
+
+    # ── REVERSIÓN CONTABLE (asiento espejo) ─────────────────────────────────
+    # El evento FISCAL (nota crédito aceptada por la DIAN) y el evento CONTABLE
+    # (ajuste en el libro mayor) ocurren en el mismo hito y la misma transacción:
+    # si la reversión falla, el rollback del llamador deshace también la
+    # devolución de stock, y nunca queda una venta "revertida a medias".
+    #
+    # Se revierten TODOS los asientos de la venta (ingreso, IVA, costo de venta
+    # y retenciones) porque la nota crédito corrige el documento completo.
+    contabilidad.revertir_asientos(
+        conn, origen_id=id_venta,
+        motivo=f'Nota crédito: {motivo}', usuario=usuario)
+
     return True
 
 

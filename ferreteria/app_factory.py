@@ -8,9 +8,9 @@ from datetime import timedelta
 from flask import Flask
 from .config import SECRET_KEY, SESION_HORAS
 from .db import asegurar_base_de_datos, init_db, respaldar_base_de_datos
-from .blueprints import (alquiler, catalogo, core, cotizaciones, dian_notas,
-                         dian_pos, fabrica, pedidos, personalizacion,
-                         superadmin, ventas)
+from .blueprints import (alquiler, catalogo, contabilidad, core, cotizaciones,
+                         dian_notas, dian_pos, fabrica, pedidos,
+                         personalizacion, superadmin, ventas)
 
 
 def create_app(inicializar_db=True, iniciar_hilo_dian=True):
@@ -52,6 +52,8 @@ def create_app(inicializar_db=True, iniciar_hilo_dian=True):
     dian_pos.registrar(app)
     # Notas crédito electrónicas y documentos soporte a no obligados.
     dian_notas.registrar(app)
+    # Reportes contables: libro diario, balance de comprobación, mayor, etc.
+    contabilidad.registrar(app)
     # Panel del desarrollador. Se registra en la MISMA app, pero sus rutas exigen
     # el rol `superadmin`, que solo existe en la base del desarrollador: una
     # ferretería que corre su propia instancia nunca puede tener ese usuario.

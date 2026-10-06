@@ -13,6 +13,9 @@ from ..security import admin_required, login_required
 from ..services.auditoria import registrar_auditoria
 from ..services.ordenes_fleje import registrar_orden_fleje_desde_venta
 from ..services.dian import redondear_pesos
+# Se importa el modulo (no sus funciones) para poder capturar el
+# `contabilidad.ErrorContabilidad` que dispara un asiento descuadrado.
+from ..services import contabilidad
 # Se importa el modulo (no sus funciones) porque `estado_fiscal_venta` y
 # `venta_emitida` se usan para BLOQUEAR la edicion y la anulacion de ventas
 # que ya tienen documento electronico.
@@ -409,9 +412,41 @@ def _registrar_venta():
             if _es_producto_fleje(d['nombre'], d['categoria'], d['item']):
                 registrar_orden_fleje_desde_venta(conn, id_venta, id_cliente, d['item'], d['nombre'])
 
+        # ── Asientos contables automáticos (partida doble) ──────────────────
+        # Se generan DENTRO de la misma transacción de la venta: si el asiento
+        # no cuadra, el rollback de abajo revierte la venta completa. Nunca
+        # queda una venta cobrada sin su registro contable.
+        #
+        # El costo de lo vendido se calcula con `precio_costo` (el valor sin
+        # IVA del catálogo) para poder reconocer la utilidad. Si el producto no
+        # lo tiene cargado, aporta 0: el asiento de costo se omite, no se
+        # inventa un valor.
+        contabilidad.asiento_de_venta(
+            conn,
+            id_venta=id_venta,
+            fecha=now.strftime('%Y-%m-%d'),
+            total_venta=total_venta,
+            subtotal_venta=subtotal_venta,
+            iva_valor=iva_valor,   # el IVA REALMENTE cobrado, no uno recalculado
+            costo_venta=_costo_de_detalles(cursor, detalles),
+            retencion_fuente=retencion_fuente,
+            retencion_ica=retencion_ica,
+            tipo_pago=tipo_pago,
+            tercero={'tipo': str(data.get('tipo_documento') or 'CC'),
+                     'numero': cliente_para_factura,
+                     'nombre': cliente[0] if cliente else ''},
+            usuario=session.get('usuario'),
+        )
+
         etiqueta = f'Para llevar — Pedido #{numero_pedido}' if numero_pedido else 'Entrega en mostrador'
         registrar_auditoria(conn, 'crear', 'venta', id_venta, f'Venta de {total_venta:.2f} — {etiqueta}')
         conn.commit()
+    except contabilidad.ErrorContabilidad as e:
+        # El asiento no cuadra: la venta NO se registra. Es preferible rechazar
+        # la operación a dejar un dato fiscal incorrecto en el sistema.
+        conn.rollback()
+        conn.close()
+        return jsonify({"error": f'Error contable: {e}'}), 409
     except Exception as e:
         conn.rollback()
         conn.close()
@@ -910,10 +945,29 @@ def anular_venta(id_venta):
         )
     conn.execute("UPDATE ventas SET anulada = 1, motivo_anulacion = ?, saldo_pendiente = 0 WHERE id = ?",
                  (motivo, id_venta))
+
+    # ── REVERSIÓN CONTABLE ──────────────────────────────────────────────
+    # Anular la venta sin tocar la contabilidad dejaba el ingreso, el IVA y el
+    # costo de venta "vivos" en el libro mayor, y la utilidad del período
+    # mentía. Se revierten TODOS los asientos del documento (venta, costo de
+    # venta y retenciones): el motor invierte las líneas y marca cada asiento
+    # original como 'anulado', sin borrar nada (la numeración contable es
+    # legal y no puede tener huecos).
+    #
+    # Se hace DENTRO de la misma transacción: si la reversión no cuadra, el
+    # rollback deja la venta sin anular en vez de dejarla a medias.
+    try:
+        contabilidad.revertir_asientos(
+            conn, origen_id=id_venta, motivo=motivo, usuario=session.get('usuario'))
+    except contabilidad.ErrorContabilidad as e:
+        conn.rollback()
+        conn.close()
+        return jsonify({"error": f'Error contable al anular: {e}'}), 409
+
     registrar_auditoria(conn, 'anular', 'venta', id_venta, motivo)
     conn.commit()
     conn.close()
-    return jsonify({"mensaje": "Venta anulada y stock restaurado"})
+    return jsonify({"mensaje": "Venta anulada, stock restaurado y asientos revertidos"})
 
 
 @bp.route('/api/ventas/<int:id_venta>/cliente', methods=['PUT'])
