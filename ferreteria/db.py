@@ -667,6 +667,22 @@ def _aplicar_migraciones(cursor):
         ''')
 
     # ═════════════════════════════════════════════════════
+    # TABLAS CONTABLES (garantía para cualquier base migrada)
+    # ═════════════════════════════════════════════════════
+    # Registrar una venta contabiliza SIEMPRE (el handler llama a
+    # `contabilidad.asiento_de_venta` dentro de la misma transacción). Si las
+    # tablas contables no existen, la venta revienta con 500.
+    #
+    # `init_db()` ya las crea, pero hay muchos caminos que migran una base SIN
+    # pasar por `init_db`: los módulos de prueba que preparan su propia copia de
+    # la semilla, y scripts de mantenimiento. Garantizarlas AQUÍ (idempotente:
+    # CREATE TABLE IF NOT EXISTS) evita que cada uno tenga que acordarse de
+    # llamar a `_crear_tablas_contabilidad`, que es justo lo que se olvidó y
+    # rompió la suite entera cuando se introdujo el módulo.
+    _crear_tablas_contabilidad(cursor)
+    _sembrar_contabilidad(cursor)
+
+    # ═════════════════════════════
     # SERIES DE NUMERACIÓN DIAN (una por tipo de documento)
     # ═════════════════════════════════════════════════════
     # Antes la numeración vivía en columnas sueltas de `configuracion`

@@ -388,25 +388,38 @@ def _resumen_tributos_especificos(items):
 def _leer_items(cursor, id_venta, iva_porcentaje_venta, iva_por_producto=False):
     """Líneas del documento a partir del detalle de la venta.
 
-    IMPORTANTE (decisión fiscal): en este POS el `precio_venta` del producto es
-    el PRECIO FINAL que paga el cliente, ya con IVA incluido. El anexo técnico,
-    en cambio, pide `PriceAmount` SIN impuestos y calcula la base gravable sobre
-    él. Por eso aquí se DESAGREGA: base = precio final / (1 + tasa). Si no se
-    hiciera, el total del documento quedaría inflado (se le sumaría el IVA dos
-    veces) y la DIAN rechazaría el cuadre.
+    MODELO DE NEGOCIO: PRECIO CON IMPUESTO INCLUIDO
+    -----------------------------------------------
+    En este POS el `precio_venta` del producto es el PRECIO FINAL que paga el
+    cliente, ya con IVA incluido. El anexo técnico, en cambio, pide
+    `PriceAmount` SIN impuestos y calcula la base gravable sobre él. Por eso aquí
+    se DESAGREGA.
+
+    Con un tributo específico de Ley 2277 el precio trae las DOS cosas y hay que
+    quitar las dos, en este orden:
+
+        base = (precio - tributo por unidad) / (1 + tasa IVA)
+
+    El tributo se resta ANTES de dividir porque son magnitudes distintas: el IVA
+    es un PORCENTAJE de la base, el IBUA son PESOS POR UNIDAD de medida. Si se
+    dividiera primero, el IVA se calcularía sobre una base que todavía contiene el
+    tributo.
 
     ADVERTENCIA SOBRE EL TRATAMIENTO FISCAL (leer antes de tocar esto)
     ------------------------------------------------------------------
     Hay dos cosas en esta función que NO se han resuelto y que no puede
     resolver el código:
 
-    1. Si el IVA debe gravar sobre la base antes o después de aplicar el
-       tributo específico. Aquí se separa de forma coherente: el IVA va sobre la
-       base del bien y el tributo se suma por fuera. Eso responde a la
-       DIMENSIONALIDAD de cada magnitud (el IVA es un porcentaje, el IBUA son
-       pesos por litro), no a una lectura del reglamento. No se pudo cotejar
-       con el decreto reglamentario de la Ley 2277 de 2022 porque el servicio
-       de la DIAN no respondió y no hay copia oficial del Anexo V1.9.
+    1. Si el IVA debe gravar sobre la base del bien o sobre la base más el
+       tributo específico. Lo que hay aquí es la REGLA DE COBRO DEL NEGOCIO
+       (el precio de mostrador trae el impuesto dentro), que es un hecho
+       verificado. Lo que NO se pudo cotejar es si la Ley 2277 de 2022 exige esa
+       base o la otra: el Anexo Técnico V1.9 define qué tributo existe y cómo se
+       liquida, pero el tratamiento del IVA respecto del específico está en la
+       reglamentación de la Ley, que no se pudo consultar porque el servicio de la
+       DIAN no respondió y la tabla de nominales vive en un paquete que publica
+       aparte (Anexo V1.9, página 9). La fórmula alternativa queda escrita en el
+       cuerpo, junto a esta.
 
     2. El valor nominal de cada tributo. Las columnas quedan vacías y un
        producto sin los tres datos no genera subtotal. Deben rellenarse con
@@ -491,46 +504,88 @@ def _leer_items(cursor, id_venta, iva_porcentaje_venta, iva_por_producto=False):
             # a toda la venta, no la que trae el producto (que es 0 en todos).
             iva_tasa = float(iva_porcentaje_venta or 0)
 
-        # Desagregación: del precio final (con IVA) a la base (sin IVA).
+        # ── Tributo con tarifa ESPECIFICA (Ley 2277 de 2022) ───────────────
+        # A diferencia del IVA, este NO es un porcentaje de la base: es un
+        # valor nominal por unidad de medida. La cuenta es
         #
-        # OJO con el tributo especifico: NO se resta aqui. Restarlo NO tiene
-        # sentido dimensional: el IVA es un PORCENTAJE de la base, asi que
-        # dividir el precio por (1 + 0,19) es correcto. El IBUA son PESOS POR
-        # LITRO, no un porcentaje: dividir por (1 + 0,09) estaria usando una
-        # razon entre magnitudes distintas. Lo que se hace es SUMARLO al total
-        # de la venta, porque el impuesto se cobra por fuera del precio del
-        # bien.
+        #     impuesto = nominal x (cantidad vendida x contenido por unidad)
         #
-        # SI EL IVA DEBE GRAVAR SOBRE O DEBAJO DEL TRIBUTO ESPECIFICO, NO SE
-        # HA RESUELTO. Lo que hay aqui es una eleccion COHERENTE y
-        # dimensionalmente correcta, no una lectura del reglamento.
+        # El `contenido` es lo que convierte "3 botellas" en litros. Sin el no
+        # hay cuenta posible, y el producto queda sin tributo: es preferible a
+        # declarar un impuesto inventado.
         #
-        # La forma implementada deja el IVA sobre la base del bien y suma el
-        # tributo por fuera. Que ese sea el tratamiento que exige la norma
-        # depende de como este redacto el decreto reglamentario de la Ley
-        # 2277 de 2022, y eso no se pudo cotejar: el servicio de la DIAN no
-        # respondio y no hay copia oficial del Anexo V1.9 a mano.
+        # Se calcula ANTES del desagregado y no despues, y eso es lo unico que
+        # cambio respecto del modelo anterior: hace falta el valor para poder
+        # restarlo del precio.
         #
-        # SI el regimen correcto fuera al reves (IVA sobre base + tributo), el
-        # desagregador seria este, no el de arriba:
+        # Los tres datos tienen que estar: tipo, nominal y contenido. Con uno
+        # solo falta, no se liquida nada.
+        especifico = _tributo_especifico_de_linea(
+            trib_tipo, trib_nominal, trib_contenido, cantidad)
+
+        # Desagregación: del precio de venta a la base gravable.
         #
-        #     base = (precio - nominal x contenido x cantidad) / (1 + iva)
+        # MODELO DE NEGOCIO: PRECIO CON IMPUESTO INCLUIDO
+        # ------------------------------------------------
+        # El negocio cobro siempre con impuesto dentro del precio de mostrador.
+        # Eso significa que el precio de la linea trae las DOS cosas: el IVA
+        # (que es un PORCENTAJE de la base) y el tributo especifico (que son
+        # PESOS POR UNIDAD). Para sacar la base hay que quitar las dos, y en
+        # este orden:
         #
-        # OJO al numero de unidades. El tributo se cobra POR UNIDAD, asi que
-        # hay que restar el de TODAS las unidades vendidas, no el de una:
+        #     base = (precio - tributo) / (1 + iva)
         #
-        #     3 botellas de 500 ml a 0,18 -> 0,18 x 0,5 x 3 = 0,27
+        # No se puede hacer en un solo paso dividiendo por (1 + iva) y restando
+        # despues: eso_desagregaria el IVA sobre una base que todavia contiene el
+        # tributo, y el impuesto quedaria calculado sobre una cifra que no es la
+        # base real.
         #
-        # Restando solo 0,09 (una unidad) la base queda 7562,95 en vez de
-        # 7562,80 y el IVA se declara 0,03 por encima. Es la clase de error de
-        # centavos que este proyecto lleva varias rondas cerrando, y la razon
-        # por la que el numero de unidades va explicito en la formula.
+        # OJO al numero de unidades. El tributo se cobra POR UNIDAD, asi que la
+        # parte que corresponde a ESTA unidad es la misma para las tres:
         #
-        # Quien active esta rama debe resolver antes las DOS cosas que faltan:
-        # el valor nominal oficial de cada tributo y el tratamiento del IVA
-        # respecto del especifico. Ninguna de las dos la puede decidir el
-        # codigo.
-        precio_base = (precio_final / (1 + iva_tasa / 100)) if iva_tasa else precio_final
+        #     por unidad = 0,18 x 0,5          = 0,09
+        #     por linea  = 0,18 x 0,5 x 3      = 0,27
+        #
+        # Repartir es lo correcto porque `precio_final` es el precio UNITARIO. Y
+        # el resultado tiene que ser el mismo para las tres: si el desagregador
+        # se llevara el total de la linea contra un precio de una unidad, la base
+        # de cada linea saldria distinta y la suma no cuadraria con el total que
+        # el POS cobro.
+        #
+        # Con cantidad 1, el total y la parte por unidad coinciden y este reparto
+        # no hace nada. Es en ventas de varias unidades donde el error se ve, y
+        # por eso la prueba usa tres.
+        #
+        # ESTO SIGUE SIN VERIFICARSE CONTRA LA NORMA, y conviene no perderlo de
+        # vista: lo que se implemento es la regla de cobro del negocio, que es
+        # un hecho. Lo que NO se pudo cotejar es si la Ley 2277 de 2022 exige
+        # que el IVAgrave sobre la base del bien o sobre la base mas el tributo
+        # especifico. El Anexo Tecnico V1.9 define QUE tributo existe y COMO se
+        # liquida, pero el tratamiento del IVA respecto del especifico esta en
+        # la reglamentacion de la Ley, que no se pudo consultar: el servicio de
+        # la DIAN no respondio y la tabla de nominales vive en un paquete que
+        # publica aparte (Anexo V1.9, pagina 9).
+        #
+        # Si ese tratamiento fuera el otro, el desagregador seria:
+        #
+        #     base = (precio - tributo) / (1 + iva) / (1 + iva_especifico)
+        #
+        # y el mismo error de centavos apareceria del otro lado. Por eso la
+        # formula esta escrita con las dos piezas a la vista y no como una
+        # division compacta.
+        # `_tributo_especifico_de_linea` devuelve el valor de TODA la linea
+        # (0,18 x 0,5 x 3 = 0,27). `precio_final` es el precio UNITARIO, asi que
+        # hay que repartir el tributo entre las unidades antes de restarlo. Restar
+        # el total de la linea contra un precio de una unidad daria una cifra sin
+        # sentido en cuanto la cantidad fuera distinta de uno.
+        if especifico and cantidad > 0:
+            tributo_unitario = especifico['valor'] / cantidad
+            precio_sin_tributo = max(precio_final - tributo_unitario, 0.0)
+        else:
+            precio_sin_tributo = precio_final
+
+        precio_base = ((precio_sin_tributo / (1 + iva_tasa / 100))
+                       if iva_tasa else precio_sin_tributo)
         precio_base = redondear(precio_base)
         base = redondear(cantidad * precio_base)
 
@@ -550,25 +605,10 @@ def _leer_items(cursor, id_venta, iva_porcentaje_venta, iva_por_producto=False):
             'base': base,
         })
 
-        # ── Tributo con tarifa ESPECIFICA (Ley 2277 de 2022) ───────────────
-        # A diferencia del IVA, este NO es un porcentaje de la base: es un
-        # valor nominal por unidad de medida. La cuenta es
-        #
-        #     impuesto = nominal x (cantidad vendida x contenido por unidad)
-        #
-        # El `contenido` es lo que convierte "3 botellas" en litros. Sin el no
-        # hay cuenta posible, y el producto queda sin tributo: es preferible a
-        # declarar un impuesto inventado.
-        #
         # El subtotal se calcula AQUI, en la orquestacion, y no en el
         # generador: el generador no sabe de producto ni de ley, solo sabe
         # leer un numero que le dan. Si lo calculara el, habria dos lugares
         # que deciden el impuesto y podrian discrepar.
-        #
-        # Los tres datos tienen que estar: tipo, nominal y contenido. Con uno
-        # solo falta, no se liquida nada.
-        especifico = _tributo_especifico_de_linea(
-            trib_tipo, trib_nominal, trib_contenido, cantidad)
         if especifico:
             items[-1]['tributo_especifico'] = especifico
     return items

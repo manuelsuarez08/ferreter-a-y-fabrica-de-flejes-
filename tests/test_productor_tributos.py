@@ -185,7 +185,28 @@ def base_con_producto_tributado(tmp_path):
     Se construye como las pruebas de `_leer_items` reales: tabla `ventas` y
     `detalle_ventas` de la aplicacion, no un doble de test. Un doble probaria
     el doble; esto prueba que las columnas existen y que el SELECT las trae.
+
+    El producto va a TASA CERO, como los 1461 del catálogo: `iva_tasa` vacío
+    significa que la tarifa no se ha clasificado todavia. Con el interruptor
+    por producto apagado, el codigo aplica la tasa global salvo que la
+    naturaleza sea exenta/no sujeta o la tasa venga en cero explicito.
     """
+    return _base_con_producto(tmp_path, iva_producto=0)
+
+
+@pytest.fixture
+def base_con_producto_tributado_y_gravado(tmp_path):
+    """El mismo producto, pero GRAVADO al 19%.
+
+    Hace falta para probar el desagregador: sin IVA no hay nada que desagregar,
+    y una prueba del modelo con impuesto incluido sobre un producto a tasa
+    cero no estaria probando nada. Es el caso real de una bebida azucarada en
+    una ferreteria que vende con impuesto dentro del precio.
+    """
+    return _base_con_producto(tmp_path, iva_producto=19.0)
+
+
+def _base_con_producto(tmp_path, iva_producto):
     ruta = tmp_path / 'ferreteria.db'
     conn = sqlite3.connect(ruta)
     cursor = conn.cursor()
@@ -198,11 +219,13 @@ def base_con_producto_tributado(tmp_path):
 
     cursor.execute("""
         INSERT INTO productos (nombre, precio_venta, unidad_medida,
+                              iva_tasa,
                               tributo_especifico_tipo,
                               tributo_especifico_nominal,
                               tributo_contenido)
-        VALUES ('Gaseosa 500 ml', 3000, '94', '33', 0.18, 0.5)
-    """)
+        VALUES ('Gaseosa 500 ml', 3000, '94', ?,
+                '33', 0.18, 0.5)
+    """, (iva_producto,))
     id_producto = cursor.lastrowid
 
     cursor.execute("""
@@ -295,42 +318,52 @@ def test_el_total_cuadra_con_el_subtotal(base_con_producto_tributado):
     assert sum(subtotales) == general
 
 
-def test_el_tributo_no_altera_la_base_sino_el_total(base_con_producto_tributado):
-    """El IVA es porcentaje; el IBUA son pesos por litro. No se suman igual.
+def test_el_tributo_se_descuenta_del_precio_antes_de_sacar_la_base(base_con_producto_tributado_y_gravado):
+    """MODELO CON IMPUESTO INCLUIDO: el precio de mostrador trae las dos cosas.
 
-    Aqui esta la distincion que se puede equivocar: el IVA es una fraccion
-    de la base, asi que se desagrega dividiendo. El IBUA es un valor nominal
-    por unidad de medida, asi que NO se desagrega: se SUMA al total.
+    El negocio cobro con impuesto dentro del precio, asi que para sacar la base
+    hay que quitar el IVA (que es porcentaje) y el tributo (que son pesos por
+    litro), en ese orden:
+
+        base = (precio - tributo) / (1 + iva)
 
     Con 3000 por unidad, 19% de IVA y 0,18 por litro sobre botellas de 500 ml:
 
-        base unitaria = 3000 / 1,19           = 2521,01
-        linea (3 u.)  = 2521,01 x 3           = 7563,03
-        IVA                                    = 1436,97
-        IBUA  = 0,18 x (3 x 0,5 L)            = 0,27
-        total cobrado = 7563,03 + 1436,97 + 0,27 = 9000,27
+        tributo unidad = 0,18 x 0,5            = 0,09
+        precio sin tributo = 3000 - 0,09       = 2999,91
+        base unitaria = 2999,91 / 1,19         = 2520,93
 
-    El 0,27 de mas es el tributo: el cliente paga el precio del producto y el
-    impuesto va por fuera. La base NO lo absorbe.
-
-    Si se dividiera el precio entre (1 + 0,18 x 0,5) se obtendria 8257,14 y
-    las cuentas no darian. Ademas es dimensionalmente invalido: se estaria
-    dividiendo pesos entre pesos por litro.
+    El 0,09 entra ANTES de dividir. Si se dividiera primero y se restara
+    despues, el IVA se habria calculado sobre una base que todavia contenia el
+    tributo, y el impuesto quedaria calculado sobre una cifra que no es la base
+    real.
     """
-    conn, id_venta = base_con_producto_tributado
+    conn, id_venta = base_con_producto_tributado_y_gravado
     items = dian_emision._leer_items(conn.cursor(), id_venta, 19.0)
 
     base = Decimal(str(items[0]['precio_unitario']))
     cantidad = Decimal('3')
     iva = Decimal(str(items[0]['iva_tasa'])) / 100
-    trib = Decimal(str(items[0]['tributo_especifico']['valor']))
+    trib_linea = Decimal(str(items[0]['tributo_especifico']['valor']))
+    trib_unidad = trib_linea / cantidad
 
-    # El desagregador es SOLO el IVA: el tributo no entra en el.
-    assert base == (Decimal('3000') / (1 + iva)).quantize(Decimal('0.01'))
+    # El desagregador resta el tributo de UNA unidad, no el de la linea entera.
+    esperado = ((Decimal('3000') - trib_unidad) / (1 + iva)).quantize(
+        Decimal('0.01'))
+    assert base == esperado == Decimal('2520.93')
 
-    # Reconstruccion: base x cantidad, mas IVA, mas el tributo por fuera.
-    reconstruido = base * cantidad * (1 + iva) + trib
-    assert reconstruido == Decimal('9000.27')
+    # Reconstruccion: base x cantidad, mas IVA, mas el tributo.
+    #
+    # Da 8999.9901 en vez de 9000 exacto, y esa diferencia es de redondeo, no
+    # del desagregador: la base unitaria se redondea a 2520.93 (el Anexo pide una
+    # `PriceAmount` por linea, ya redondeada), y al multiplicar por tres y
+    # devolver el IVA acumulado el total queda un centimo por debajo. La DIAN
+    # tolera +-2 en los montos generales, asi que se comprueba la diferencia y no
+    # una igualdad que no se puede cumplir.
+    reconstruido = base * cantidad * (1 + iva) + trib_linea
+    assert reconstruido == Decimal('8999.9901')
+    assert abs(Decimal('9000') - reconstruido) <= Decimal('2'), \
+        'la diferencia debe caber en la tolerancia de la DIAN para montos generales'
 
 
 def test_el_tributo_es_por_unidad_y_no_por_linea(base_con_producto_tributado):
@@ -352,6 +385,38 @@ def test_el_tributo_es_por_unidad_y_no_por_linea(base_con_producto_tributado):
     # El valor calculado lleva YA las tres unidades.
     assert Decimal(str(trib['valor'])) == Decimal('0.27')
     assert Decimal(str(trib['valor'])) != Decimal('0.09')
+
+
+def test_el_tributo_se_reparte_entre_las_unidades(base_con_producto_tributado_y_gravado):
+    """El desagregador resta la parte de UNA unidad, no el total de la linea.
+
+    `_tributo_especifico_de_linea` devuelve 0,27 (las tres botellas). Pero
+    `precio_final` es el precio UNITARIO, as que restar 0,27 contra un precio de
+    una unidad daria una base distinta para cada linea y la suma no cuadraria con
+    lo que cobro el POS.
+
+    Con cantidad 1 los dos caminos coinciden, asi que este fallo solo aparece en
+    ventas de varias unidades: es el tipo de defecto que pasa la prueba con una
+    unidad y rompe con tres.
+    """
+    conn, id_venta = base_con_producto_tributado_y_gravado
+    items = dian_emision._leer_items(conn.cursor(), id_venta, 19.0)
+
+    cantidad = Decimal('3')
+    trib_linea = Decimal(str(items[0]['tributo_especifico']['valor']))
+    base = Decimal(str(items[0]['precio_unitario']))
+
+    # Si se restara el total de la linea, la base seria MENOR (o incluso
+    # negativa con un nominal mas alto). Con la parte por unidad da positiva y
+    # reconstruye el precio exacto.
+    iva = Decimal(str(items[0]['iva_tasa'])) / 100
+    base_mal = ((Decimal('3000') - trib_linea) / (1 + iva)).quantize(
+        Decimal('0.01'))
+    base_bien = ((Decimal('3000') - trib_linea / cantidad) / (1 + iva)).quantize(
+        Decimal('0.01'))
+
+    assert base == base_bien
+    assert base != base_mal
 
     # Y el desagregador del modelo 'precio con impuesto incluido' necesita el
     # numero de unidades. Se escribe aqui para que la nota del codigo no se
@@ -457,17 +522,18 @@ def test_la_semilla_no_altera_un_documento_sin_tributo():
         'cac:TaxCategory/cac:TaxScheme/cbc:ID', NS).text == '01'
 
 
-def test_el_codigo_no_dice_que_el_iva_grave_sobre_el_tributo():
+def test_el_docstring_dice_que_el_ia_no_grava_sobre_el_tributo():
     """Guarda de honestidad tecnica, no de comportamiento.
 
-    El modelo implementado deja el IVA sobre la base del bien y suma el
-    tributo por fuera. Eso es COHERENTE, pero no esta verificado contra la
-    norma: el servicio de la DIAN no respondio y no hay copia del Anexo V1.9.
+    El modelo implementado (precio con impuesto incluido, tributo restado antes
+    de sacar la base) es la REGLA DE COBRO DEL NEGOCIO, que es un hecho. Lo que
+    NO se pudo cotejar es si la Ley 2277 de 2022 exige que el IVA grave sobre la
+    base del bien o sobre la base mas el tributo especifico.
 
-    Si alguien llegara a este archivo creyendo que la separacion es la regla
-    legal, tomaria una decision sobre una lectura propia. Se deja escrito que
-    es una eleccion dimensional. El fallo de esta prueba es de contenido, y
-    por eso mira el docstring en vez de ejecutar el codigo.
+    Si alguien llegara a este archivo creyendo que la eleccion del desagregador
+    es la regla legal, tomaria una decision sobre una lectura propia. Se deja
+    escrito que es dimensional. El fallo de esta prueba es de contenido, y por
+    eso mira el docstring en vez de ejecutar el codigo.
     """
     import inspect
 
@@ -482,5 +548,5 @@ def test_el_codigo_no_dice_que_el_iva_grave_sobre_el_tributo():
     assert ('no se pudo cotejar' in minusculas
             or 'no se han resuelto' in minusculas), \
         'no advierte de que el tratamiento fiscal NO esta verificado'
-    assert 'dimensional' in minusculas, \
-        'no aclara que la separacion responde a la dimension, no a la norma'
+    assert 'regla de cobro' in minusculas, \
+        'no aclara que lo implementado es la regla del negocio, no la norma'

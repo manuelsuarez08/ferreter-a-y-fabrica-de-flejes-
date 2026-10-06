@@ -53,7 +53,15 @@ def _base_migrada():
     conn = get_db()
     db_mod = importlib.import_module('ferreteria.db')
     db_mod._crear_tablas_base(conn.cursor())
+    # El módulo contable es OBLIGATORIO para registrar una venta: el handler
+    # llama a `contabilidad.asiento_de_venta`, que necesita `plan_cuentas`,
+    # `parametrizacion_contable`, `asientos_contables` y `asiento_detalle`. Si
+    # faltan, la venta revienta con 500 (la contabilización va dentro de la
+    # misma transacción). Por eso hay que crear TAMBIÉN las tablas contables y
+    # sembrar el PUC y las reglas, igual que hace `init_db`.
+    db_mod._crear_tablas_contabilidad(conn.cursor())
     db_mod._aplicar_migraciones(conn.cursor())
+    db_mod._sembrar_contabilidad(conn.cursor())
     conn.commit()
     conn.close()
     yield

@@ -28,6 +28,42 @@ def _ahora():
     return datetime.now().strftime('%Y-%m-%d %H:%M:%S')
 
 
+def _costo_de_detalles(cursor, detalles):
+    """Costo de lo vendido, para el asiento de costo de venta (utilidad).
+
+    Se toma `precio_costo` del catálogo (el valor sin IVA) y se multiplica por la
+    cantidad de cada línea. Si el producto no tiene el costo cargado, aporta 0:
+    es preferible NO reconocer un costo (y que el costo de venta se omita, ver
+    `asiento_de_venta`) a inventar una cifra que descuadraría la utilidad.
+
+    OJO con el JOIN: se consulta por `id_producto` línea a línea en vez de hacer
+    un solo JOIN con `detalle_ventas`, porque en este punto las líneas todavía no
+    están insertadas (se llama antes del INSERT de detalles en algunos flujos).
+
+    Args:
+        cursor: cursor de la conexión en curso.
+        detalles: lista de dicts con al menos 'id_producto' y 'cantidad'.
+
+    Returns:
+        float con el costo total de las líneas (0.0 si no se puede determinar).
+    """
+    total = 0.0
+    for d in detalles:
+        fila = cursor.execute(
+            'SELECT COALESCE(precio_costo, 0) FROM productos WHERE id = ?',
+            (d.get('id_producto'),),
+        ).fetchone()
+        if not fila:
+            continue
+        try:
+            costo_unitario = float(fila[0] or 0)
+            cantidad = float(d.get('cantidad') or 0)
+        except (TypeError, ValueError):
+            continue
+        total += costo_unitario * cantidad
+    return round(total, 2)
+
+
 # ── Ventas ────────────────────
 @bp.route('/api/ventas', methods=['GET', 'POST'])
 @login_required

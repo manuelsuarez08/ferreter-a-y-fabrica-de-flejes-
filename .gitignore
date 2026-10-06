@@ -120,6 +120,11 @@ _tmp_certs/
 # parte de la aplicación.
 _patch_*.py
 _qa_*.mjs
+# Scripts de diagnóstico/prueba que se crean y se borran durante una sesión de
+# trabajo (comprobaciones puntuales del motor contable, de la pantalla, etc.).
+# Se ignoran para que no acaben en un commit por descuido: se borran al terminar.
+herramientas/_tmp_*.py
+herramientas/_tmp_*.mjs
 _qa_*.py
 _auditoria_xml/
 
