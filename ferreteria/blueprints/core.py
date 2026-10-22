@@ -250,7 +250,19 @@ def restaurar_respaldo():
                     pass
     except Exception as e:
         return jsonify({"error": f"No se pudo reemplazar la base: {e}"}), 500
-    # 5) Cuenta final para confirmar al usuario que quedó bien.
+    # 5) Se marca la base como restaurada (para que el arranque no la sustituya
+    #    por la semilla del repositorio) y se aplican las migraciones: un
+    #    respaldo antiguo puede no tener columnas/tablas que la app ya consulta.
+    try:
+        from ..db import init_db, _escribir_version_disco
+        from ..config import SEMILLA_VERSION
+        _escribir_version_disco(DB_NAME, SEMILLA_VERSION)
+        with open(DB_NAME + '.restaurada', 'w', encoding='utf-8') as f:
+            f.write(datetime.now().isoformat())
+        init_db()
+    except Exception as e:
+        return jsonify({"error": f"La base se reemplazó pero falló la migración: {e}"}), 500
+    # 6) Cuenta final para confirmar al usuario que quedó bien.
     try:
         conn = get_db()
         ventas = conn.execute("SELECT COUNT(*) FROM ventas").fetchone()[0]

@@ -1679,6 +1679,10 @@ def asegurar_base_de_datos():
         # reemplaza por la semilla del repositorio para que la app vuelva a
         # arrancar sola.
         if _base_legible(DB_NAME):
+            # Base restaurada por el admin desde un respaldo: es su dato, no se
+            # sustituye por la semilla aunque tenga menos productos.
+            if os.path.exists(DB_NAME + '.restaurada'):
+                return False
             # La base es legible, pero puede estar DESACTUALIZADA respecto al
             # repositorio. Se adopta la semilla en dos casos:
             #   1) La version de semilla del repo es MAYOR que la aplicada en el
