@@ -642,6 +642,13 @@ def _aplicar_migraciones(cursor):
         # Apagado (0), la emisión es manual desde la factura, que es lo correcto
         # durante la habilitación y mientras se configura el software.
         ('dian_emision_automatica', 'INTEGER NOT NULL DEFAULT 0'),
+        # Proveedor externo de facturación (clave API cifrada, nunca en claro).
+        ('fe_api_url', "TEXT DEFAULT ''"),
+        ('fe_api_ruta_ping', "TEXT DEFAULT ''"),
+        ('fe_api_encabezado', "TEXT DEFAULT 'X-API-Key'"),
+        ('fe_api_clave_cifrada', "TEXT DEFAULT ''"),
+        ('fe_api_estado', "TEXT DEFAULT 'desconectado'"),
+        ('fe_api_ultima_verificacion', 'TEXT'),
     ):
         migrar_columna(cursor, 'configuracion', columna, definicion)
 

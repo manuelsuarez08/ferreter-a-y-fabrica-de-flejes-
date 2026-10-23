@@ -190,6 +190,48 @@
     </div>
   </div>
 
+  <!-- ── Proveedor externo de facturación (clave API) ────────────────────── -->
+  <div class="tarjeta-dato p-3 mb-3">
+    <div class="d-flex justify-content-between align-items-center mb-2">
+      <h6 class="mb-0">Proveedor de facturación (API externa)</h6>
+      <span id="prov-estado" class="badge bg-secondary">Desconectado</span>
+    </div>
+    <p class="small text-muted">
+      La clave se valida con el proveedor antes de guardarse y se almacena
+      cifrada en el servidor. Nunca se vuelve a mostrar completa.
+    </p>
+    <form id="form-proveedor" onsubmit="guardarProveedor(event)" autocomplete="off">
+      <div class="row g-2">
+        <div class="col-md-6">
+          <label class="form-label small">URL base (https)</label>
+          <input class="form-control" id="prov-url" placeholder="https://api.proveedor.com"
+                 {% if rol != 'admin' %}disabled{% endif %}>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">Endpoint de prueba</label>
+          <input class="form-control" id="prov-ruta" placeholder="/v1/status"
+                 {% if rol != 'admin' %}disabled{% endif %}>
+        </div>
+        <div class="col-md-3">
+          <label class="form-label small">Encabezado</label>
+          <input class="form-control" id="prov-encabezado" value="X-API-Key"
+                 {% if rol != 'admin' %}disabled{% endif %}>
+        </div>
+        <div class="col-md-9">
+          <label class="form-label small">Clave API / Token</label>
+          <input type="password" class="form-control" id="prov-clave"
+                 autocomplete="new-password"
+                 {% if rol != 'admin' %}disabled{% endif %}>
+        </div>
+        <div class="col-md-3 d-flex align-items-end gap-1">
+          <button class="btn btn-primary flex-fill" id="prov-guardar"
+                  {% if rol != 'admin' %}disabled{% endif %}>Conectar y Guardar</button>
+        </div>
+      </div>
+      <div class="small text-muted mt-2" id="prov-detalle"></div>
+    </form>
+  </div>
+
   <!-- ── Series de numeración (una por tipo de documento) ───────────────── -->
   <!--
     La DIAN autoriza cada tipo de documento con su propia resolución y su propio
@@ -311,6 +353,58 @@ async function api(url, opciones) {
   const datos = await respuesta.json().catch(() => ({}));
   if (!respuesta.ok) throw new Error(datos.error || `Error ${respuesta.status}`);
   return datos;
+}
+
+// ── Proveedor externo de facturación ─────────────────────────────────────
+function pintarProveedor(p) {
+  const etiquetas = {
+    conectado: ['bg-success', 'Conectado'],
+    error: ['bg-danger', 'Error'],
+    desconectado: ['bg-secondary', 'Desconectado'],
+  };
+  const [clase, texto] = etiquetas[p.estado] || etiquetas.desconectado;
+  const badge = document.getElementById('prov-estado');
+  badge.className = `badge ${clase}`;
+  badge.textContent = texto;
+  document.getElementById('prov-url').value = p.url || '';
+  document.getElementById('prov-ruta').value = p.ruta_ping || '';
+  document.getElementById('prov-encabezado').value = p.encabezado || 'X-API-Key';
+  document.getElementById('prov-clave').placeholder =
+    p.tiene_clave ? `Guardada (${p.clave_enmascarada}). Déjela vacía para conservarla` : '';
+  document.getElementById('prov-detalle').textContent =
+    p.ultima_verificacion ? `Última verificación: ${p.ultima_verificacion}` : '';
+}
+
+async function cargarProveedor() {
+  try { pintarProveedor(await api('/api/dian/proveedor-api')); } catch (e) {}
+}
+
+async function guardarProveedor(evento) {
+  evento.preventDefault();
+  const boton = document.getElementById('prov-guardar');
+  boton.disabled = true;
+  boton.textContent = 'Verificando…';
+  try {
+    const r = await api('/api/dian/proveedor-api', {
+      method: 'PUT',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        url: document.getElementById('prov-url').value,
+        ruta_ping: document.getElementById('prov-ruta').value,
+        encabezado: document.getElementById('prov-encabezado').value,
+        clave: document.getElementById('prov-clave').value,
+      }),
+    });
+    document.getElementById('prov-clave').value = '';
+    pintarProveedor(r);
+    avisar(r.mensaje);
+  } catch (e) {
+    avisar(e.message, true);
+    cargarProveedor();
+  } finally {
+    boton.disabled = false;
+    boton.textContent = 'Conectar y Guardar';
+  }
 }
 
 // ── Estado del módulo ────────────────────────────────────────────────────
@@ -648,7 +742,7 @@ async function guardarSerie(tipo) {
 
 async function cargarTodo() {
   try {
-    await Promise.all([cargarEstado(), cargarConfiguracion(), cargarSeries(), cargarDocumentos()]);
+    await Promise.all([cargarEstado(), cargarConfiguracion(), cargarSeries(), cargarDocumentos(), cargarProveedor()]);
   } catch (error) {
     avisar(error.message, true);
   }

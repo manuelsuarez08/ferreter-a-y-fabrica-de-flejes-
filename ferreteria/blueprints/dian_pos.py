@@ -28,7 +28,7 @@ from flask import (Blueprint, jsonify, render_template, request, send_file,
 from ..config import BASE_DIR
 from ..db import get_db
 from ..security import admin_required, login_required
-from ..services import dian_emision, dian_series, dian_soap
+from ..services import dian_emision, dian_series, dian_soap, facturacion_api
 from ..services.auditoria import registrar_auditoria
 from ..services.dian_firma import ErrorCertificado, cargar_certificado
 from ..services.dian_emision import ErrorEmision
@@ -474,6 +474,98 @@ def probar_conexion():
         'ambiente_nombre': ambiente_por_numero(ambiente),
         'detalle': detalle,
     })
+
+
+# ═════════════════════════════
+# Proveedor externo de facturación (clave API)
+# ═════════════════════════════
+def _estado_proveedor(conn):
+    f = conn.execute(
+        "SELECT COALESCE(fe_api_url,''), COALESCE(fe_api_ruta_ping,''), "
+        "COALESCE(fe_api_encabezado,'X-API-Key'), "
+        "COALESCE(fe_api_clave_cifrada,''), COALESCE(fe_api_estado,'desconectado'), "
+        "fe_api_ultima_verificacion FROM configuracion WHERE id = 1").fetchone()
+    return {
+        'url': f[0], 'ruta_ping': f[1], 'encabezado': f[2],
+        'clave_enmascarada': facturacion_api.enmascarar(facturacion_api.descifrar(f[3])),
+        'tiene_clave': bool(f[3]),
+        'estado': f[4], 'ultima_verificacion': f[5],
+    }
+
+
+@bp.route('/api/dian/proveedor-api', methods=['GET'])
+@login_required
+def proveedor_estado():
+    conn = get_db()
+    try:
+        return jsonify(_estado_proveedor(conn))
+    finally:
+        conn.close()
+
+
+@bp.route('/api/dian/proveedor-api', methods=['PUT'])
+@admin_required
+def proveedor_guardar():
+    """Valida la clave con el proveedor y SOLO si responde bien la guarda cifrada."""
+    data = request.json or {}
+    url = str(data.get('url') or '').strip()
+    ruta = str(data.get('ruta_ping') or '').strip()
+    encabezado = str(data.get('encabezado') or 'X-API-Key').strip()
+    clave = str(data.get('clave') or '').strip()
+
+    conn = get_db()
+    try:
+        # Campo vacío = conservar la clave ya guardada (permite cambiar solo la URL).
+        if not clave:
+            clave = facturacion_api.descifrar(conn.execute(
+                "SELECT COALESCE(fe_api_clave_cifrada,'') FROM configuracion "
+                "WHERE id = 1").fetchone()[0])
+        try:
+            mensaje = facturacion_api.probar_clave(url, ruta, clave, encabezado)
+        except facturacion_api.ErrorProveedor as e:
+            conn.execute("UPDATE configuracion SET fe_api_estado = 'error' "
+                         "WHERE id = 1")
+            conn.commit()
+            return jsonify({'error': str(e), 'estado': 'error'}), 400
+
+        conn.execute(
+            "UPDATE configuracion SET fe_api_url = ?, fe_api_ruta_ping = ?, "
+            "fe_api_encabezado = ?, fe_api_clave_cifrada = ?, "
+            "fe_api_estado = 'conectado', fe_api_ultima_verificacion = "
+            "datetime('now','localtime') WHERE id = 1",
+            (url.rstrip('/'), ruta, encabezado, facturacion_api.cifrar(clave)))
+        registrar_auditoria(conn, 'configurar', 'proveedor_facturacion', 1,
+                            'Clave API del proveedor de facturación actualizada')
+        conn.commit()
+        return jsonify({'mensaje': mensaje, **_estado_proveedor(conn)})
+    finally:
+        conn.close()
+
+
+@bp.route('/api/dian/proveedor-api/probar', methods=['POST'])
+@admin_required
+def proveedor_probar():
+    """Re-verifica la clave ya guardada."""
+    conn = get_db()
+    try:
+        est = _estado_proveedor(conn)
+        clave = facturacion_api.descifrar(conn.execute(
+            "SELECT COALESCE(fe_api_clave_cifrada,'') FROM configuracion "
+            "WHERE id = 1").fetchone()[0])
+        try:
+            mensaje = facturacion_api.probar_clave(
+                est['url'], est['ruta_ping'], clave, est['encabezado'])
+            nuevo, codigo = 'conectado', 200
+        except facturacion_api.ErrorProveedor as e:
+            mensaje, nuevo, codigo = str(e), 'error', 400
+        conn.execute("UPDATE configuracion SET fe_api_estado = ?, "
+                     "fe_api_ultima_verificacion = datetime('now','localtime') "
+                     "WHERE id = 1", (nuevo,))
+        conn.commit()
+        clave_json = 'mensaje' if codigo == 200 else 'error'
+        return jsonify({clave_json: mensaje, **_estado_proveedor(conn)}), codigo
+    finally:
+        conn.close()
 
 
 # ═════════════════════════════
