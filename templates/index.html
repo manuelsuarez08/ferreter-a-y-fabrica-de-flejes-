@@ -265,7 +265,7 @@
           </span>
         </button>
         {% endif %}
-        {% if rol != 'fabrica' %}
+        {% if rol != 'fabrica' and rol != 'motocarguero' %}
         <button type="button" class="btn btn-info position-relative fw-bold text-white" onclick="irAPedidos()">
           🚚 Pedidos
           <span id="badge-pedidos-nav" class="position-absolute top-0 start-100 translate-middle badge rounded-pill bg-danger" style="display:none;">0</span>
