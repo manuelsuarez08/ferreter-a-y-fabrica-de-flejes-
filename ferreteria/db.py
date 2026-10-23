@@ -1653,6 +1653,47 @@ def _base_legible(ruta):
     except sqlite3.Error:
         return False
 
+MAX_COPIAS_ANTES_SEMILLA = 3
+
+
+def _guardar_copia_antes_de_semilla(ruta):
+    """Copia la base del disco antes de que la semilla la sustituya.
+
+    Sin esto, los precios y productos editados se perdian sin rastro al
+    redesplegar. Se intenta la API de respaldo de SQLite (incluye lo que este
+    en el WAL) y, si falla, se copian el archivo y su -wal. Conserva las
+    ultimas MAX_COPIAS_ANTES_SEMILLA. Nunca lanza: no debe impedir el arranque.
+    """
+    try:
+        import glob
+        carpeta = os.path.dirname(os.path.abspath(ruta))
+        marca = datetime.now().strftime('%Y%m%d-%H%M%S')
+        destino = os.path.join(carpeta, f'ferreteria-respaldo-antes-semilla-{marca}.db')
+        try:
+            origen = sqlite3.connect(ruta, timeout=10)
+            copia = sqlite3.connect(destino)
+            try:
+                origen.backup(copia)
+            finally:
+                copia.close()
+                origen.close()
+        except sqlite3.Error:
+            if os.path.exists(destino):
+                os.remove(destino)
+            shutil.copy2(ruta, destino)
+            if os.path.exists(ruta + '-wal'):
+                shutil.copy2(ruta + '-wal', destino + '-wal')
+        previos = sorted(glob.glob(os.path.join(carpeta, 'ferreteria-respaldo-antes-semilla-*.db')))
+        for viejo in previos[:-MAX_COPIAS_ANTES_SEMILLA]:
+            for sufijo in ('', '-wal'):
+                try:
+                    os.remove(viejo + sufijo)
+                except OSError:
+                    pass
+    except Exception:
+        pass
+
+
 def asegurar_base_de_datos():
     """Prepara la base de datos efectiva, sembrándola si es necesario.
 
@@ -1698,11 +1739,13 @@ def asegurar_base_de_datos():
                 # del copy2, porque borraria la semilla recien copiada y dejaria
                 # la base en 0 bytes (era el bug: productos/clientes vacios y
                 # 500 en /api/productos tras sembrar en Render).
+                _guardar_copia_antes_de_semilla(DB_NAME)
                 _limpiar_archivos_sqlite(DB_NAME)
                 shutil.copy2(DB_SEMILLA, DB_NAME)
                 _escribir_version_disco(DB_NAME, version_repo)
                 return True
             return False
+        _guardar_copia_antes_de_semilla(DB_NAME)
         _limpiar_archivos_sqlite(DB_NAME)
         if not os.path.exists(DB_SEMILLA):
             return False
