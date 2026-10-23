@@ -384,6 +384,24 @@
       <div class="tab-pane fade {{ 'show active' if rol not in ['fabrica','pedidos','motocarguero'] else '' }}" id="ventas">
         <h4 class="mb-3">Nueva Venta</h4>
 
+        <!-- Pestañas de venta en paralelo (static/js/ventas-pestanas.js). -->
+        <style>
+          #pos-pestanas { display: flex; flex-wrap: wrap; gap: 4px; align-items: center;
+                          border-bottom: 2px solid #dee2e6; margin-bottom: 1rem; }
+          .pos-tab { display: flex; align-items: center; gap: 2px; padding: 6px 10px;
+                     border: 1px solid #dee2e6; border-bottom: none; border-radius: 8px 8px 0 0;
+                     background: #f1f3f5; cursor: pointer; user-select: none; font-size: .9rem; }
+          .pos-tab.activa { background: #fff; font-weight: 700; border-color: #0d6efd;
+                            box-shadow: 0 2px 0 #fff; margin-bottom: -2px; }
+          .pos-tab-btn { border: 0; background: transparent; padding: 0 3px; line-height: 1;
+                         opacity: .6; font-size: .85rem; }
+          .pos-tab-btn:hover { opacity: 1; }
+        </style>
+        <div id="pos-pestanas" data-usuario="{{ usuario }}">
+          <button type="button" id="pos-tab-nueva" class="btn btn-sm btn-outline-primary fw-bold"
+                  title="Abrir una nueva pestaña de venta">+</button>
+        </div>
+
         <div class="card p-3 mb-4 bg-light border">
           <!-- Tipo de entrega -->
           <div class="mb-3">
@@ -566,6 +584,8 @@
                 <div class="text-muted small" id="fila-iva-pos">IVA <span id="iva-porcentaje-pos"></span>: <span id="iva-venta-texto">$ 0 COP</span></div>
                 <h4 class="m-0 mb-3">Total Venta: <span id="total-venta-texto" class="text-primary fw-bold">$ 0 COP</span></h4>
                 <button class="btn btn-primary btn-lg fw-bold w-100" onclick="procesarVenta()">💾 Registrar / Facturar Venta</button>
+                <button class="btn btn-outline-success fw-bold w-100 mt-2" onclick="emitirFacturaElectronica()"
+                        title="Emite Factura Electrónica de Venta solo con los datos de la pestaña activa">🧾 Emitir Factura Electrónica</button>
               </div>
             </div>
           </div>
@@ -2643,6 +2663,7 @@
   <script defer src="{{ url_for('static', filename='vendor/tom-select.complete.min.js') }}"></script>
   <!-- Bloque del Documento Equivalente POS (CUIDE + QR) en la tirilla. -->
   <script defer src="{{ url_for('static', filename='js/dian-pos.js') }}"></script>
+  <script defer src="{{ url_for('static', filename='js/ventas-pestanas.js') }}"></script>
 
   <script>
     const ROL_ACTUAL = '{{ rol }}';
