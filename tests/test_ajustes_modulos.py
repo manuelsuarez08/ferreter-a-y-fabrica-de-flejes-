@@ -143,4 +143,4 @@ def test_las_categorias_validas_estan_declaradas(ventas_py):
 def test_la_venta_sigue_llamando_a_la_orden(ventas_py):
     """La orden se sigue creando: solo cambio el criterio."""
     assert '_es_producto_fleje(' in ventas_py
-    assert 'registrar_orden_fleje_desde_venta(' in ventas_py
+    assert 'registrar_orden_fabricacion_desde_venta(' in ventas_py

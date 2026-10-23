@@ -33,10 +33,13 @@ def _listar_ordenes():
         SELECT o.id, o.numero_orden, o.estado, o.fecha_creacion, o.fecha_actualizacion,
                c.nombre AS cliente, o.kg_total, o.observaciones,
                COALESCE(GROUP_CONCAT(d.calibre || ' / ' || d.ancho_cm || 'x' || d.largo_cm
-                        || ' cm / ' || d.cantidad_piezas || ' pcs', ' | '), '') AS detalles
+                        || ' cm / ' || d.cantidad_piezas || ' pcs', ' | '), '') AS detalles,
+               o.id_venta, COALESCE(o.direccion_entrega, ''), COALESCE(o.nota_cliente, ''),
+               v.numero_pedido
         FROM ordenes_figurado o
         JOIN clientes c ON c.id = o.id_cliente
         LEFT JOIN detalles_fleje d ON d.id_orden = o.id
+        LEFT JOIN ventas v ON v.id = o.id_venta
         GROUP BY o.id
         ORDER BY CASE o.estado
            WHEN 'En Cola' THEN 1
@@ -46,11 +49,22 @@ def _listar_ordenes():
         END, o.id DESC
         """
     ).fetchall()
+    items_por_orden = {}
+    for it in conn.execute(
+        "SELECT id_orden, producto, referencia, dimensiones, cantidad "
+        "FROM ordenes_fleje_items ORDER BY id"
+    ).fetchall():
+        items_por_orden.setdefault(it[0], []).append({
+            'producto': it[1], 'referencia': it[2] or '',
+            'dimensiones': it[3] or '', 'cantidad': it[4],
+        })
     conn.close()
     return jsonify([{
         'id': r[0], 'numero_orden': r[1], 'estado': r[2], 'fecha_creacion': r[3],
         'fecha_actualizacion': r[4], 'cliente': r[5], 'kg_total': r[6],
         'observaciones': r[7] or '', 'detalles': r[8] or '',
+        'id_venta': r[9], 'direccion_entrega': r[10], 'nota_cliente': r[11],
+        'numero_pedido': r[12], 'items': items_por_orden.get(r[0], []),
     } for r in rows])
 
 

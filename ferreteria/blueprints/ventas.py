@@ -11,7 +11,7 @@ from flask import Blueprint, jsonify, request, session
 from ..db import get_db
 from ..security import admin_required, login_required
 from ..services.auditoria import registrar_auditoria
-from ..services.ordenes_fleje import registrar_orden_fleje_desde_venta
+from ..services.ordenes_fleje import registrar_orden_fabricacion_desde_venta
 from ..services.dian import redondear_pesos
 # Se importa el modulo (no sus funciones) para poder capturar el
 # `contabilidad.ErrorContabilidad` que dispara un asiento descuadrado.
@@ -424,6 +424,7 @@ def _registrar_venta():
         )
         id_venta = cursor.lastrowid
 
+        detalles_fleje = []
         for d in detalles:
             cursor.execute(
                 "INSERT INTO detalle_ventas (id_venta, id_producto, cantidad, precio_unitario, subtotal) "
@@ -442,11 +443,13 @@ def _registrar_venta():
                  'motivo': f'Venta #{id_venta}', 'usuario': session['usuario'], 'fecha': _ahora()},
             )
 
-            # Toda venta de un producto de categoria Fleje/Flejes genera la orden
-            # a la fabrica, tenga o no medidas en su ficha: el taller la necesita
-            # para fabricar o preparar el material.
             if _es_producto_fleje(d['nombre'], d['categoria'], d['item']):
-                registrar_orden_fleje_desde_venta(conn, id_venta, id_cliente, d['item'], d['nombre'])
+                detalles_fleje.append(d)
+
+        # Toda venta con productos de categoria Fleje/Flejes genera UNA orden a
+        # la fabrica con todos esos productos, dentro de la misma transaccion.
+        orden_fabrica = registrar_orden_fabricacion_desde_venta(
+            conn, id_venta, id_cliente, detalles_fleje, direccion_cliente, observaciones)
 
         # ── Asientos contables automáticos (partida doble) ──────────────────
         # Se generan DENTRO de la misma transacción de la venta: si el asiento
@@ -495,6 +498,8 @@ def _registrar_venta():
     msg = f"Venta #{id_venta} registrada con éxito"
     if numero_pedido:
         msg += f" — Pedido #{numero_pedido} creado para despacho"
+    if orden_fabrica:
+        msg += f" — Orden {orden_fabrica['numero_orden']} enviada a la fábrica de flejes"
     if aviso_dian:
         msg += f" — {aviso_dian}"
     return jsonify({"mensaje": msg, "id_venta": id_venta,

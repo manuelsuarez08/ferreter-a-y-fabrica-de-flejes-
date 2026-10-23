@@ -35,6 +35,53 @@ def generar_numero_orden(id_venta=None):
     return f'FL-{base}-{sufijo}'
 
 
+def registrar_orden_fabricacion_desde_venta(conn, id_venta, id_cliente, detalles,
+                                            direccion='', nota=''):
+    """Crea UNA orden de fabricación por venta con todos sus flejes del catálogo.
+
+    `detalles` son los ítems ya validados de la venta que pertenecen a la
+    categoría Fleje/Flejes. Los flejes estándar no consumen hierro aquí: su
+    stock se descuenta como el de cualquier producto del catálogo.
+    Devuelve {id_orden, numero_orden} o None si no hay ítems.
+    """
+    if not detalles:
+        return None
+
+    numero_orden = f'FL-{datetime.now().strftime("%Y%m%d")}-{id_venta}'
+    ahora = _ahora()
+    cursor = conn.cursor()
+    cursor.execute(
+        """
+        INSERT INTO ordenes_figurado (
+            id_venta, id_cliente, numero_orden, estado, fecha_creacion,
+            fecha_actualizacion, observaciones, kg_total, direccion_entrega, nota_cliente
+        ) VALUES (?, ?, ?, 'En Cola', ?, ?, ?, 0, ?, ?)
+        """,
+        (id_venta, id_cliente, numero_orden, ahora, ahora,
+         f'Generada automáticamente desde la venta #{id_venta}',
+         (direccion or '').strip(), (nota or '').strip()),
+    )
+    id_orden = cursor.lastrowid
+
+    for d in detalles:
+        ficha = cursor.execute(
+            "SELECT COALESCE(codigo_barras, ''), COALESCE(dimensiones, '') "
+            "FROM productos WHERE id = ?", (d['id_producto'],)
+        ).fetchone() or ('', '')
+        cursor.execute(
+            "INSERT INTO ordenes_fleje_items "
+            "(id_orden, id_producto, producto, referencia, dimensiones, cantidad) "
+            "VALUES (?, ?, ?, ?, ?, ?)",
+            (id_orden, d['id_producto'], d['nombre'], ficha[0], ficha[1], d['cantidad']),
+        )
+
+    registrar_auditoria(
+        conn, 'crear', 'orden_figurado', id_orden,
+        f'Orden {numero_orden} creada desde la venta #{id_venta} ({len(detalles)} fleje(s))',
+    )
+    return {'id_orden': id_orden, 'numero_orden': numero_orden}
+
+
 def registrar_orden_fleje_desde_venta(conn, id_venta, id_cliente, item, producto_nombre=''):
     """Crea una orden de figurado a partir de un ítem de venta y descuenta el hierro.
 

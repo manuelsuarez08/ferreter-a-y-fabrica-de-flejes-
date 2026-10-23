@@ -1202,42 +1202,45 @@
         </div>
       </div>
 
-      {% if rol == 'admin' %}
-      <!-- Pestaña Fábrica de Flejes -->
+      <!-- Pestaña Fábrica de Flejes (visible también para el rol 'fabrica') -->
       <div class="tab-pane fade {{ 'show active' if rol == 'fabrica' else '' }}" id="flejes">
+        <style>
+          .kanban-col { background:#f1f3f5; border-radius:8px; padding:10px; min-height:200px; }
+          .kanban-col h6 { position:sticky; top:0; }
+          .orden-card { background:#fff; border:1px solid #dee2e6; border-left:5px solid #0d6efd;
+                        border-radius:8px; padding:10px; margin-bottom:10px; }
+          .orden-card.proceso { border-left-color:#ffc107; }
+          .orden-card.terminado { border-left-color:#198754; opacity:.85; }
+          .orden-card .item-fleje { font-size:1.05rem; font-weight:600; }
+        </style>
         <div class="d-flex justify-content-between align-items-center mb-3 flex-wrap gap-2">
-          <h4 class="mb-0">🧵 Fábrica de Flejes / Figurado de Hierro</h4>
+          <h4 class="mb-0">🧵 Fábrica de Flejes — Órdenes de fabricación</h4>
           <button class="btn btn-outline-primary btn-sm fw-bold" onclick="cargarOrdenesFlejes()">🔄 Actualizar panel</button>
         </div>
 
-        <div class="row g-3 mb-4">
-          <div class="col-md-4">
-            <div class="card border-primary h-100">
-              <div class="card-body">
-                <h6 class="text-primary fw-bold mb-1">Órdenes en cola</h6>
-                <div id="flejes-ordenes-cola" class="fs-3 fw-bold text-primary">0</div>
-              </div>
+        <div class="row g-3">
+          <div class="col-lg-4">
+            <div class="kanban-col">
+              <h6 class="fw-bold text-primary">⏳ Pendientes <span class="badge bg-primary" id="flejes-ordenes-cola">0</span></h6>
+              <div id="kanban-cola"></div>
             </div>
           </div>
-          <div class="col-md-4">
-            <div class="card border-warning h-100">
-              <div class="card-body">
-                <h6 class="text-warning fw-bold mb-1">En figurado</h6>
-                <div id="flejes-ordenes-figurando" class="fs-3 fw-bold text-warning">0</div>
-              </div>
+          <div class="col-lg-4">
+            <div class="kanban-col">
+              <h6 class="fw-bold text-warning">🔧 En proceso <span class="badge bg-warning text-dark" id="flejes-ordenes-figurando">0</span></h6>
+              <div id="kanban-proceso"></div>
             </div>
           </div>
-          <div class="col-md-4">
-            <div class="card border-success h-100">
-              <div class="card-body">
-                <h6 class="text-success fw-bold mb-1">Completadas</h6>
-                <div id="flejes-ordenes-completadas" class="fs-3 fw-bold text-success">0</div>
-              </div>
+          <div class="col-lg-4">
+            <div class="kanban-col">
+              <h6 class="fw-bold text-success">✅ Terminados <span class="badge bg-success" id="flejes-ordenes-completadas">0</span></h6>
+              <div id="kanban-terminado"></div>
             </div>
           </div>
         </div>
 
-        <div class="card border mb-4">
+        {% if rol == 'admin' %}
+        <div class="card border my-4">
           <div class="card-header bg-dark text-white fw-bold">Inventario de hierro</div>
           <div class="card-body p-0">
             <div class="table-responsive">
@@ -1257,27 +1260,10 @@
             </div>
           </div>
         </div>
-
-        <div class="table-responsive">
-          <table class="table table-bordered align-middle">
-            <thead class="table-light">
-              <tr>
-                <th>Orden</th>
-                <th>Cliente</th>
-                <th>Detalles</th>
-                <th>Kg</th>
-                <th>Estado</th>
-                <th>Fecha</th>
-                <th>Acción</th>
-              </tr>
-            </thead>
-            <tbody id="tabla-ordenes-flejes">
-              <tr><td colspan="7" class="text-center text-muted">Cargando órdenes...</td></tr>
-            </tbody>
-          </table>
-        </div>
+        {% endif %}
       </div>
 
+      {% if rol == 'admin' %}
       <!-- Pestaña Usuarios (Admin) -->
       <div class="tab-pane fade" id="usuarios">
         <h4 class="mb-3">Administración de Usuarios y Permisos</h4>
@@ -2936,68 +2922,87 @@
       });
     }
 
+    function tarjetaOrdenFleje(orden) {
+      const clase = orden.estado === 'En Cola' ? '' : orden.estado === 'En Figurado' ? 'proceso' : 'terminado';
+      const items = (orden.items && orden.items.length)
+        ? orden.items.map(i => `
+            <div class="item-fleje">${escapeHtml(i.cantidad)} × ${escapeHtml(i.producto)}</div>
+            ${(i.dimensiones || i.referencia) ? `<div class="text-muted small ms-3">${escapeHtml([i.dimensiones, i.referencia ? 'Ref: ' + i.referencia : ''].filter(Boolean).join(' · '))}</div>` : ''}`).join('')
+        : `<div class="item-fleje">${escapeHtml(orden.detalles || orden.observaciones || 'Sin detalles')}</div>`;
+
+      const boton = orden.estado === 'En Cola'
+        ? `<button class="btn btn-warning fw-bold w-100 mt-2" onclick="actualizarEstadoOrdenFleje(${orden.id}, 'En Figurado')">▶ Empezar a fabricar</button>`
+        : orden.estado === 'En Figurado'
+          ? `<button class="btn btn-success fw-bold w-100 mt-2" onclick="actualizarEstadoOrdenFleje(${orden.id}, 'Completado')">✅ Terminado</button>`
+          : `<div class="text-success fw-bold mt-2 text-center">Listo ${escapeHtml(orden.fecha_actualizacion || '')}</div>`;
+
+      return `
+        <div class="orden-card ${clase}">
+          <div class="d-flex justify-content-between align-items-start">
+            <strong>${escapeHtml(orden.numero_orden || '')}</strong>
+            <span class="badge bg-secondary">Factura #${escapeHtml(orden.id_venta ?? '—')}${orden.numero_pedido ? ' · Pedido #' + escapeHtml(orden.numero_pedido) : ''}</span>
+          </div>
+          <div class="fw-bold mt-1">👤 ${escapeHtml(orden.cliente || 'Cliente')}</div>
+          ${orden.direccion_entrega ? `<div class="small">📍 ${escapeHtml(orden.direccion_entrega)}</div>` : ''}
+          ${orden.nota_cliente ? `<div class="small text-danger">📝 ${escapeHtml(orden.nota_cliente)}</div>` : ''}
+          <hr class="my-2">
+          ${items}
+          <div class="text-muted small mt-2">🕒 ${escapeHtml(orden.fecha_creacion || '')}</div>
+          ${boton}
+        </div>`;
+    }
+
     async function cargarOrdenesFlejes() {
       try {
         const res = await fetch('/api/fabrica/ordenes');
         if (!res.ok) throw new Error('No se pudo cargar el taller');
         const ordenes = await res.json();
-        // El tbody solo se renderiza en la pestaña de Fábrica (rol admin).
-        const tbody = document.getElementById('tabla-ordenes-flejes');
         const badge = document.getElementById('badge-flejes');
+
+        const columnas = {
+          'En Cola': 'kanban-cola', 'En Figurado': 'kanban-proceso', 'Completado': 'kanban-terminado'
+        };
+        const conteos = {};
+        Object.entries(columnas).forEach(([estado, idCol]) => {
+          const lista = ordenes.filter(o => o.estado === estado);
+          conteos[estado] = lista.length;
+          const col = document.getElementById(idCol);
+          if (!col) return;
+          // En Terminados solo se ven las últimas para no alargar el tablero.
+          const visibles = estado === 'Completado' ? lista.slice(0, 15) : lista;
+          col.innerHTML = visibles.length
+            ? visibles.map(tarjetaOrdenFleje).join('')
+            : '<div class="text-muted small text-center py-3">Sin órdenes</div>';
+        });
+
         const cola = document.getElementById('flejes-ordenes-cola');
         const figurando = document.getElementById('flejes-ordenes-figurando');
         const completadas = document.getElementById('flejes-ordenes-completadas');
-
-        if (tbody) tbody.innerHTML = '';
-        if (!ordenes.length) {
-          if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="text-center text-muted">No hay órdenes actualmente.</td></tr>';
-        } else if (tbody) {
-          ordenes.forEach((orden) => {
-            const estadoBadge = orden.estado === 'En Cola'
-              ? '<span class="badge bg-primary">En Cola</span>'
-              : orden.estado === 'En Figurado'
-                ? '<span class="badge bg-warning text-dark">En Figurado</span>'
-                : '<span class="badge bg-success">Completado</span>';
-
-            tbody.innerHTML += `
-              <tr>
-                <td><strong>${escapeHtml(orden.numero_orden || '')}</strong></td>
-                <td>${escapeHtml(orden.cliente || 'Cliente')}</td>
-                <td>${escapeHtml(orden.detalles || orden.observaciones || 'Sin detalles')}</td>
-                <td>${Number(orden.kg_total || 0).toFixed(2)} kg</td>
-                <td>${estadoBadge}</td>
-                <td>${escapeHtml(orden.fecha_creacion || '')}</td>
-                <td>
-                  ${orden.estado !== 'Completado' ? `<button class="btn btn-sm btn-success" onclick="actualizarEstadoOrdenFleje(${orden.id}, 'Completado')">Completar</button>` : '<span class="text-success fw-bold">Listo</span>'}
-                </td>
-              </tr>
-            `;
-          });
-        }
-
-        const colaCount = ordenes.filter(o => o.estado === 'En Cola').length;
-        const figurandoCount = ordenes.filter(o => o.estado === 'En Figurado').length;
-        const completadasCount = ordenes.filter(o => o.estado === 'Completado').length;
-        // Los contadores solo existen en la pestaña de Fábrica (rol admin):
-        // para los demás roles se valida null igual que en activarSubtabPedidos.
-        if (cola) cola.textContent = colaCount;
-        if (figurando) figurando.textContent = figurandoCount;
-        if (completadas) completadas.textContent = completadasCount;
-        const pendientes = colaCount + figurandoCount;
+        if (cola) cola.textContent = conteos['En Cola'];
+        if (figurando) figurando.textContent = conteos['En Figurado'];
+        if (completadas) completadas.textContent = conteos['Completado'];
+        const pendientes = conteos['En Cola'] + conteos['En Figurado'];
         if (badge) {
           badge.textContent = pendientes;
           badge.style.display = pendientes > 0 ? 'inline-block' : 'none';
         }
 
-        // Reutiliza la carga centralizada del inventario de hierro (actualiza
-        // tanto la pestaña de Inventario como la de Fábrica de Flejes).
-        cargarInventarioFlejes();
+        // El inventario de hierro solo existe en la vista del administrador.
+        if (document.getElementById('tabla-inventario-hierro-fabrica')
+            || document.getElementById('tabla-inventario-hierro')) {
+          cargarInventarioFlejes();
+        }
       } catch (err) {
         console.error('Error cargando órdenes de flejes:', err);
-        const tbody = document.getElementById('tabla-ordenes-flejes');
-        if (tbody) tbody.innerHTML = '<tr><td colspan="7" class="text-center text-danger">No se pudo cargar el panel de producción.</td></tr>';
+        const col = document.getElementById('kanban-cola');
+        if (col) col.innerHTML = '<div class="text-danger small text-center py-3">No se pudo cargar el panel de producción.</div>';
       }
     }
+
+    // El taller deja la pantalla abierta: se refresca sola cuando la pestaña está a la vista.
+    setInterval(() => {
+      if (document.getElementById('flejes')?.classList.contains('active')) cargarOrdenesFlejes();
+    }, 30000);
 
     async function actualizarEstadoOrdenFleje(idOrden, nuevoEstado) {
       try {
@@ -3008,7 +3013,6 @@
         });
         const data = await res.json();
         if (!res.ok) throw new Error(data.error || 'No se pudo actualizar el estado');
-        alert(`✅ Orden actualizada a ${nuevoEstado}`);
         await cargarOrdenesFlejes();
       } catch (err) {
         alert(err.message || 'Error actualizando la orden');
@@ -3819,6 +3823,15 @@
         nota.className = 'text-muted';
         nota.textContent = 'Para la venta de mostrador. No requiere datos del cliente.';
       }
+    }
+
+    // Emite Factura Electrónica de Venta con los datos de la pestaña activa
+    // (el formulario solo contiene los de esa pestaña).
+    function emitirFacturaElectronica() {
+      const sel = document.getElementById('select-tipo-documento-dian');
+      if (sel) sel.value = 'FV';
+      avanzarTipoDocumentoDian();
+      return procesarVenta();
     }
 
     async function procesarVenta() {

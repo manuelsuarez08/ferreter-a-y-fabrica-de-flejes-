@@ -243,6 +243,22 @@ def _crear_tablas_operacion(cursor):
             FOREIGN KEY (id_orden) REFERENCES ordenes_figurado(id)
         )
     ''')
+    # Flejes estándar del catálogo que componen una orden de fabricación. Una
+    # orden = una venta; cada producto fleje de la factura es una línea aquí.
+    cursor.execute('''
+        CREATE TABLE IF NOT EXISTS ordenes_fleje_items (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            id_orden INTEGER NOT NULL,
+            id_producto INTEGER,
+            producto TEXT NOT NULL,
+            referencia TEXT,
+            dimensiones TEXT,
+            cantidad INTEGER NOT NULL DEFAULT 1,
+            FOREIGN KEY (id_orden) REFERENCES ordenes_figurado(id)
+        )
+    ''')
+    migrar_columna(cursor, 'ordenes_figurado', 'direccion_entrega', "TEXT DEFAULT ''")
+    migrar_columna(cursor, 'ordenes_figurado', 'nota_cliente', "TEXT DEFAULT ''")
     cursor.execute('''
         CREATE TABLE IF NOT EXISTS auditoria (
             id INTEGER PRIMARY KEY AUTOINCREMENT,

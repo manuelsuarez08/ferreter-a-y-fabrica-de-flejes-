@@ -184,16 +184,6 @@
     }
   }
 
-  // Cada pestaña emite por su cuenta: procesarVenta() lee el formulario, que en
-  // este momento contiene SOLO los datos de la pestaña activa.
-  window.emitirFacturaElectronica = function () {
-    const sel = $('select-tipo-documento-dian');
-    if (sel) sel.value = 'FV';
-    if (typeof avanzarTipoDocumentoDian === 'function') avanzarTipoDocumentoDian();
-    capturar();
-    return procesarVenta();
-  };
-
   function envolver(nombre, despues) {
     const original = window[nombre];
     if (typeof original !== 'function') return;
