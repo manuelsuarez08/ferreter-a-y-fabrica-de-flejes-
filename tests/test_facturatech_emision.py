@@ -93,6 +93,17 @@ def test_sin_red_pasa_a_contingencia_y_se_encola():
     assert conn.execute("SELECT COUNT(*) FROM cola_dian").fetchone()[0] == 1
 
 
+def test_error_de_cuenta_va_a_contingencia():
+    os.environ.update(ENV)
+    conn, venta = _preparar()
+    ws.upload_document = lambda xml: _ok(
+        codigo='409', ok=False, mensaje='no está configurado como cliente webservice',
+        transaccion='')
+    res = dian_emision.emitir_venta(conn, venta)
+    assert res['estado'] == 'contingencia'
+    assert conn.execute("SELECT COUNT(*) FROM cola_dian").fetchone()[0] == 1
+
+
 def test_sin_variables_no_se_activa():
     for k in ENV:
         os.environ.pop(k, None)

@@ -106,11 +106,20 @@ def _resolver_firma(conn, id_documento, id_venta, numero, prefijo, folio,
     return 'firmado', 'Documento en proceso en Facturatech', ''
 
 
+def _error_de_cuenta(carga):
+    """401/409 y 'usuario/password incorrecto' son de la cuenta, no del documento."""
+    mensaje = carga['mensaje'].lower()
+    return (carga['codigo'] in ('401', '409') or 'password integrador' in mensaje
+            or 'nombre de usuario' in mensaje)
+
+
 def _subir(conn, id_documento, id_venta, numero, prefijo, folio, xml_bytes,
            contingencia_previa=False):
     from .dian_emision import encolar
     try:
         carga = ws.upload_document(xml_bytes)
+        if not carga['ok'] and _error_de_cuenta(carga):
+            raise ws.ErrorFacturatech(f"Cuenta Facturatech: {carga['mensaje']}")
     except ws.ErrorFacturatech as error:
         # Sin conexión no se sabe si llegó: queda en contingencia y se reintenta.
         _guardar_estado(conn, id_documento, id_venta, numero, 'contingencia',
