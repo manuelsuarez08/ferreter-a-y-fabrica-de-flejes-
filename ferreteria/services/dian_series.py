@@ -45,13 +45,14 @@ def leer_series(conn):
         """
         SELECT tipo_documento, prefijo, consecutivo, numero_resolucion,
                rango_desde, rango_hasta, fecha_vencimiento, clave_tecnica,
-               activa, descripcion
+               activa, descripcion, COALESCE(fecha_inicio, '')
         FROM series_dian
         ORDER BY tipo_documento
         """
     ).fetchall()
     return {
         f[0]: {
+            'fecha_inicio': f[10],
             'tipo_documento': f[0],
             'prefijo': f[1] or '',
             'consecutivo': int(f[2] or 1),
@@ -141,6 +142,7 @@ def actualizar_serie(conn, tipo_documento, datos):
         'rango_desde': ('rango_desde', int),
         'rango_hasta': ('rango_hasta', int),
         'fecha_vencimiento': ('fecha_vencimiento', str),
+        'fecha_inicio': ('fecha_inicio', str),
         'clave_tecnica': ('clave_tecnica', str),
         'activa': ('activa', bool),
         'descripcion': ('descripcion', str),

@@ -429,6 +429,25 @@ def consultar(id_documento):
     return jsonify(resultado)
 
 
+@bp.route('/api/dian/documentos/<int:id_documento>/pdf', methods=['GET'])
+@login_required
+def pdf_facturatech(id_documento):
+    """PDF (representación gráfica) de un documento emitido por Facturatech."""
+    import io
+    from ..services import facturatech_emision, facturatech_ws
+    conn = get_db()
+    try:
+        if not facturatech_emision.es_de_facturatech(conn, id_documento):
+            return jsonify({'error': 'El documento no se emitió por Facturatech'}), 400
+        contenido = facturatech_emision.descargar_pdf(conn, id_documento)
+    except (ErrorEmision, facturatech_ws.ErrorFacturatech) as error:
+        return jsonify({'error': str(error)}), 400
+    finally:
+        conn.close()
+    return send_file(io.BytesIO(contenido), mimetype='application/pdf',
+                     download_name=f'documento-{id_documento}.pdf')
+
+
 @bp.route('/api/dian/procesar-cola', methods=['POST'])
 @admin_required
 def procesar_cola():

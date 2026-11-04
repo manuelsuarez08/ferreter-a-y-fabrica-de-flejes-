@@ -156,28 +156,53 @@ def _emisor(emisor, nit_emisor):
     return nodo
 
 
-def _adquirente(adquirente):
+CODIGO_TIPO_DOCUMENTO = {
+    'RC': '11', 'TI': '12', 'CC': '13', 'TE': '21', 'CE': '22', 'NIT': '31',
+    'PA': '41', 'PP': '41', 'DIE': '42', 'NUIP': '91',
+}
+
+
+def _nombres_y_apellidos(nombre):
+    partes = str(nombre or '').split()
+    if len(partes) < 2:
+        return (partes[0] if partes else 'Consumidor'), '.'
+    corte = 1 if len(partes) == 2 else len(partes) // 2
+    return ' '.join(partes[:corte]), ' '.join(partes[corte:])
+
+
+def _adquirente(adquirente, email_respaldo=None):
     numero = solo_digitos(adquirente.get('numero_documento')) or NIT_CONSUMIDOR_FINAL
     consumidor = numero == NIT_CONSUMIDOR_FINAL
-    tipo_doc = '22' if consumidor else str(adquirente.get('tipo_documento_codigo') or '13')
+    if consumidor:
+        tipo_doc = '13'
+    else:
+        tipo_doc = str(adquirente.get('tipo_documento_codigo')
+                       or CODIGO_TIPO_DOCUMENTO.get(
+                           str(adquirente.get('tipo_documento') or '').upper(), '13'))
     nombre = adquirente.get('nombre') or 'Consumidor final'
     municipio, departamento, _, _ = _direccion_fiscal(adquirente)
+    juridica = tipo_doc == '31'
+    nombres, apellidos = (None, None) if juridica else _nombres_y_apellidos(nombre)
     nodo = _hijos(_nodo('ADQ'), [
-        ('ADQ_1', '2' if tipo_doc != '31' else '1'),
+        ('ADQ_1', '1' if juridica else '2'),
         ('ADQ_2', numero),
         ('ADQ_3', tipo_doc),
         ('ADQ_6', nombre),
+        ('ADQ_7', None if juridica else nombre),
+        ('ADQ_8', nombres),
+        ('ADQ_9', apellidos),
         ('ADQ_11', departamento or None),
         ('ADQ_14', adquirente.get('codigo_postal') or municipio or None),
         ('ADQ_15', adquirente.get('pais') or 'CO'),
         ('ADQ_22', str(calcular_digito_verificacion(numero)) if tipo_doc == '31' else None),
     ])
     nodo.append(_hijos(_nodo('TCR'), [('TCR_1', _obligacion(adquirente))]))
-    if adquirente.get('email') or adquirente.get('telefono'):
+    correo = adquirente.get('email') or email_respaldo
+    if correo or adquirente.get('telefono'):
         nodo.append(_hijos(_nodo('CDA'), [
             ('CDA_2', nombre),
             ('CDA_3', adquirente.get('telefono')),
-            ('CDA_4', adquirente.get('email')),
+            ('CDA_4', correo),
         ]))
     nodo.append(_hijos(_nodo('GTA'), [('GTA_1', '01'), ('GTA_2', 'IVA')]))
     return nodo
@@ -354,7 +379,7 @@ def construir_factura(documento, emisor, adquirente, items, totales,
                 ('BAC_3', beneficio_comprador.get('puntos', 0)),
             ]))
     raiz.append(_emisor(emisor, nit_emisor))
-    raiz.append(_adquirente(adquirente))
+    raiz.append(_adquirente(adquirente, emisor.get('email')))
     raiz.append(_totales(calculos, totales, moneda))
     raiz.append(_impuestos_globales(calculos, moneda))
     raiz.append(_resolucion(resolucion, prefijo))

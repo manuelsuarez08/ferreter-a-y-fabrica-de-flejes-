@@ -842,6 +842,10 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
     """
     cursor = conn.cursor()
 
+    from . import facturatech_emision
+    if facturatech_emision.activo():
+        return facturatech_emision.emitir_venta(conn, id_venta, forzar, contingencia)
+
     venta = cursor.execute(
         """
         SELECT v.id, v.fecha_dia, v.hora, v.total_venta, v.id_cliente,
@@ -1202,6 +1206,9 @@ def reenviar_documento(conn, id_documento):
     el cliente ya tiene.
     """
     cursor = conn.cursor()
+    from . import facturatech_emision
+    if facturatech_emision.es_de_facturatech(conn, id_documento):
+        return facturatech_emision.reenviar_documento(conn, id_documento)
     documento = cursor.execute(
         """
         SELECT id, id_venta, numero, cuide, xml_firmado, COALESCE(contingencia, 0),
@@ -1239,6 +1246,9 @@ def consultar_estado(conn, id_documento):
     para verificar el resultado del set de pruebas.
     """
     cursor = conn.cursor()
+    from . import facturatech_emision
+    if facturatech_emision.es_de_facturatech(conn, id_documento):
+        return facturatech_emision.consultar_estado(conn, id_documento)
     documento = cursor.execute(
         """
         SELECT id, id_venta, numero, cuide, track_id, zip_key, estado

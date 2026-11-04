@@ -112,44 +112,86 @@ def llamar(operacion, parametros, url=None):
     return resultado
 
 
+def _reparar_texto(texto):
+    """El servicio devuelve UTF-8 mal declarado (a veces doble codificado)."""
+    for _ in range(2):
+        try:
+            texto = texto.encode('latin-1').decode('utf-8')
+        except (UnicodeEncodeError, UnicodeDecodeError):
+            break
+    return texto
+
+
+def _es_v2():
+    return '/v2/' in _config()[0]
+
+
+def _normalizar(crudo):
+    """Unifica las respuestas de los servicios POS (v1) y facturas (v2)."""
+    crudo = {k: _reparar_texto(v) if isinstance(v, str) else v
+             for k, v in crudo.items()}
+    codigo = str(crudo.get('code') or '')
+    return {
+        'codigo': codigo,
+        'ok': codigo in ('200', '201'),
+        'mensaje': (crudo.get('message') or crudo.get('success')
+                    or crudo.get('error') or crudo.get('messageError') or ''),
+        'transaccion': crudo.get('transactionID') or crudo.get('transaccionID') or '',
+        'estado': crudo.get('status') or '',
+        'datos': crudo.get('documentBase64') or crudo.get('resourceData') or '',
+        'crudo': crudo,
+    }
+
+
 def _credenciales():
     _, usuario, password = _config()
     return [('username', 'xsd:string', usuario),
             ('password', 'xsd:string', hash_password(password))]
 
 
+def _operacion(v1, v2):
+    return 'FtechAction.' + v2 if _es_v2() else v1
+
+
 def check_credits():
-    return llamar('checkCredits', _credenciales())
+    resultado = _normalizar(llamar(_operacion('checkCredits', 'checkCredits'),
+                                   _credenciales()))
+    resultado['creditos'] = resultado['crudo'].get('availableCredits')
+    return resultado
 
 
 def upload_document(xml_bytes):
-    """Envía el XML simplificado; devuelve code, transactionID y message."""
+    """Envía el XML simplificado; devuelve el resultado normalizado."""
     xml64 = base64.b64encode(xml_bytes).decode('ascii')
-    return llamar('uploadDocument',
-                  _credenciales() + [('xmlBase64', 'xsd:string', xml64)])
+    return _normalizar(llamar(
+        _operacion('uploadDocument', 'uploadInvoiceFile'),
+        _credenciales() + [('xmlBase64', 'xsd:string', xml64)]))
 
 
 def document_status(transaccion_id):
-    return llamar('documentStatus',
-                  _credenciales() + [('transaccionID', 'xsd:string', transaccion_id)])
+    return _normalizar(llamar(
+        _operacion('documentStatus', 'documentStatusFile'),
+        _credenciales() + [('transaccionID', 'xsd:string', transaccion_id)]))
 
 
-def _descarga(operacion, prefijo, folio):
-    return llamar(operacion, _credenciales() + [
-        ('prefix', 'xsd:string', prefijo), ('number', 'xsd:integer', int(folio))])
+def _descarga(v1, v2, prefijo, folio):
+    if _es_v2():
+        parametros = [('prefijo', 'xsd:string', prefijo),
+                      ('folio', 'xsd:string', str(folio))]
+    else:
+        parametros = [('prefix', 'xsd:string', prefijo),
+                      ('number', 'xsd:integer', int(folio))]
+    return _normalizar(llamar(_operacion(v1, v2), _credenciales() + parametros))
 
 
 def download_xml(prefijo, folio):
-    return _descarga('downloadXML', prefijo, folio)
+    return _descarga('downloadXML', 'downloadXMLFile', prefijo, folio)
 
 
 def download_pdf(prefijo, folio):
-    return _descarga('downloadPDF', prefijo, folio)
+    return _descarga('downloadPDF', 'downloadPDFFile', prefijo, folio)
 
 
 def download_cufe(prefijo, folio):
-    return _descarga('downloadCUFE', prefijo, folio)
+    return _descarga('downloadCUFE', 'getCUFEFile', prefijo, folio)
 
-
-def download_metadata(prefijo, folio):
-    return _descarga('downloadMetaData', prefijo, folio)

@@ -749,6 +749,8 @@ def _aplicar_migraciones(cursor):
         cursor.execute(
             'INSERT OR IGNORE INTO series_dian (tipo_documento, prefijo, descripcion) '
             'VALUES (?, ?, ?)', (tipo, prefijo, descripcion))
+    # Inicio de vigencia de la resolución: lo exige el nodo DRF de Facturatech.
+    migrar_columna(cursor, 'series_dian', 'fecha_inicio', 'TEXT')
 
     # IVA configurable desde la app (porcentaje sobre el subtotal). Se guarda en
     # configuracion para poder cambiarlo sin tocar codigo. Por defecto 19%.
