@@ -67,10 +67,48 @@ def test_totales_cuadran():
 def test_descuento_en_ide_y_base_neta():
     items = [dict(ITEMS[0], descuento=2000)]
     raiz = _construir(items=items)
+    assert raiz.findtext('ITE/ITE_5') == '18000.00'
+    assert raiz.findtext('TOT/TOT_1') == '18000.00'
     assert raiz.findtext('ITE/IDE/IDE_2') == '2000.00'
     assert raiz.findtext('ITE/IDE/IDE_6') == '10.00'
+    assert raiz.findtext('ITE/IDE/IDE_7') == '20000.00'
     assert raiz.findtext('ITE/TII/IIM/IIM_4') == '18000.00'
     assert raiz.findtext('ITE/TII/IIM/IIM_2') == '3420.00'
+    ite = raiz.find('ITE')
+    orden = [n.tag for n in ite if n.tag in ('IAE', 'IDE', 'TII')]
+    assert orden == ['IAE', 'IDE', 'TII']
+
+
+def test_nota_credito_que_anula():
+    doc = dict(DOC, prefijo='NCPS', folio='5', tipo='NC', pos=None,
+               referencia={'numero': 'SETT1000001', 'fecha_firma': '2026-11-04',
+                           'cufe': 'abc123'},
+               concepto={'codigo': '2', 'descripcion': 'Anulación'})
+    del doc['pos']
+    raiz = _construir(documento=doc)
+    assert raiz.tag == 'NOTA'
+    assert raiz.findtext('ENC/ENC_1') == 'NC'
+    assert raiz.findtext('ENC/ENC_9') == '91'
+    assert raiz.findtext('ENC/ENC_21') == '20'
+    assert raiz.findtext('REF/REF_1') == 'IV'
+    assert raiz.findtext('REF/REF_2') == 'SETT1000001'
+    assert raiz.findtext('REF/REF_5') == 'CUFE-SHA384'
+    assert raiz.findtext('CDN/CDN_1') == '2'
+    tags = [n.tag for n in raiz]
+    assert tags.index('DRF') < tags.index('REF') < tags.index('MEP') \
+        < tags.index('CDN') < tags.index('ITE')
+
+
+def test_nota_sin_referencia_ni_concepto():
+    for cambios in ({'concepto': {}}, {'referencia': {}}):
+        doc = dict(DOC, tipo='NC', referencia={'numero': 'X1'},
+                   concepto={'codigo': '2'})
+        doc.update(cambios)
+        try:
+            _construir(documento=doc)
+        except ValueError:
+            continue
+        raise AssertionError(f'{cambios} debio fallar')
 
 
 def test_prefijo_obligatorio_y_sin_numero_final():

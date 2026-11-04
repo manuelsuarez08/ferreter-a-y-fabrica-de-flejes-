@@ -12,9 +12,11 @@ estructura.
 Supuestos no confirmados por el manual (verificar contra el demo):
 - Los impuestos del ítem (TII/IIM) van al final del ITE, después de IAE.
 - Tipo de impuesto (Tabla 44): '01' IVA y '04' INC.
-- IIM_4 (base) es la base neta del ítem (después de descuento).
+- La numeración y estructura de factura/nota sigue las guías de Facturatech de
+  sep-2025 (ITE_5 neto de descuentos; orden IAE -> IDE -> TII).
 """
 import xml.etree.ElementTree as ET
+from ferreteria.services.dian import calcular_digito_verificacion
 
 from ferreteria.services.dian_pos import (
     formatear_cantidad, formatear_monto, normalizar_fecha, solo_digitos)
@@ -168,6 +170,7 @@ def _adquirente(adquirente):
         ('ADQ_11', departamento or None),
         ('ADQ_14', adquirente.get('codigo_postal') or municipio or None),
         ('ADQ_15', adquirente.get('pais') or 'CO'),
+        ('ADQ_22', str(calcular_digito_verificacion(numero)) if tipo_doc == '31' else None),
     ])
     nodo.append(_hijos(_nodo('TCR'), [('TCR_1', _obligacion(adquirente))]))
     if adquirente.get('email') or adquirente.get('telefono'):
@@ -206,11 +209,12 @@ def _impuesto_item(codigo, valor, base, tasa, moneda):
 
 def _linea(indice, item, calculo, moneda):
     unidad = str(item.get('unidad') or '94')
+    # ITE_5 = (ITE_27*ITE_7) - descuentos: ya viene neto (guía 4DESTM_CARITM).
     nodo = _hijos(_nodo('ITE'), [
         ('ITE_1', indice),
         ('ITE_3', formatear_cantidad(calculo['cantidad'])),
         ('ITE_4', unidad),
-        ('ITE_5', _monto(calculo['bruto'])),
+        ('ITE_5', _monto(calculo['base'])),
         ('ITE_6', moneda),
         ('ITE_7', _monto(calculo['precio'])),
         ('ITE_8', moneda),
@@ -220,6 +224,11 @@ def _linea(indice, item, calculo, moneda):
         ('ITE_27', formatear_cantidad(calculo['cantidad'])),
         ('ITE_28', unidad),
     ])
+    nodo.append(_hijos(_nodo('IAE'), [
+        ('IAE_1', item.get('codigo') or str(indice)),
+        ('IAE_2', item.get('codigo_estandar') or '999'),
+    ]))
+    # Orden del manual: IAE -> IDE -> TII.
     if calculo['descuento']:
         porcentaje = (calculo['descuento'] * 100 / calculo['bruto']
                       if calculo['bruto'] else 0)
@@ -228,10 +237,6 @@ def _linea(indice, item, calculo, moneda):
             ('IDE_3', moneda), ('IDE_6', _monto(porcentaje)),
             ('IDE_7', _monto(calculo['bruto'])), ('IDE_8', moneda),
         ]))
-    nodo.append(_hijos(_nodo('IAE'), [
-        ('IAE_1', item.get('codigo') or str(indice)),
-        ('IAE_2', item.get('codigo_estandar') or '999'),
-    ]))
     total_impuestos = calculo['iva'] + calculo['inc']
     tii = _hijos(_nodo('TII'), [
         ('TII_1', _monto(total_impuestos)), ('TII_2', moneda),
@@ -270,14 +275,14 @@ def _impuestos_globales(calculos, moneda):
 
 
 def _totales(calculos, totales, moneda):
-    bruto = round(sum(c['bruto'] for c in calculos), 2)
     base = round(sum(c['base'] for c in calculos), 2)
     impuestos = round(sum(c['iva'] + c['inc'] for c in calculos), 2)
     con_impuestos = round(base + impuestos, 2)
     a_pagar = totales.get('payable_amount')
     a_pagar = con_impuestos if a_pagar is None else float(a_pagar)
+    # TOT_1 = suma de ITE_5, que ya es neto de descuentos.
     return _hijos(_nodo('TOT'), [
-        ('TOT_1', _monto(bruto)), ('TOT_2', moneda),
+        ('TOT_1', _monto(base)), ('TOT_2', moneda),
         ('TOT_3', _monto(base)), ('TOT_4', moneda),
         ('TOT_5', _monto(a_pagar)), ('TOT_6', moneda),
         ('TOT_7', _monto(con_impuestos)), ('TOT_8', moneda),
@@ -308,6 +313,10 @@ def construir_factura(documento, emisor, adquirente, items, totales,
     forma_pago ('1' contado, '2' crédito), medio_pago (Tabla 26, '10' efectivo)
     y, para POS, `pos` con placa, ubicacion, cajero, tipo_caja, codigo_venta.
     `resolucion`: numero, fecha_inicio, fecha_fin, desde, hasta.
+    Para notas (`tipo` 'NC' o 'ND') la raíz es `<NOTA>`, ENC_9 es 91/92 y se
+    exige `documento['referencia']` (numero, fecha_firma, cufe) y
+    `documento['concepto']` (codigo CDN_1, descripcion CDN_2). Una NC que anula
+    la factura (CDN_1 = 2) lleva ENC_21 = 20 y los mismos datos que la factura.
 
     Raises ValueError si falta un dato mandatorio (mejor que un rechazo
     genérico de Facturatech).
@@ -321,8 +330,20 @@ def construir_factura(documento, emisor, adquirente, items, totales,
     adquirente = adquirente or {}
     moneda = documento.get('moneda') or 'COP'
     calculos = [_calcular_linea(item) for item in items]
+    tipo = documento.get('tipo') or 'INVOIC'
+    es_nota = tipo in ('NC', 'ND')
+    if es_nota:
+        documento = dict(documento)
+        documento.setdefault('tipo_factura', '91' if tipo == 'NC' else '92')
+        concepto = documento.get('concepto') or {}
+        if not concepto.get('codigo'):
+            raise ValueError('La nota necesita el concepto (CDN_1)')
+        if not (documento.get('referencia') or {}).get('numero'):
+            raise ValueError('La nota necesita la factura que referencia')
+        anula = str(concepto['codigo']) == '2'
+        documento.setdefault('tipo_operacion', '20' if anula else '22')
 
-    raiz = ET.Element('FACTURA')
+    raiz = ET.Element('NOTA' if es_nota else 'FACTURA')
     raiz.append(_encabezado(documento, adquirente, items, prefijo, folio, nit_emisor))
     if documento.get('pos') is not None:
         raiz.append(_punto_de_venta(documento, totales))
@@ -337,10 +358,28 @@ def construir_factura(documento, emisor, adquirente, items, totales,
     raiz.append(_totales(calculos, totales, moneda))
     raiz.append(_impuestos_globales(calculos, moneda))
     raiz.append(_resolucion(resolucion, prefijo))
-    raiz.append(_hijos(_nodo('MEP'), [
-        ('MEP_1', documento.get('forma_pago') or '1'),
-        ('MEP_2', documento.get('medio_pago') or '10'),
-    ]))
+    if es_nota:
+        ref = documento['referencia']
+        raiz.append(_hijos(_nodo('REF'), [
+            ('REF_1', ref.get('tipo') or 'IV'),
+            ('REF_2', ref['numero']),
+            ('REF_3', normalizar_fecha(ref['fecha_firma'])
+             if ref.get('fecha_firma') else None),
+            ('REF_4', ref.get('cufe')),
+            ('REF_5', ref.get('algoritmo') or 'CUFE-SHA384'),
+        ]))
+    forma = documento.get('forma_pago') or '1'
+    medio = documento.get('medio_pago') or '10'
+    # Guía de factura (nov-2025): MEP_1 = medio (Tabla 5), MEP_2 = método (Tabla 26).
+    # La guía POS conserva el orden anterior.
+    mep = ([('MEP_1', forma), ('MEP_2', medio)] if documento.get('pos') is not None
+           else [('MEP_1', medio), ('MEP_2', forma)])
+    raiz.append(_hijos(_nodo('MEP'), mep))
+    if es_nota:
+        raiz.append(_hijos(_nodo('CDN'), [
+            ('CDN_1', concepto['codigo']),
+            ('CDN_2', concepto.get('descripcion')),
+        ]))
     for indice, (item, calculo) in enumerate(zip(items, calculos), start=1):
         raiz.append(_linea(indice, item, calculo, moneda))
     return raiz
