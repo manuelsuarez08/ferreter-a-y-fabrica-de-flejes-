@@ -4,7 +4,7 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <meta name="google" content="notranslate">
-    <title>Panel del Propietario | FerreControl</title>
+    <title>Panel del Propietario | Ferre Control</title>
     <link href="{{ url_for('static', filename='vendor/bootstrap.min.css') }}" rel="stylesheet">
     <!-- El bundle va en el <head>, NO al final del body: el script de esta página
          usa `bootstrap.Modal` para abrir el detalle, y si la librería se cargara
@@ -350,7 +350,7 @@ function pintarPerfiles(perfiles) {
         // dueño todavía no lo subió, que es un dato útil, no un fallo.
         const logo = p.tiene_logo
             ? `<img src="${p.logo_url}" alt="${p.nombre}">`
-            : `<div class="marca">FerreControl</div>`;
+            : `<div class="marca">Ferre Control</div>`;
         const vencido = p.franja === 'vencido' || p.franja === 'bloqueado';
         const claseFecha = p.franja === 'vencido' ? 'marca-falta'
             : (p.franja === 'por_vencer' ? 'marca-aviso' : '');

@@ -219,7 +219,7 @@ DB_BUSY_TIMEOUT_MS = 15000
 DB_CACHE_SIZE_KB = -16000
 
 # ── Marca de la plataforma ─────────────────────────────────────────
-# FerreControl es el SOFTWARE. El nombre de cada ferretería es un DATO, vive en
+# Ferre Control es el SOFTWARE. El nombre de cada ferretería es un DATO, vive en
 # la tabla `configuracion` de SU base (campo `nombre`) y lo configura el dueño.
 #
 # Antes el nombre del cliente estaba escrito en el código (títulos de página,
@@ -227,7 +227,7 @@ DB_CACHE_SIZE_KB = -16000
 # solo cliente: cada ferretería nueva aparecía como "Ferretería y Fábrica de
 # Flejes" hasta que alguien lo cambiaba a mano. Ahora la marca vive en un solo
 # lugar y el negocio se lee de la base.
-NOMBRE_PLATAFORMA = 'FerreControl'
+NOMBRE_PLATAFORMA = 'Ferre Control'
 VERSION_PLATAFORMA = '1.0'
 # Subtítulo que aparece bajo la marca en las pantallas de la plataforma.
 TAGLINE_PLATAFORMA = 'Control total para su ferretería'

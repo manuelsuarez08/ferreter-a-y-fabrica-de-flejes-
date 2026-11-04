@@ -271,7 +271,7 @@ def _crear_tablas_operacion(cursor):
         )
     ''')
     # `nombre` es la RAZON SOCIAL DEL NEGOCIO, no el nombre del software. El
-    # software se llama FerreControl (ver NOMBRE_PLATAFORMA en config.py) y este
+    # software se llama Ferre Control (ver NOMBRE_PLATAFORMA en config.py) y este
     # campo lo llena el dueño de cada ferretería. El valor por defecto es
     # genérico a propósito: una base nueva no debe arrancar mostrando el nombre
     # de un cliente anterior.
