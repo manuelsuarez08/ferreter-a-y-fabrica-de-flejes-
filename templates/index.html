@@ -2187,6 +2187,8 @@
             <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cerrar</button>
             <button type="button" class="btn btn-warning fw-bold" id="btn-editar-items"
                     onclick="alternarEdicionItemsFactura()" style="display:none;">✏️ Editar precios</button>
+            <button type="button" class="btn btn-info fw-bold" id="btn-emitir-dian"
+                    onclick="emitirFacturaElectronica()" style="display:none;">🧾 Emitir factura electrónica</button>
             <button type="button" class="btn btn-primary fw-bold" onclick="imprimirRecibo('area-factura-pdf', 'factura')">🖨️ Imprimir recibo</button>
                        <button type="button" class="btn btn-success fw-bold" onclick="descargarPDF()">📥 Descargar PDF</button>
                        <button type="button" class="btn fw-bold text-white" style="background:#25D366;" onclick="whatsappFactura()">📱 WhatsApp</button>
@@ -5863,6 +5865,9 @@
 
 			       	              // El bloque DIAN (CUIDE + QR) lo pinta el modulo dian-pos.js.
 			       	              if (window.DianPos) window.DianPos.pintarBloque(factura);
+			       	              const btnDian = document.getElementById('btn-emitir-dian');
+			       	              if (btnDian) btnDian.style.display =
+			       	                (window.DianPos && window.DianPos.sePuedeEmitir(factura)) ? '' : 'none';
 			       	       new bootstrap.Modal(document.getElementById('modalFactura')).show();
 			// Impresión automática de la tirilla si el usuario la activó.
 			if (autoPrint) {
@@ -5872,6 +5877,18 @@
 		  console.error('Error al abrir la factura', id, err);
 		  alert('No se pudo abrir la factura #' + id + ':\n' + (err && err.message ? err.message : String(err)));
 		}
+			}
+
+			async function emitirFacturaElectronica() {
+				if (!facturaActualId || !window.DianPos) return;
+				if (!confirm('¿Emitir la factura electrónica de esta venta?')) return;
+				const btn = document.getElementById('btn-emitir-dian');
+				if (btn) btn.disabled = true;
+				try {
+					await window.DianPos.emitirFactura(facturaActualId);
+				} catch (e) { /* el aviso ya se mostró */ }
+				if (btn) btn.disabled = false;
+				verFactura(facturaActualId);
 			}
 
 			async function guardarEdicionClienteFactura() {

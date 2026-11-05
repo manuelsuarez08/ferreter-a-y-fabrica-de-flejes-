@@ -519,17 +519,14 @@ def _emitir_si_esta_configurado(id_venta):
         Un texto para anexar al mensaje de éxito, o '' si no hay nada que decir
         (emisión automática apagada).
     """
+    # La factura electrónica se emite solo cuando el usuario lo pide con el
+    # botón de la factura; la venta nunca la dispara.
+    return ''
     try:
         from ..services import dian_emision
 
         conn = get_db()
         try:
-            activa = conn.execute(
-                "SELECT COALESCE(dian_emision_automatica, 0) FROM configuracion WHERE id = 1"
-            ).fetchone()
-            if not activa or not activa[0]:
-                return ''
-
             resultado = dian_emision.emitir_venta(conn, id_venta)
         finally:
             conn.close()
