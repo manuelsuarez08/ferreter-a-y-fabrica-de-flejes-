@@ -308,6 +308,11 @@ def configuracion_negocio():
         (str(data.get('nombre', '')).strip(), str(data.get('nit', '')).strip(),
          str(data.get('telefono', '')).strip(), str(data.get('direccion', '')).strip()),
     )
+    # Códigos DIAN del emisor: solo se tocan si vienen informados.
+    for llave in ('codigo_municipio', 'codigo_departamento'):
+        if llave in data:
+            conn.execute(f"UPDATE configuracion SET {llave} = ? WHERE id = 1",
+                         (str(data.get(llave) or '').strip(),))
     # El IVA solo se toca si viene en la peticion (para no borrarlo desde otros
     # formularios que guardan solo el nombre del negocio).
     if 'iva_porcentaje' in data:
