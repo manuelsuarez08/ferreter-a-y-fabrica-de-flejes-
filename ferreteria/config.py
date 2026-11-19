@@ -51,13 +51,8 @@ DB_SEMILLA = os.path.join(BASE_DIR, 'ferreteria-semilla.db')
 DB_TRABAJO = os.path.join(BASE_DIR, 'ferreteria.db')
 
 # ── Versión de la semilla ───────────────────
-# Un número entero en el archivo `ferreteria-semilla.version`. Cada vez que se
-# cambia el catálogo de la semilla a mano (p. ej. borrar productos que no son
-# productos), se sube este número. Al arrancar, si la versión del repositorio es
-# MAYOR que la que quedó aplicada en el disco, la app adopta la semilla nueva.
-# Sin esto, un disco que ya tenía datos NUNCA recibía los cambios del catálogo:
-# la heurística de "1.5x productos" no se dispara con limpiezas (que reducen el
-# número de productos).
+# Identifica la versión de semilla usada en una instalación nueva. Una versión
+# posterior no reemplaza automáticamente una base de trabajo existente.
 SEMILLA_VERSION_FILE = os.path.join(BASE_DIR, 'ferreteria-semilla.version')
 
 def _leer_version_semilla():

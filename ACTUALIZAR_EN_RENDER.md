@@ -41,6 +41,16 @@ if os.path.exists(DB_NAME):
 Es decir: **si subes solo el código, la base vieja sigue ahí.** Los datos nuevos
 no llegan. Por eso existe la restauración por web.
 
+La semilla se usa únicamente cuando todavía no existe una base de trabajo. Una
+versión nueva de la semilla no reemplaza los productos, clientes ni ventas de
+una base existente. Si la base no es legible, el arranque se detiene para evitar
+sobrescribirla: revisa el disco y los respaldos antes de restaurar.
+
+Si una versión anterior sustituyó la base, podría existir un archivo
+`ferreteria-respaldo-antes-semilla-*.db` en el directorio de datos. Descarga
+primero un respaldo de la base actual y compara ambos antes de restaurar: una
+restauración completa también reemplaza ventas y clientes creados después.
+
 > ¿Tiene disco persistente? En [dashboard.render.com](https://dashboard.render.com)
 > → tu servicio → menú **"Disks"**. Si ves `/var/data`, sí lo tiene.
 

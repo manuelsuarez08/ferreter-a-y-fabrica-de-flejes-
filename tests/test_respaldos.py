@@ -11,6 +11,7 @@ La rotación ahora conserva los últimos N y borra el resto.
 import glob
 import os
 import shutil
+import sqlite3
 
 import pytest
 
@@ -106,3 +107,87 @@ def test_si_la_base_no_cambio_no_se_genera_respaldo(proyecto, monkeypatch):
     assert segundo is None, 'se genero un respaldo sin que la base cambiara'
     assert primero and os.path.exists(primero)
     assert len(_respaldos(carpeta)) == 1
+
+
+def _crear_base_minima(ruta, productos):
+    with sqlite3.connect(ruta) as conexion:
+        conexion.executescript('''
+            CREATE TABLE productos (id INTEGER PRIMARY KEY, nombre TEXT);
+            CREATE TABLE clientes (nombre TEXT);
+            CREATE TABLE ventas (referencia TEXT);
+            CREATE TABLE configuracion (id INTEGER);
+        ''')
+        conexion.executemany('INSERT INTO productos VALUES (?, ?)', productos)
+        conexion.execute("INSERT INTO clientes VALUES ('Cliente real')")
+        conexion.execute("INSERT INTO ventas VALUES ('Venta real')")
+
+
+@pytest.mark.parametrize('version_repo', [0, 3])
+@pytest.mark.parametrize('productos', [[], [(1, 'Conservado')]])
+def test_arranque_no_reemplaza_base_con_productos_eliminados(tmp_path, monkeypatch, version_repo, productos):
+    from ferreteria import db
+
+    actual = tmp_path / 'actual.db'
+    semilla = tmp_path / 'semilla.db'
+    _crear_base_minima(actual, productos)
+    _crear_base_minima(semilla, [(1, 'Conservado'), (2, 'Eliminado'), (3, 'Otro')])
+    monkeypatch.setattr(db, 'DB_NAME', str(actual))
+    monkeypatch.setattr(db, 'DB_SEMILLA', str(semilla))
+    monkeypatch.setattr(db, 'SEMILLA_VERSION', version_repo)
+
+    assert db.asegurar_base_de_datos() is False
+    with sqlite3.connect(actual) as conexion:
+        assert conexion.execute('SELECT nombre FROM productos').fetchall() == [(nombre,) for _, nombre in productos]
+        assert conexion.execute('SELECT nombre FROM clientes').fetchall() == [('Cliente real',)]
+        assert conexion.execute('SELECT referencia FROM ventas').fetchall() == [('Venta real',)]
+
+
+def test_arranque_con_base_danada_no_la_sustituye(tmp_path, monkeypatch):
+    from ferreteria import db
+
+    actual = tmp_path / 'actual.db'
+    semilla = tmp_path / 'semilla.db'
+    actual.write_bytes(b'base danada que debe conservarse')
+    _crear_base_minima(semilla, [(1, 'Semilla')])
+    monkeypatch.setattr(db, 'DB_NAME', str(actual))
+    monkeypatch.setattr(db, 'DB_SEMILLA', str(semilla))
+
+    with pytest.raises(RuntimeError, match='Se conservó sin cambios'):
+        db.asegurar_base_de_datos()
+    assert actual.read_bytes() == b'base danada que debe conservarse'
+
+
+def test_arranque_siembra_solo_si_no_existe_base(tmp_path, monkeypatch):
+    from ferreteria import db
+
+    actual = tmp_path / 'actual.db'
+    semilla = tmp_path / 'semilla.db'
+    _crear_base_minima(semilla, [(1, 'Semilla')])
+    monkeypatch.setattr(db, 'DB_NAME', str(actual))
+    monkeypatch.setattr(db, 'DB_SEMILLA', str(semilla))
+
+    assert db.asegurar_base_de_datos() is True
+    with sqlite3.connect(actual) as conexion:
+        assert conexion.execute('SELECT nombre FROM productos').fetchall() == [('Semilla',)]
+
+
+def test_producto_eliminado_desde_api_no_reaparece_al_reiniciar(proyecto, monkeypatch):
+    from ferreteria import db
+    from ferreteria.app_factory import create_app
+
+    _, base = proyecto
+    monkeypatch.setattr(db, 'DB_NAME', str(base))
+    monkeypatch.setattr(db, 'SEMILLA_VERSION', 999)
+    db.init_db()
+    with db.get_db() as conexion:
+        producto = conexion.execute('SELECT id FROM productos ORDER BY id LIMIT 1').fetchone()[0]
+    app = create_app(inicializar_db=False, iniciar_hilo_dian=False)
+    cliente = app.test_client()
+    with cliente.session_transaction() as sesion:
+        sesion['usuario'] = 'prueba'
+        sesion['rol'] = 'admin'
+    assert cliente.delete(f'/api/productos/{producto}').status_code == 200
+
+    create_app(inicializar_db=True, iniciar_hilo_dian=False)
+    with db.get_db() as conexion:
+        assert conexion.execute('SELECT id FROM productos WHERE id = ?', (producto,)).fetchone() is None

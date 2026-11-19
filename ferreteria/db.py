@@ -1738,45 +1738,11 @@ def asegurar_base_de_datos():
         os.makedirs(carpeta, exist_ok=True)
 
     if os.path.exists(DB_NAME):
-        # La base ya existe: se comprueba que sea LEGIBLE y consistente. Si esta
-        # danada (p. ej. quedo un -wal viejo de otra base tras una restauracion
-        # interrumpida), NO sirve dejarla: todas las consultas devolverian 500 y
-        # la app quedaria inservible hasta limpiarla a mano. En ese caso se
-        # reemplaza por la semilla del repositorio para que la app vuelva a
-        # arrancar sola.
-        if _base_legible(DB_NAME):
-            # Base restaurada por el admin desde un respaldo: es su dato, no se
-            # sustituye por la semilla aunque tenga menos productos.
-            if os.path.exists(DB_NAME + '.restaurada'):
-                return False
-            # La base es legible, pero puede estar DESACTUALIZADA respecto al
-            # repositorio. Se adopta la semilla en dos casos:
-            #   1) La version de semilla del repo es MAYOR que la aplicada en el
-            #      disco. Esto cubre cambios manuales del catalogo (p. ej. borrar
-            #      productos que no son productos), que REDUCEN el numero de
-            #      productos y por eso la heuristica de "1.5x" no detecta.
-            #   2) La semilla tiene un catalogo claramente mayor (caso historico).
-            version_repo = SEMILLA_VERSION
-            version_disco = _leer_version_disco(DB_NAME)
-            if version_repo > version_disco or _semilla_es_mejor(DB_NAME, DB_SEMILLA):
-                # Se borran la base vieja y sus -wal/-shm ANTES de copiar. OJO:
-                # no se puede volver a llamar a _limpiar_archivos_sqlite DESPUES
-                # del copy2, porque borraria la semilla recien copiada y dejaria
-                # la base en 0 bytes (era el bug: productos/clientes vacios y
-                # 500 en /api/productos tras sembrar en Render).
-                _guardar_copia_antes_de_semilla(DB_NAME)
-                _limpiar_archivos_sqlite(DB_NAME)
-                shutil.copy2(DB_SEMILLA, DB_NAME)
-                _escribir_version_disco(DB_NAME, version_repo)
-                return True
-            return False
-        _guardar_copia_antes_de_semilla(DB_NAME)
-        _limpiar_archivos_sqlite(DB_NAME)
-        if not os.path.exists(DB_SEMILLA):
-            return False
-        shutil.copy2(DB_SEMILLA, DB_NAME)
-        _escribir_version_disco(DB_NAME, SEMILLA_VERSION)
-        return True
+        if not _base_legible(DB_NAME):
+            raise RuntimeError(
+                f'La base de datos existente no es legible: {DB_NAME}. '
+                'Se conservó sin cambios; revise el disco y los respaldos antes de restaurar.')
+        return False
     if os.path.exists(DB_SEMILLA):
         shutil.copy2(DB_SEMILLA, DB_NAME)
         # SQLite en modo WAL puede acompañarse de -wal/-shm; no se copian a
