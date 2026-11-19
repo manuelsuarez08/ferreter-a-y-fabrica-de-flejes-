@@ -55,13 +55,14 @@ def _preparar():
     return conn, cur.lastrowid
 
 
-def test_emision_aceptada_y_idempotente():
-    os.environ.update(ENV)
+def test_emision_aceptada_y_idempotente(monkeypatch):
+    for clave, valor in ENV.items():
+        monkeypatch.setenv(clave, valor)
     conn, venta = _preparar()
     subidos = []
-    ws.upload_document = lambda xml: subidos.append(xml) or _ok()
-    ws.document_status = lambda t: _ok(estado='SIGNED_XML')
-    ws.download_cufe = lambda p, f: _ok(datos='CUFE123')
+    monkeypatch.setattr(ws, 'upload_document', lambda xml: subidos.append(xml) or _ok())
+    monkeypatch.setattr(ws, 'document_status', lambda transaccion: _ok(estado='SIGNED_XML'))
+    monkeypatch.setattr(ws, 'download_cufe', lambda prefijo, folio: _ok(datos='CUFE123'))
     res = dian_emision.emitir_venta(conn, venta)
     assert res['estado'] == 'aceptado' and res['cuide'] == 'CUFE123'
     assert res['numero'] == 'TCFA-5'
@@ -74,34 +75,37 @@ def test_emision_aceptada_y_idempotente():
     assert len(subidos) == 1
 
 
-def test_rechazo_no_se_trata_como_contingencia():
-    os.environ.update(ENV)
+def test_rechazo_no_se_trata_como_contingencia(monkeypatch):
+    for clave, valor in ENV.items():
+        monkeypatch.setenv(clave, valor)
     conn, venta = _preparar()
-    ws.upload_document = lambda xml: _ok(codigo='404', ok=False, mensaje='regla X',
-                                         transaccion='')
+    monkeypatch.setattr(ws, 'upload_document', lambda xml: _ok(
+        codigo='404', ok=False, mensaje='regla X', transaccion=''))
     res = dian_emision.emitir_venta(conn, venta)
     assert res['estado'] == 'rechazado' and 'regla X' in res['mensaje']
     assert conn.execute("SELECT COUNT(*) FROM cola_dian").fetchone()[0] == 0
 
 
-def test_sin_red_pasa_a_contingencia_y_se_encola():
-    os.environ.update(ENV)
+def test_sin_red_pasa_a_contingencia_y_se_encola(monkeypatch):
+    for clave, valor in ENV.items():
+        monkeypatch.setenv(clave, valor)
     conn, venta = _preparar()
 
     def caido(xml):
         raise ws.ErrorFacturatech('sin red')
-    ws.upload_document = caido
+    monkeypatch.setattr(ws, 'upload_document', caido)
     res = dian_emision.emitir_venta(conn, venta)
     assert res['estado'] == 'contingencia' and res['contingencia']
     assert conn.execute("SELECT COUNT(*) FROM cola_dian").fetchone()[0] == 1
 
 
-def test_error_de_cuenta_va_a_contingencia():
-    os.environ.update(ENV)
+def test_error_de_cuenta_va_a_contingencia(monkeypatch):
+    for clave, valor in ENV.items():
+        monkeypatch.setenv(clave, valor)
     conn, venta = _preparar()
-    ws.upload_document = lambda xml: _ok(
+    monkeypatch.setattr(ws, 'upload_document', lambda xml: _ok(
         codigo='409', ok=False, mensaje='no está configurado como cliente webservice',
-        transaccion='')
+        transaccion=''))
     res = dian_emision.emitir_venta(conn, venta)
     assert res['estado'] == 'contingencia'
     assert conn.execute("SELECT COUNT(*) FROM cola_dian").fetchone()[0] == 1
@@ -124,9 +128,9 @@ def test_bloqueo_http_no_se_marca_como_rechazo_fiscal(monkeypatch):
         conn.close()
 
 
-def test_sin_variables_no_se_activa():
+def test_sin_variables_no_se_activa(monkeypatch):
     for k in ENV:
-        os.environ.pop(k, None)
+        monkeypatch.delenv(k, raising=False)
     assert not fe.activo()
 
 
@@ -284,12 +288,67 @@ def test_servicio_pos_no_envia_factura_electronica(monkeypatch, ambiente):
     for clave, valor in ENV.items():
         monkeypatch.setenv(clave, valor)
     monkeypatch.setenv('FACTURATECH_URL', f'https://ws-pos.facturatech.co/v1/{ambiente}')
+    monkeypatch.delenv('FACTURATECH_POS_FACTURA', raising=False)
     conn, venta = _preparar()
     enviados = []
     monkeypatch.setattr(ws, 'upload_document', lambda xml: enviados.append(xml))
     try:
         anterior = dian_series.leer_serie(conn, 'FV')['consecutivo']
         with pytest.raises(dian_emision.ErrorEmision, match='factura electrónica'):
+            fe.emitir_venta(conn, venta)
+        assert dian_series.leer_serie(conn, 'FV')['consecutivo'] == anterior
+        assert enviados == []
+    finally:
+        conn.close()
+
+
+def test_factura_lag_por_ws_pos_habilitado_explicitamente(monkeypatch):
+    for clave, valor in ENV.items():
+        monkeypatch.setenv(clave, valor)
+    monkeypatch.setenv('FACTURATECH_URL', 'https://ws-pos.facturatech.co/v1/pro/index.php?wsdl')
+    monkeypatch.setenv('FACTURATECH_POS_FACTURA', '1')
+    monkeypatch.setattr(fe, 'ESPERA_FIRMA_SEGUNDOS', (0,))
+    conn, venta = _preparar()
+    enviados = []
+    monkeypatch.setattr(ws, 'upload_document', lambda xml: enviados.append(xml) or _ok())
+    monkeypatch.setattr(ws, 'document_status', lambda transaccion: _ok(estado='SIGNED_XML'))
+    monkeypatch.setattr(ws, 'download_cufe', lambda prefijo, folio: _ok(datos='CUFE-PRUEBA'))
+    try:
+        conn.execute("UPDATE configuracion SET dian_tipo_persona = '2' WHERE id = 1")
+        conn.execute('UPDATE detalle_ventas SET precio_unitario = 11900, subtotal = 11900 WHERE id_venta = ?', (venta,))
+        dian_series.actualizar_serie(conn, 'FV', {
+            'prefijo': 'LAG', 'consecutivo': 1, 'activa': True,
+            'numero_resolucion': '123', 'fecha_inicio': '2000-01-01',
+            'fecha_vencimiento': '2099-12-31', 'rango_desde': 1, 'rango_hasta': 50000,
+        })
+        conn.commit()
+        resultado = fe.emitir_venta(conn, venta)
+        assert resultado['numero'] == 'LAG-1'
+        assert resultado['estado'] == 'aceptado'
+        assert b'<ENC_1>INVOIC</ENC_1>' in enviados[0]
+        assert b'<ENC_9>01</ENC_9>' in enviados[0]
+        assert b'<ENC_20>1</ENC_20>' in enviados[0]
+        assert b'<IPV>' in enviados[0]
+        assert b'<EMI_1>2</EMI_1>' in enviados[0]
+        assert b'<DRF_4>LAG</DRF_4>' in enviados[0]
+        assert dian_series.leer_serie(conn, 'FV')['consecutivo'] == 2
+    finally:
+        conn.close()
+
+
+def test_factura_ws_pos_sigue_exigiendo_serie_activa(monkeypatch):
+    for clave, valor in ENV.items():
+        monkeypatch.setenv(clave, valor)
+    monkeypatch.setenv('FACTURATECH_URL', 'https://ws-pos.facturatech.co/v1/pro')
+    monkeypatch.setenv('FACTURATECH_POS_FACTURA', '1')
+    conn, venta = _preparar()
+    enviados = []
+    monkeypatch.setattr(ws, 'upload_document', lambda xml: enviados.append(xml))
+    try:
+        dian_series.actualizar_serie(conn, 'FV', {'activa': False})
+        conn.commit()
+        anterior = dian_series.leer_serie(conn, 'FV')['consecutivo']
+        with pytest.raises(dian_emision.ErrorEmision, match='activa'):
             fe.emitir_venta(conn, venta)
         assert dian_series.leer_serie(conn, 'FV')['consecutivo'] == anterior
         assert enviados == []

@@ -222,8 +222,9 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
         url_servicio = ws._config()[0]
     except ws.ErrorFacturatech as error:
         raise ErrorEmision(str(error)) from error
-    if tipo_doc == 'FV' and 'ws-pos' in url_servicio.lower():
-        raise ErrorEmision('La conexión de documentos POS no permite emitir una factura electrónica.')
+    if (tipo_doc == 'FV' and 'ws-pos' in url_servicio.lower()
+            and os.environ.get('FACTURATECH_POS_FACTURA', '').strip() != '1'):
+        raise ErrorEmision('La factura electrónica por WS POS requiere habilitación explícita del proveedor.')
     if tipo_doc == 'POS' and _ambiente() == '1' and '/v2/' in os.environ.get('FACTURATECH_URL', ''):
         raise ErrorEmision('La conexión de factura electrónica no permite emitir documentos POS.')
     serie = dian_series.leer_serie(conn, tipo_doc)
