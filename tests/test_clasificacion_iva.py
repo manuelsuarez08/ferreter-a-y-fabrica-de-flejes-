@@ -238,6 +238,117 @@ def test_clasificar_productos_sueltos(admin):
     assert b == (19.0, '00'), f'gravado mal: {b}'
 
 
+def test_clasificar_todo_al_19_conserva_precios_y_ventas(admin, empleado):
+    conn = get_db()
+    try:
+        producto = conn.execute(
+            "INSERT INTO productos (nombre, precio_venta, precio_costo, stock_actual, iva_tasa, "
+            "iva_tipo_tarifa, iva_naturaleza, activo) VALUES ('Prueba IVA total', 1190, 0, 0, 0, '02', 'exento', 0)"
+        ).lastrowid
+        ventas_antes = conn.execute('SELECT COUNT(*) FROM ventas').fetchone()[0]
+        carpeta = os.path.dirname(conn.execute('PRAGMA database_list').fetchone()[2])
+        conn.commit()
+    finally:
+        conn.close()
+    datos = {'todos': True, 'confirmar': True, 'iva_tasa': 19, 'iva_tipo_tarifa': '00'}
+    assert empleado.post('/api/productos/tarifa-iva', json=datos).status_code == 403
+    assert admin.post('/api/productos/tarifa-iva', json={**datos, 'confirmar': False}).status_code == 400
+    respuesta = admin.post('/api/productos/tarifa-iva', json=datos)
+    assert respuesta.status_code == 200
+    with sqlite3.connect(os.path.join(carpeta, respuesta.get_json()['respaldo'])) as respaldo:
+        assert respaldo.execute('SELECT iva_tasa, iva_naturaleza FROM productos WHERE id = ?',
+                                (producto,)).fetchone() == (0, 'exento')
+    conn = get_db()
+    try:
+        fila = conn.execute('SELECT precio_venta, precio_base, iva_valor, iva_tasa, '
+                            'iva_tipo_tarifa, iva_naturaleza FROM productos WHERE id = ?',
+                            (producto,)).fetchone()
+        configuracion = conn.execute('SELECT iva_porcentaje, iva_activo, iva_por_producto '
+                                     'FROM configuracion WHERE id = 1').fetchone()
+        assert conn.execute('SELECT COUNT(*) FROM ventas').fetchone()[0] == ventas_antes
+    finally:
+        conn.close()
+    assert fila == (1190, 1000, 190, 19, '00', 'gravado')
+    assert configuracion == (19, 1, 1)
+
+
+def test_clasificacion_total_sin_respaldo_no_modifica_datos(admin, monkeypatch):
+    from ferreteria.blueprints import catalogo
+
+    def fallo_respaldo(conn):
+        raise OSError('Disco sin espacio')
+
+    monkeypatch.setattr(catalogo, '_respaldar_antes_iva', fallo_respaldo)
+    conn = get_db()
+    try:
+        antes = conn.execute('SELECT iva_porcentaje, iva_activo, iva_por_producto '
+                             'FROM configuracion WHERE id = 1').fetchone()
+    finally:
+        conn.close()
+    respuesta = admin.post('/api/productos/tarifa-iva', json={
+        'todos': True, 'confirmar': True, 'iva_tasa': 19, 'iva_tipo_tarifa': '00'})
+    assert respuesta.status_code == 500
+    conn = get_db()
+    try:
+        assert conn.execute('SELECT iva_porcentaje, iva_activo, iva_por_producto '
+                            'FROM configuracion WHERE id = 1').fetchone() == antes
+    finally:
+        conn.close()
+
+
+def test_producto_nuevo_y_editado_al_19_es_gravado(admin):
+    datos = {'nombre': 'Prueba IVA nuevo', 'precio_venta': 1190,
+             'precio_costo': 0, 'stock_actual': 1, 'iva_tasa': 19}
+    respuesta = admin.post('/api/productos', json=datos)
+    assert respuesta.status_code == 201
+    producto = respuesta.get_json()['id']
+    assert admin.put(f'/api/productos/{producto}', json=datos).status_code == 200
+    conn = get_db()
+    try:
+        fila = conn.execute('SELECT precio_venta, precio_base, iva_valor, iva_tasa, '
+                            'iva_tipo_tarifa, iva_naturaleza FROM productos WHERE id = ?',
+                            (producto,)).fetchone()
+    finally:
+        conn.close()
+    assert fila == (1190, 1000, 190, 19, '00', 'gravado')
+
+
+def test_iva_total_en_venta_y_documento_electronico(tmp_path, monkeypatch):
+    from ferreteria.services import dian_emision
+
+    base = tmp_path / 'venta_iva.db'
+    shutil.copy2(os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                              'ferreteria-semilla.db'), base)
+    monkeypatch.setattr(db_mod, 'DB_NAME', str(base))
+    db_mod.init_db()
+    aplicacion = create_app(inicializar_db=False, iniciar_hilo_dian=False)
+    cliente = aplicacion.test_client()
+    with cliente.session_transaction() as sesion:
+        sesion['usuario'] = 'admin'
+        sesion['rol'] = 'admin'
+    respuesta = cliente.post('/api/productos/tarifa-iva', json={
+        'todos': True, 'confirmar': True, 'iva_tasa': 19, 'iva_tipo_tarifa': '00'})
+    assert respuesta.status_code == 200
+    producto = cliente.post('/api/productos', json={
+        'nombre': 'Prueba documento 19', 'precio_venta': 1190,
+        'precio_costo': 0, 'stock_actual': 2, 'iva_tasa': 19,
+    }).get_json()['id']
+    venta = cliente.post('/api/ventas', json={
+        'id_cliente': 1, 'tipo_pago': 'efectivo',
+        'items': [{'id_producto': producto, 'cantidad': 1, 'precio_unitario': 1190}],
+    })
+    assert venta.status_code == 201
+    conn = get_db()
+    try:
+        fila = conn.execute('SELECT total_venta, subtotal_venta, iva_valor FROM ventas WHERE id = ?',
+                            (venta.get_json()['id_venta'],)).fetchone()
+        items = dian_emision._leer_items(conn, venta.get_json()['id_venta'], 19, iva_por_producto=True)
+    finally:
+        conn.close()
+    assert fila == (1190, 1000, 190)
+    assert items[0]['iva_tasa'] == 19
+
+
 def test_no_se_adivina_la_tarifa_dian_incorrecta(admin):
     """Con tasa 0 pero sin código explícito, se asume '01' (excluido, art. 424).
 

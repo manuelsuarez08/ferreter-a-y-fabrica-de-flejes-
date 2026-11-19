@@ -2253,9 +2253,13 @@
           <hr>
           <div class="d-flex justify-content-between align-items-center">
             <span class="small text-muted" id="clasif-progreso"></span>
-            <button type="button" class="btn btn-primary fw-bold"
-                    id="btn-aplicar-clasificacion"
-                    onclick="aplicarClasificacionIVA()">Aplicar a la categoría</button>
+              <div class="d-flex flex-wrap gap-2">
+                <button type="button" class="btn btn-outline-primary fw-bold"
+                  id="btn-iva-todos" onclick="aplicarIVA19Todos()">Aplicar 19% a todos</button>
+                <button type="button" class="btn btn-primary fw-bold"
+                  id="btn-aplicar-clasificacion"
+                  onclick="aplicarClasificacionIVA()">Aplicar a la categoría</button>
+              </div>
           </div>
         </div>
         <div class="modal-footer">
@@ -4733,6 +4737,30 @@
       el.textContent = elegida
         ? `Se aplicar�� a los ${elegida.productos} producto(s) de "${elegida.categoria}".`
         : 'Elige una categoría.';
+    }
+
+    async function aplicarIVA19Todos() {
+      const confirmado = confirm('¿Aplicar IVA incluido del 19% a todos los productos, incluso exentos o excluidos?\n\n' +
+        'Los precios finales no cambian. Las facturas pendientes pueden verse afectadas. ' +
+        'Se guardará un respaldo antes de actualizar el catálogo.');
+      if (!confirmado) return;
+      const boton = document.getElementById('btn-iva-todos');
+      boton.disabled = true;
+      try {
+        const respuesta = await fetch('/api/productos/tarifa-iva', {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ todos: true, confirmar: true, iva_tasa: 19, iva_tipo_tarifa: '00' }),
+        });
+        const datos = await respuesta.json();
+        if (!respuesta.ok) throw new Error(datos.error || 'No se pudo actualizar el catálogo.');
+        await cargarDatosNegocio();
+        setTexto('clasif-progreso', `${datos.mensaje}. Respaldo: ${datos.respaldo}`);
+        alert(`${datos.mensaje}. Los precios finales no cambiaron.`);
+      } catch (error) {
+        alert('No se pudo aplicar el IVA: ' + error.message);
+      } finally {
+        boton.disabled = false;
+      }
     }
 
     async function aplicarClasificacionIVA() {

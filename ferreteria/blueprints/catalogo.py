@@ -3,7 +3,9 @@
 Agrupa el CRUD de clientes y productos junto al control de stock (entradas,
 salidas, reconteos y búsqueda por código de barras).
 """
+import os
 import sqlite3
+import tempfile
 from datetime import datetime
 
 from flask import Blueprint, jsonify, request, session
@@ -14,6 +16,26 @@ from ..services.auditoria import registrar_auditoria
 from ..services.dian import calcular_digito_verificacion, es_nit
 
 bp = Blueprint('catalogo', __name__)
+
+
+def _respaldar_antes_iva(conn):
+    ruta = conn.execute('PRAGMA database_list').fetchone()[2]
+    if not ruta:
+        raise OSError('La base no tiene una ruta de respaldo.')
+    descriptor, respaldo = tempfile.mkstemp(
+        prefix='ferreteria-respaldo-antes-iva-', suffix='.db',
+        dir=os.path.dirname(os.path.abspath(ruta)))
+    os.close(descriptor)
+    try:
+        copia = sqlite3.connect(respaldo)
+        try:
+            conn.backup(copia)
+        finally:
+            copia.close()
+    except Exception:
+        os.remove(respaldo)
+        raise
+    return os.path.basename(respaldo)
 
 
 # Columnas fiscales del tercero (DIAN). Se centralizan para que GET, INSERT y
@@ -337,6 +359,9 @@ def _crear_o_reabastecer_producto(cursor, conn):
     iva_naturaleza = (str(data.get('iva_naturaleza', '')).strip() or 'excluido')
     if iva_naturaleza not in ('exento', 'excluido', 'gravado'):
         iva_naturaleza = 'excluido'
+    if iva_tasa > 0:
+        iva_naturaleza = 'gravado'
+    iva_tipo_tarifa = '00' if iva_tasa > 0 else '02' if iva_naturaleza == 'exento' else '01'
 
     if not nombre or precio_venta < 0 or precio_costo < 0:
         conn.close()
@@ -371,11 +396,11 @@ def _crear_o_reabastecer_producto(cursor, conn):
                 precio_venta = ?, stock_actual = ?, stock_minimo = ?,
                 precio_base = ?, iva_valor = ?, iva_tasa = ?,
                 unidad_medida = ?, codigo_dian = COALESCE(?, codigo_dian),
-                iva_naturaleza = ?
+                iva_naturaleza = ?, iva_tipo_tarifa = ?
             WHERE id = ?
             """,
             (categoria, codigo_barras, precio_costo, precio_venta, nuevo_stock, stock_minimo,
-             precio_base, iva_valor, iva_tasa, unidad_medida, codigo_dian, iva_naturaleza,
+             precio_base, iva_valor, iva_tasa, unidad_medida, codigo_dian, iva_naturaleza, iva_tipo_tarifa,
              id_prod),
         )
         cursor.execute(
@@ -392,15 +417,15 @@ def _crear_o_reabastecer_producto(cursor, conn):
     cursor.execute(
         "INSERT INTO productos (nombre, categoria, dimensiones, codigo_barras, precio_costo, "
         "precio_venta, stock_actual, stock_minimo, stock_inicial, auditado, activo, "
-        "precio_base, iva_valor, iva_tasa, unidad_medida, codigo_dian, iva_naturaleza) "
+        "precio_base, iva_valor, iva_tasa, unidad_medida, codigo_dian, iva_naturaleza, iva_tipo_tarifa) "
         "VALUES (:nombre, :categoria, :dimensiones, :codigo, :costo, :venta, :stock, :minimo, "
-        ":stock, 0, 1, :base, :iva, :tasa, :unidad, :codigo_dian, :naturaleza)",
+        ":stock, 0, 1, :base, :iva, :tasa, :unidad, :codigo_dian, :naturaleza, :tipo_tarifa)",
         {'nombre': nombre, 'categoria': categoria, 'dimensiones': dimensiones,
          'codigo': codigo_barras, 'costo': precio_costo, 'venta': precio_venta,
          'stock': stock_ingresado, 'minimo': stock_minimo,
          'base': precio_base, 'iva': iva_valor, 'tasa': iva_tasa,
          'unidad': unidad_medida, 'codigo_dian': codigo_dian,
-         'naturaleza': iva_naturaleza},
+         'naturaleza': iva_naturaleza, 'tipo_tarifa': iva_tipo_tarifa},
     )
     id_producto = cursor.lastrowid
     cursor.execute(
@@ -448,7 +473,8 @@ def clasificar_tarifa_iva():
     data = request.json or {}
     ids = data.get('ids')
     categoria = str(data.get('categoria') or '').strip()
-    if not ids and not categoria:
+    todos = data.get('todos') is True
+    if not ids and not categoria and not todos:
         return jsonify({'error': 'Indique "ids" o "categoria"'}), 400
 
     tasa = data.get('iva_tasa')
@@ -475,9 +501,32 @@ def clasificar_tarifa_iva():
             # ferretería. Se puede corregir producto a producto después.
             tipo_tarifa = '01'
 
+    if todos and (ids or categoria or tasa != 19 or tipo_tarifa != '00'
+                  or data.get('confirmar') is not True):
+        return jsonify({'error': 'La clasificación de todo el catálogo requiere confirmar IVA 19% gravado.'}), 400
+
     conn = get_db()
     try:
-        if ids:
+        respaldo = None
+        if todos:
+            try:
+                respaldo = _respaldar_antes_iva(conn)
+            except (OSError, sqlite3.Error):
+                return jsonify({'error': 'No se pudo crear el respaldo previo; no se modificó el catálogo.'}), 500
+            conn.execute('BEGIN IMMEDIATE')
+            productos = conn.execute('SELECT id, precio_venta FROM productos').fetchall()
+            valores = []
+            for id_producto, precio in productos:
+                base, iva = _desglosar_iva(precio, 19)
+                valores.append((base, iva, id_producto))
+            conn.executemany(
+                "UPDATE productos SET iva_tasa = 19, iva_tipo_tarifa = '00', "
+                "iva_naturaleza = 'gravado', precio_base = ?, iva_valor = ? WHERE id = ?",
+                valores)
+            conn.execute('UPDATE configuracion SET iva_porcentaje = 19, iva_activo = 1, '
+                         'iva_por_producto = 1 WHERE id = 1')
+            afectados = len(productos)
+        elif ids:
             marcas = ','.join('?' * len(ids))
             cur = conn.execute(
                 f'UPDATE productos SET iva_tasa = ?, iva_tipo_tarifa = ? '
@@ -488,11 +537,13 @@ def clasificar_tarifa_iva():
                 'UPDATE productos SET iva_tasa = ?, iva_tipo_tarifa = ? '
                 'WHERE TRIM(COALESCE(categoria, \'\')) = ? COLLATE NOCASE',
                 (tasa, tipo_tarifa, categoria))
-        afectados = cur.rowcount
+        if not todos:
+            afectados = cur.rowcount
         from ..services.auditoria import registrar_auditoria as _aud
         _aud(conn, 'clasificar_iva', 'producto', None,
              f'IVA {tasa}% (tipo {tipo_tarifa}) a {afectados} producto(s)'
-             + (f' de la categoría "{categoria}"' if categoria else ''))
+                 + (' de todo el catálogo' if todos else
+                     f' de la categoría "{categoria}"' if categoria else ''))
         conn.commit()
     finally:
         conn.close()
@@ -501,6 +552,7 @@ def clasificar_tarifa_iva():
         'mensaje': f'{afectados} producto(s) clasificados con IVA {tasa}% '
                    f'(tipo DIAN {tipo_tarifa})',
         'afectados': afectados, 'iva_tasa': tasa, 'iva_tipo_tarifa': tipo_tarifa,
+        'respaldo': respaldo,
     })
 
 
@@ -687,19 +739,22 @@ def _actualizar_producto(conn, id_producto):
     iva_naturaleza = str(data.get('iva_naturaleza', '')).strip() or 'excluido'
     if iva_naturaleza not in ('exento', 'excluido', 'gravado'):
         iva_naturaleza = 'excluido'
+    if iva_tasa > 0:
+        iva_naturaleza = 'gravado'
+    iva_tipo_tarifa = '00' if iva_tasa > 0 else '02' if iva_naturaleza == 'exento' else '01'
     try:
         conn.execute(
             """
             UPDATE productos SET nombre = ?, categoria = ?, dimensiones = ?, codigo_barras = ?,
             precio_costo = ?, precio_venta = ?, stock_minimo = ?, precio_base = ?,
             iva_valor = ?, iva_tasa = ?, unidad_medida = ?, codigo_dian = ?,
-            iva_naturaleza = ? WHERE id = ?
+            iva_naturaleza = ?, iva_tipo_tarifa = ? WHERE id = ?
             """,
             (str(data.get('nombre', '')).strip(), str(data.get('categoria', '')).strip(),
              str(data.get('dimensiones', '')).strip(), str(data.get('codigo_barras', '')).strip() or None,
              float(data.get('precio_costo', 0)), precio_venta,
              int(data.get('stock_minimo', 0)), precio_base, iva_valor, iva_tasa,
-             unidad_medida, codigo_dian, iva_naturaleza, id_producto),
+             unidad_medida, codigo_dian, iva_naturaleza, iva_tipo_tarifa, id_producto),
         )
         if conn.total_changes == 0:
             conn.close()
