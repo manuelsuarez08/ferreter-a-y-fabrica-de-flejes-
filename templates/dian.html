@@ -410,21 +410,27 @@ async function guardarProveedor(evento) {
 // ── Estado del módulo ────────────────────────────────────────────────────
 async function cargarEstado() {
   const e = await api('/api/dian/estado');
+  const facturatech = e.proveedor_emision === 'Facturatech';
+  const ambiente = e.ambiente_efectivo_nombre || e.ambiente_nombre;
 
   document.getElementById('estado-ambiente').textContent =
-    `Ambiente: ${e.ambiente_nombre}`;
-  document.getElementById('dato-ambiente').textContent = e.ambiente_nombre;
+    `Ambiente: ${ambiente}`;
+  document.getElementById('dato-ambiente').textContent = ambiente;
   document.getElementById('dato-modo').textContent =
-    `Modo: ${e.modo === 'produccion' ? 'Producción' : 'Habilitación'}`;
+    facturatech ? 'Proveedor: Facturatech' : `Modo: ${e.modo === 'produccion' ? 'Producción' : 'Habilitación'}`;
   document.getElementById('dato-numeracion').textContent =
-    `${e.prefijo}-${e.consecutivo}`;
+    facturatech ? 'Consultar series' : `${e.prefijo}-${e.consecutivo}`;
   document.getElementById('dato-resolucion').textContent =
-    e.test_set_id ? `TestSetId: ${e.test_set_id}` : 'Sin set de pruebas';
+    facturatech ? 'Verifique la resolución por tipo de documento' :
+      e.test_set_id ? `TestSetId: ${e.test_set_id}` : 'Sin set de pruebas';
 
   const c = e.certificado;
   const nodoCert = document.getElementById('dato-certificado');
   const nodoDet = document.getElementById('dato-certificado-detalle');
-  if (!c.configurado) {
+  if (facturatech) {
+    nodoCert.innerHTML = '<span class="badge bg-secondary">Proveedor</span>';
+    nodoDet.textContent = 'Verifique el certificado con Facturatech';
+  } else if (!c.configurado) {
     nodoCert.innerHTML = '<span class="badge bg-secondary">Sin configurar</span>';
     nodoDet.textContent = 'Suba el archivo .p12 del negocio';
   } else if (!c.valido) {
@@ -451,7 +457,9 @@ async function cargarEstado() {
     : '<span class="text-muted small">Todavía no se han emitido documentos.</span>';
 
   const faltantes = document.getElementById('aviso-faltantes');
-  faltantes.innerHTML = e.listo
+  faltantes.innerHTML = facturatech
+    ? '<div class="alert alert-info py-2 mb-0 small">Facturatech configurado. Verifique la conexión y las series antes de emitir.</div>'
+    : e.listo
     ? '<div class="alert alert-success py-2 mb-0 small">'
       + 'El sistema está listo para emitir documentos electrónicos.</div>'
     : '<div class="alert alert-warning py-2 mb-0 small">'
@@ -662,6 +670,11 @@ function pintarSeries(series) {
                        title="0 = sin límite" ${disabled}>
               </div>
             </div>
+            <div class="small mb-1">Inicio de vigencia
+              <input type="date" class="form-control form-control-sm"
+                     id="ser-${s.tipo_documento}-fecha_inicio"
+                     value="${escapar(s.fecha_inicio)}" ${disabled}>
+            </div>
             <div class="small mb-1">Vencimiento
               <input type="date" class="form-control form-control-sm"
                      id="ser-${s.tipo_documento}-fecha_vencimiento"
@@ -717,21 +730,21 @@ async function guardarSerie(tipo) {
     return el ? el.value : '';
   };
   const activa = document.getElementById(`ser-${tipo}-activa`);
+  const datos = {
+    prefijo: v('prefijo'),
+    numero_resolucion: v('numero_resolucion'),
+    rango_desde: v('rango_desde') || 1,
+    rango_hasta: v('rango_hasta') || 0,
+    fecha_inicio: v('fecha_inicio'),
+    fecha_vencimiento: v('fecha_vencimiento'),
+    activa: activa ? activa.checked : false,
+  };
+  if (v('clave_tecnica')) datos.clave_tecnica = v('clave_tecnica');
   try {
     await api(`/api/dian/series/${tipo}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        prefijo: v('prefijo'),
-        numero_resolucion: v('numero_resolucion'),
-        rango_desde: v('rango_desde') || 1,
-        rango_hasta: v('rango_hasta') || 0,
-        fecha_vencimiento: v('fecha_vencimiento'),
-        clave_tecnica: v('clave_tecnica'),
-        // La clave técnica solo se envía si se escribió algo: si el usuario no
-        // la digita, no se borra la que ya estaba configurada.
-        activa: activa ? activa.checked : false,
-      }),
+      body: JSON.stringify(datos),
     });
     avisar(`Serie ${tipo} guardada.`);
     await cargarSeries();

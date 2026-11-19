@@ -1421,6 +1421,9 @@ def estado_dian(conn):
     """
     cursor = conn.cursor()
     ajustes = _leer_ajustes_dian(cursor)
+    from . import facturatech_emision
+    facturatech_activo = facturatech_emision.activo()
+    ambiente_efectivo = facturatech_emision._ambiente() if facturatech_activo else ajustes['ambiente']
 
     por_estado = {}
     for estado, total in cursor.execute(
@@ -1466,6 +1469,9 @@ def estado_dian(conn):
     return {
         'ambiente': ajustes['ambiente'],
         'ambiente_nombre': dian_pos.ambiente_por_numero(ajustes['ambiente']),
+        'proveedor_emision': 'Facturatech' if facturatech_activo else 'DIAN directo',
+        'ambiente_efectivo': ambiente_efectivo,
+        'ambiente_efectivo_nombre': dian_pos.ambiente_por_numero(ambiente_efectivo),
         'modo': ajustes['modo'],
         'prefijo': ajustes['prefijo'],
         'consecutivo': ajustes['consecutivo'],

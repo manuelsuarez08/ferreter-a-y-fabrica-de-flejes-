@@ -11,6 +11,7 @@ directo con la DIAN.
 """
 import os
 import time
+import xml.etree.ElementTree as ET
 from datetime import datetime, timedelta
 
 from . import dian_pos, dian_series, facturatech_ws as ws, facturatech_xml as fxml
@@ -44,6 +45,30 @@ def _ahora():
 
 def _ambiente():
     return '1' if '/pro' in os.environ.get('FACTURATECH_URL', '') else '2'
+
+
+def _validar_serie_produccion(serie, folio=None):
+    ErrorEmision = _error_emision()
+    if not serie or not serie.get('activa') or not serie.get('prefijo'):
+        raise ErrorEmision('La serie de producción debe estar configurada y activa.')
+    if not serie.get('numero_resolucion'):
+        raise ErrorEmision('Falta el número de resolución de producción.')
+    inicio = serie.get('fecha_inicio') or os.environ.get('FACTURATECH_RESOLUCION_INICIO')
+    fin = serie.get('fecha_vencimiento')
+    try:
+        fecha_inicio = datetime.strptime(inicio or '', '%Y-%m-%d').date()
+        fecha_fin = datetime.strptime(fin or '', '%Y-%m-%d').date()
+    except (ValueError, TypeError):
+        raise ErrorEmision('La resolución de producción necesita fechas de inicio y vencimiento válidas.')
+    if not fecha_inicio <= datetime.now().date() <= fecha_fin:
+        raise ErrorEmision('La resolución de producción no está vigente.')
+    try:
+        desde, hasta = int(serie.get('rango_desde') or 0), int(serie.get('rango_hasta') or 0)
+        siguiente = int(folio if folio is not None else serie.get('consecutivo') or 0)
+    except (TypeError, ValueError):
+        raise ErrorEmision('El rango o consecutivo de producción no es válido.')
+    if desde < 1 or hasta < desde or not desde <= siguiente <= hasta:
+        raise ErrorEmision('El consecutivo no está dentro del rango de producción autorizado.')
 
 
 def _guardar_estado(conn, id_documento, id_venta, numero, estado, mensaje,
@@ -172,6 +197,10 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
                 'estado': estado, 'contingencia': estado == 'contingencia',
                 'mensaje': 'La venta ya tiene documento electrónico',
                 'qr_url': URL_CONSULTA_DIAN + cuide if cuide else ''}
+    if existente and forzar:
+        if not es_de_facturatech(conn, existente[0]):
+            raise ErrorEmision('No se puede reemitir con Facturatech un documento de otro proveedor.')
+        _verificar_ambiente_documento(_documento(conn, existente[0])[4])
 
     emisor = de._leer_emisor(cursor)
     adquirente = de._leer_adquirente(cursor, id_cliente)
@@ -190,6 +219,11 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
     if tipo_doc not in dian_series.TIPOS_DOCUMENTO:
         tipo_doc = 'POS'
     serie = dian_series.leer_serie(conn, tipo_doc)
+    if _ambiente() == '1':
+        folio_existente = existente[1].rpartition('-')[2] if forzar and existente else None
+        _validar_serie_produccion(serie, folio_existente)
+        if folio_existente and existente[1].rpartition('-')[0] != serie['prefijo']:
+            raise ErrorEmision('El prefijo del documento no coincide con la serie de producción.')
     if forzar and existente:
         numero = existente[1]
         prefijo, _, folio = numero.rpartition('-')
@@ -270,6 +304,18 @@ def _documento(conn, id_documento):
     return fila
 
 
+def _verificar_ambiente_documento(xml):
+    ErrorEmision = _error_emision()
+    try:
+        ambiente = ET.fromstring(xml or '').findtext('./ENC/ENC_20')
+    except (ET.ParseError, TypeError, ValueError):
+        ambiente = None
+    if ambiente not in ('1', '2'):
+        raise ErrorEmision('El documento no tiene un ambiente Facturatech verificable.')
+    if ambiente != _ambiente():
+        raise ErrorEmision('El ambiente del documento no coincide con el ambiente Facturatech configurado.')
+
+
 def es_de_facturatech(conn, id_documento):
     fila = conn.execute(
         'SELECT modo FROM documentos_electronicos WHERE id = ?',
@@ -285,6 +331,7 @@ def reenviar_documento(conn, id_documento):
     if estado == 'aceptado':
         return {'id_documento': id_doc, 'numero': numero, 'estado': 'aceptado',
                 'contingencia': False, 'mensaje': 'El documento ya fue aceptado'}
+    _verificar_ambiente_documento(xml)
     if transaccion:
         estado, mensaje, cufe = _resolver_firma(
             conn, id_doc, id_venta, numero, prefijo, folio, transaccion)
@@ -300,6 +347,7 @@ def consultar_estado(conn, id_documento):
     if not transaccion:
         return {'id_documento': id_doc, 'numero': numero, 'estado': estado,
                 'mensaje': 'El documento aún no se ha enviado a Facturatech'}
+    _verificar_ambiente_documento(_xml)
     nuevo, mensaje, cufe = _resolver_firma(
         conn, id_doc, id_venta, numero, prefijo, numero.rpartition('-')[2],
         transaccion, esperar=False)
@@ -310,7 +358,8 @@ def consultar_estado(conn, id_documento):
 def descargar_pdf(conn, id_documento):
     """PDF de la representación gráfica, en bytes."""
     import base64
-    _, _, numero, prefijo, *_ = _documento(conn, id_documento)
+    _, _, numero, prefijo, xml, *_ = _documento(conn, id_documento)
+    _verificar_ambiente_documento(xml)
     resultado = ws.download_pdf(prefijo, numero.rpartition('-')[2])
     if not resultado['ok'] or not resultado['datos']:
         raise ws.ErrorFacturatech(resultado['mensaje'] or 'PDF no disponible')

@@ -1,7 +1,10 @@
 """Emisión por Facturatech sin red: el cliente SOAP se reemplaza por un doble."""
 import os
+import sqlite3
 import sys
 import tempfile
+
+import pytest
 
 os.environ['FERRETERIA_DB'] = os.path.join(tempfile.mkdtemp(), 'ft.db')
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
@@ -108,6 +111,136 @@ def test_sin_variables_no_se_activa():
     for k in ENV:
         os.environ.pop(k, None)
     assert not fe.activo()
+
+
+@pytest.mark.parametrize('transaccion', [None, 'T-DEMO'])
+def test_no_reenvia_documento_demo_al_cambiar_a_produccion(monkeypatch, transaccion):
+    monkeypatch.setenv('FACTURATECH_URL', 'https://ws.facturatech.co/v2/pro')
+    conn = sqlite3.connect(':memory:')
+    conn.execute('CREATE TABLE documentos_electronicos '
+                 '(id INTEGER, id_venta INTEGER, numero TEXT, prefijo TEXT, xml TEXT, '
+                 'track_id TEXT, estado TEXT, contingencia INTEGER)')
+    conn.execute('INSERT INTO documentos_electronicos VALUES (?, ?, ?, ?, ?, ?, ?, ?)',
+                 (1, 1, 'TEST-1', 'TEST', '<FACTURA><ENC><ENC_20>2</ENC_20></ENC></FACTURA>',
+                  transaccion, 'contingencia', 1))
+    llamadas = []
+    monkeypatch.setattr(ws, 'upload_document', lambda *args: llamadas.append('upload'))
+    monkeypatch.setattr(ws, 'document_status', lambda *args: llamadas.append('status'))
+    try:
+        with pytest.raises(dian_emision.ErrorEmision, match='ambiente'):
+            fe.reenviar_documento(conn, 1)
+        assert llamadas == []
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize('xml', ['', '<FACTURA>', '<FACTURA><ENC/></FACTURA>',
+                                 '<FACTURA><ENC><ENC_20>3</ENC_20></ENC></FACTURA>'])
+def test_documento_sin_ambiente_verificable_no_se_reenvia(monkeypatch, xml):
+    monkeypatch.setenv('FACTURATECH_URL', 'https://ws.facturatech.co/v2/pro')
+    with pytest.raises(dian_emision.ErrorEmision, match='ambiente'):
+        fe._verificar_ambiente_documento(xml)
+
+
+def test_documento_del_mismo_ambiente_puede_reintentarse(monkeypatch):
+    monkeypatch.setenv('FACTURATECH_URL', 'https://ws.facturatech.co/v2/pro')
+    assert fe._verificar_ambiente_documento(
+        '<FACTURA><ENC><ENC_20>1</ENC_20></ENC></FACTURA>') is None
+
+
+@pytest.mark.parametrize('cambios', [
+    {'activa': False}, {'numero_resolucion': ''}, {'fecha_inicio': ''},
+    {'fecha_vencimiento': '2001-01-01'}, {'rango_hasta': 0},
+    {'consecutivo': 0}, {'consecutivo': 100},
+])
+def test_serie_produccion_invalida_se_bloquea(monkeypatch, cambios):
+    monkeypatch.delenv('FACTURATECH_RESOLUCION_INICIO', raising=False)
+    serie = {'activa': True, 'prefijo': 'FV', 'numero_resolucion': '123',
+             'fecha_inicio': '2000-01-01', 'fecha_vencimiento': '2099-12-31',
+             'rango_desde': 1, 'rango_hasta': 99, 'consecutivo': 5}
+    serie.update(cambios)
+    with pytest.raises(dian_emision.ErrorEmision):
+        fe._validar_serie_produccion(serie)
+
+
+def test_serie_produccion_vigente_es_valida():
+    serie = {'activa': True, 'prefijo': 'FV', 'numero_resolucion': '123',
+             'fecha_inicio': '2000-01-01', 'fecha_vencimiento': '2099-12-31',
+             'rango_desde': 1, 'rango_hasta': 99, 'consecutivo': 5}
+    assert fe._validar_serie_produccion(serie) is None
+
+
+def test_produccion_sin_serie_activa_no_reserva_ni_envia(monkeypatch):
+    for clave, valor in ENV.items():
+        monkeypatch.setenv(clave, valor)
+    monkeypatch.setenv('FACTURATECH_URL', 'https://ws.facturatech.co/v2/pro')
+    conn, venta = _preparar()
+    llamadas = []
+    monkeypatch.setattr(ws, 'upload_document', lambda *args: llamadas.append('upload'))
+    try:
+        dian_series.actualizar_serie(conn, 'FV', {'activa': False})
+        conn.commit()
+        anterior = dian_series.leer_serie(conn, 'FV')['consecutivo']
+        with pytest.raises(dian_emision.ErrorEmision, match='activa'):
+            fe.emitir_venta(conn, venta)
+        assert dian_series.leer_serie(conn, 'FV')['consecutivo'] == anterior
+        assert conn.execute('SELECT COUNT(*) FROM documentos_electronicos').fetchone()[0] == 0
+        assert llamadas == []
+    finally:
+        conn.close()
+
+
+def test_produccion_con_serie_valida_envia_ambiente_productivo_simulado(monkeypatch):
+    for clave, valor in ENV.items():
+        monkeypatch.setenv(clave, valor)
+    monkeypatch.setenv('FACTURATECH_URL', 'https://ws.facturatech.co/v2/pro')
+    monkeypatch.setattr(fe, 'ESPERA_FIRMA_SEGUNDOS', (0,))
+    conn, venta = _preparar()
+    enviados = []
+    monkeypatch.setattr(ws, 'upload_document', lambda xml: enviados.append(xml) or _ok())
+    monkeypatch.setattr(ws, 'document_status', lambda transaccion: _ok(estado='SIGNED_XML'))
+    monkeypatch.setattr(ws, 'download_cufe', lambda prefijo, folio: _ok(datos='CUFE-PRUEBA'))
+    try:
+        dian_series.actualizar_serie(conn, 'FV', {'activa': True})
+        conn.commit()
+        resultado = fe.emitir_venta(conn, venta)
+        assert resultado['estado'] == 'aceptado'
+        assert b'<ENC_20>1</ENC_20>' in enviados[0]
+    finally:
+        conn.close()
+
+
+def test_reemision_forzada_no_convierte_documento_demo_a_produccion(monkeypatch):
+    for clave, valor in ENV.items():
+        monkeypatch.setenv(clave, valor)
+    conn, venta = _preparar()
+    try:
+        resultado = fe.emitir_venta(conn, venta, contingencia=True)
+        original = conn.execute('SELECT xml FROM documentos_electronicos WHERE id = ?',
+                                (resultado['id_documento'],)).fetchone()[0]
+        monkeypatch.setenv('FACTURATECH_URL', 'https://ws.facturatech.co/v2/pro')
+        with pytest.raises(dian_emision.ErrorEmision, match='ambiente'):
+            fe.emitir_venta(conn, venta, forzar=True)
+        assert conn.execute('SELECT xml FROM documentos_electronicos WHERE id = ?',
+                            (resultado['id_documento'],)).fetchone()[0] == original
+    finally:
+        conn.close()
+
+
+def test_estado_muestra_ambiente_efectivo_de_facturatech(monkeypatch):
+    for clave, valor in ENV.items():
+        monkeypatch.setenv(clave, valor)
+    monkeypatch.setenv('FACTURATECH_URL', 'https://ws.facturatech.co/v2/pro')
+    conn, _ = _preparar()
+    try:
+        conn.execute("UPDATE configuracion SET dian_ambiente = '2' WHERE id = 1")
+        estado = dian_emision.estado_dian(conn)
+        assert estado['ambiente'] == '2'
+        assert estado['proveedor_emision'] == 'Facturatech'
+        assert estado['ambiente_efectivo'] == '1'
+        assert estado['ambiente_efectivo_nombre'] == 'Producción'
+    finally:
+        conn.close()
 
 
 if __name__ == '__main__':
