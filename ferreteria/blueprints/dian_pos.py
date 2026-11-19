@@ -169,7 +169,7 @@ def configuracion():
                direccion, COALESCE(codigo_municipio, ''),
                COALESCE(codigo_departamento, ''), COALESCE(regimen_fiscal, ''),
                COALESCE(software_proveedor_nit, ''),
-               COALESCE(software_proveedor_nombre, '')
+               COALESCE(software_proveedor_nombre, ''), COALESCE(dian_tipo_persona, '1')
         FROM configuracion WHERE id = 1
         """
     ).fetchone()
@@ -216,6 +216,7 @@ def configuracion():
         # código fuente. Es distinto del emisor: son dos actores.
         'software_proveedor_nit': fila[23],
         'software_proveedor_nombre': fila[24],
+        'tipo_persona_emisor': fila[25],
     })
 
 
@@ -244,6 +245,7 @@ def guardar_configuracion():
 
     campos = {
         'dian_ambiente': ('ambiente', str),
+        'dian_tipo_persona': ('tipo_persona_emisor', str),
         'dian_prefijo': ('prefijo', str),
         'clave_tecnica': ('clave_tecnica', str),
         'software_id': ('software_id', str),
@@ -268,6 +270,9 @@ def guardar_configuracion():
         if llave == 'ambiente' and valor not in ('1', '2'):
             return jsonify({'error': "El ambiente debe ser '1' (producción) "
                                      "o '2' (habilitación)"}), 400
+        if llave == 'tipo_persona_emisor' and valor not in ('1', '2'):
+            conn.close()
+            return jsonify({'error': 'El tipo de persona debe ser 1 (jurídica) o 2 (natural).'}), 400
         if llave == 'modo' and valor not in ('habilitacion', 'produccion'):
             return jsonify({'error': "El modo debe ser 'habilitacion' o 'produccion'"}), 400
         asignaciones.append(f'{columna} = ?')

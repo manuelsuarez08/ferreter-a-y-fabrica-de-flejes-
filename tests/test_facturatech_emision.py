@@ -210,6 +210,58 @@ def test_produccion_con_serie_valida_envia_ambiente_productivo_simulado(monkeypa
         conn.close()
 
 
+def test_factura_productiva_respeta_persona_natural_del_emisor(monkeypatch):
+    for clave, valor in ENV.items():
+        monkeypatch.setenv(clave, valor)
+    monkeypatch.setenv('FACTURATECH_URL', 'https://ws.facturatech.co/v2/pro')
+    monkeypatch.setattr(fe, 'ESPERA_FIRMA_SEGUNDOS', (0,))
+    conn, venta = _preparar()
+    enviados = []
+    monkeypatch.setattr(ws, 'upload_document', lambda xml: enviados.append(xml) or _ok())
+    monkeypatch.setattr(ws, 'document_status', lambda transaccion: _ok(estado='SIGNED_XML'))
+    monkeypatch.setattr(ws, 'download_cufe', lambda prefijo, folio: _ok(datos='CUFE-PRUEBA'))
+    try:
+        conn.execute("UPDATE configuracion SET dian_tipo_persona = '2' WHERE id = 1")
+        dian_series.actualizar_serie(conn, 'FV', {'activa': True})
+        conn.commit()
+        fe.emitir_venta(conn, venta)
+        assert b'<EMI_1>2</EMI_1>' in enviados[0]
+    finally:
+        conn.close()
+
+
+def test_configuracion_tipo_persona_emisor():
+    conn, _ = _preparar()
+    conn.close()
+    aplicacion = create_app(inicializar_db=False, iniciar_hilo_dian=False)
+    cliente = aplicacion.test_client()
+    with cliente.session_transaction() as sesion:
+        sesion['usuario'] = 'admin'
+        sesion['rol'] = 'admin'
+    assert cliente.put('/api/dian/configuracion', json={'tipo_persona_emisor': '2'}).status_code == 200
+    assert cliente.get('/api/dian/configuracion').get_json()['tipo_persona_emisor'] == '2'
+    assert cliente.put('/api/dian/configuracion', json={'tipo_persona_emisor': '3'}).status_code == 400
+
+
+def test_servicio_productivo_de_facturas_no_envia_pos(monkeypatch):
+    for clave, valor in ENV.items():
+        monkeypatch.setenv(clave, valor)
+    monkeypatch.setenv('FACTURATECH_URL', 'https://ws.facturatech.co/v2/pro')
+    conn, venta = _preparar()
+    enviados = []
+    monkeypatch.setattr(ws, 'upload_document', lambda xml: enviados.append(xml))
+    try:
+        conn.execute("UPDATE ventas SET tipo_documento_dian = 'POS' WHERE id = ?", (venta,))
+        conn.commit()
+        anterior = dian_series.leer_serie(conn, 'POS')['consecutivo']
+        with pytest.raises(dian_emision.ErrorEmision, match='POS'):
+            fe.emitir_venta(conn, venta)
+        assert dian_series.leer_serie(conn, 'POS')['consecutivo'] == anterior
+        assert enviados == []
+    finally:
+        conn.close()
+
+
 def test_reemision_forzada_no_convierte_documento_demo_a_produccion(monkeypatch):
     for clave, valor in ENV.items():
         monkeypatch.setenv(clave, valor)

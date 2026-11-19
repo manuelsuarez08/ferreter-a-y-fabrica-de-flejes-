@@ -218,6 +218,8 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
     tipo_doc = (tipo_doc or 'POS').strip().upper()
     if tipo_doc not in dian_series.TIPOS_DOCUMENTO:
         tipo_doc = 'POS'
+    if tipo_doc == 'POS' and _ambiente() == '1' and '/v2/' in os.environ.get('FACTURATECH_URL', ''):
+        raise ErrorEmision('La conexión de factura electrónica no permite emitir documentos POS.')
     serie = dian_series.leer_serie(conn, tipo_doc)
     if _ambiente() == '1':
         folio_existente = existente[1].rpartition('-')[2] if forzar and existente else None

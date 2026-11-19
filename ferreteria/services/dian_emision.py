@@ -180,7 +180,7 @@ def _leer_emisor(cursor):
                 -- El prefijo de la resolucion va al `CorporateRegistrationScheme`
                 -- del emisor (Anexo Tecnico V1.9, pagina 15). Sin el, el
                 -- documento no declara el prefijo que le autorizo la DIAN.
-                COALESCE(dian_prefijo, '')
+                COALESCE(dian_prefijo, ''), COALESCE(dian_tipo_persona, '1')
         FROM configuracion WHERE id = 1
         """
     ).fetchone()
@@ -188,7 +188,7 @@ def _leer_emisor(cursor):
         raise ErrorEmision('No hay datos de configuración del negocio')
 
     nombre, nit, dv, direccion, telefono, email, municipio, departamento, \
-        regimen, responsabilidades, ciiu, ciudad, prefijo, fin_registro = fila
+        regimen, responsabilidades, ciiu, ciudad, prefijo, fin_registro, tipo_persona = fila
 
     if not dian_pos.solo_digitos(nit):
         raise ErrorEmision(
@@ -203,6 +203,7 @@ def _leer_emisor(cursor):
 
     return {
         'nit': dian_pos.solo_digitos(nit),
+        'tipo_persona': str(tipo_persona or '1'),
         'digito_verificacion': str(dv or '').strip(),
         'razon_social': str(nombre or '').strip(),
         'nombre_comercial': str(nombre or '').strip(),

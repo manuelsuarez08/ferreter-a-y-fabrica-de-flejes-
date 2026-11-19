@@ -562,6 +562,7 @@ def _aplicar_migraciones(cursor):
     # Viven en `configuracion` (fila única) para poder cambiarlos sin tocar código.
     for columna, definicion in (
         ('digito_verificacion', "TEXT DEFAULT ''"),
+        ('dian_tipo_persona', "TEXT NOT NULL DEFAULT '1'"),
         ('regimen_fiscal', "TEXT DEFAULT 'Responsable de IVA'"),
         ('responsabilidades', "TEXT DEFAULT 'O-13'"),
         # Ubicacion del emisor: la ferreteria esta en Samana, Caldas. Se deja

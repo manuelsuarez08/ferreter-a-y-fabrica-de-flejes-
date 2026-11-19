@@ -92,6 +92,13 @@
         <h6 class="mb-3">Datos del software propio y de la resolución</h6>
         <form id="form-config" class="row g-3" onsubmit="guardarConfiguracion(event)">
           <div class="col-md-6">
+            <label class="form-label small" for="cfg-tipo-persona">Tipo de persona del emisor</label>
+            <select class="form-select" id="cfg-tipo-persona">
+              <option value="1">Persona jurídica</option>
+              <option value="2">Persona natural</option>
+            </select>
+          </div>
+          <div class="col-md-6">
             <label class="form-label small">Ambiente de destino</label>
             <select class="form-select" id="cfg-ambiente">
               <option value="2">Habilitación (set de pruebas)</option>
@@ -470,6 +477,7 @@ async function cargarEstado() {
 // ── Configuración ────────────────────────────────────────────────────────
 async function cargarConfiguracion() {
   const c = await api('/api/dian/configuracion');
+  document.getElementById('cfg-tipo-persona').value = c.tipo_persona_emisor || '1';
   document.getElementById('cfg-ambiente').value = c.ambiente;
   document.getElementById('cfg-modo').value = c.modo;
   document.getElementById('cfg-prefijo').value = c.prefijo || '';
@@ -491,6 +499,7 @@ async function cargarConfiguracion() {
 async function guardarConfiguracion(evento) {
   evento.preventDefault();
   const cuerpo = {
+    tipo_persona_emisor: document.getElementById('cfg-tipo-persona').value,
     ambiente: document.getElementById('cfg-ambiente').value,
     modo: document.getElementById('cfg-modo').value,
     prefijo: document.getElementById('cfg-prefijo').value,
