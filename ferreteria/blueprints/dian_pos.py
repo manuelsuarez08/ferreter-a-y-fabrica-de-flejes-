@@ -21,6 +21,7 @@ con sesión puede consultar el estado y descargar un XML (es información que el
 cajero necesita para atender al cliente).
 """
 import os
+import re
 
 from flask import (Blueprint, jsonify, render_template, request, send_file,
                    session)
@@ -635,14 +636,16 @@ def api_actualizar_serie(tipo_documento):
     data = request.json or {}
     tipo = (tipo_documento or '').strip().upper()
 
-    # El prefijo del anexo técnico para el set de pruebas empieza por SETP.
     prefijo = str(data.get('prefijo') or '').strip().upper()
     if prefijo and not (prefijo.startswith('SETP') or prefijo.startswith('FV')
-                        or prefijo.startswith('POS') or prefijo.startswith('NC')):
+                        or prefijo.startswith('POS') or prefijo.startswith('NC')
+                        or re.fullmatch(r'[A-Z]{1,4}', prefijo)):
         return jsonify({
-            'error': ('El prefijo debe empezar por SETP (pruebas), POS, FV o NC. '
+            'error': ('El prefijo debe ser el autorizado o comenzar por SETP (pruebas). '
                       f'Recibido: {prefijo}')
         }), 400
+    if 'prefijo' in data:
+        data['prefijo'] = prefijo
 
     conn = get_db()
     try:

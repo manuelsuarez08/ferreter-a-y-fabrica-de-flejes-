@@ -247,6 +247,15 @@ def test_el_panel_rechaza_un_prefijo_invalido(admin):
     assert 'prefijo' in res.get_json()['error'].lower()
 
 
+def test_serie_acepta_prefijo_autorizado_sin_cambiar_consecutivo(admin):
+    anterior = {s['tipo_documento']: s for s in admin.get('/api/dian/series').get_json()['series']}['FV']
+    respuesta = admin.put('/api/dian/series/FV', json={'prefijo': 'LAG'})
+    assert respuesta.status_code == 200
+    serie = {s['tipo_documento']: s for s in respuesta.get_json()['series']}['FV']
+    assert serie['prefijo'] == 'LAG'
+    assert serie['consecutivo'] == anterior['consecutivo']
+
+
 def test_se_puede_configurar_una_serie_de_pruebas(admin):
     """El escenario pedido: trabajar sin resolución real."""
     res = admin.put('/api/dian/series/POS', json={
