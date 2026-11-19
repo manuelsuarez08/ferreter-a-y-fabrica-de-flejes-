@@ -107,6 +107,23 @@ def test_error_de_cuenta_va_a_contingencia():
     assert conn.execute("SELECT COUNT(*) FROM cola_dian").fetchone()[0] == 1
 
 
+def test_bloqueo_http_no_se_marca_como_rechazo_fiscal(monkeypatch):
+    for clave, valor in ENV.items():
+        monkeypatch.setenv(clave, valor)
+    conn, venta = _preparar()
+
+    def bloqueado(xml):
+        raise ws.ErrorFacturatech('Facturatech respondió HTTP 403; revise el acceso al servicio.')
+
+    monkeypatch.setattr(ws, 'upload_document', bloqueado)
+    try:
+        resultado = dian_emision.emitir_venta(conn, venta)
+        assert resultado['estado'] == 'contingencia'
+        assert conn.execute("SELECT COUNT(*) FROM cola_dian WHERE estado = 'pendiente'").fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
 def test_sin_variables_no_se_activa():
     for k in ENV:
         os.environ.pop(k, None)
@@ -257,6 +274,24 @@ def test_servicio_productivo_de_facturas_no_envia_pos(monkeypatch):
         with pytest.raises(dian_emision.ErrorEmision, match='POS'):
             fe.emitir_venta(conn, venta)
         assert dian_series.leer_serie(conn, 'POS')['consecutivo'] == anterior
+        assert enviados == []
+    finally:
+        conn.close()
+
+
+@pytest.mark.parametrize('ambiente', ['demo', 'pro'])
+def test_servicio_pos_no_envia_factura_electronica(monkeypatch, ambiente):
+    for clave, valor in ENV.items():
+        monkeypatch.setenv(clave, valor)
+    monkeypatch.setenv('FACTURATECH_URL', f'https://ws-pos.facturatech.co/v1/{ambiente}')
+    conn, venta = _preparar()
+    enviados = []
+    monkeypatch.setattr(ws, 'upload_document', lambda xml: enviados.append(xml))
+    try:
+        anterior = dian_series.leer_serie(conn, 'FV')['consecutivo']
+        with pytest.raises(dian_emision.ErrorEmision, match='factura electrónica'):
+            fe.emitir_venta(conn, venta)
+        assert dian_series.leer_serie(conn, 'FV')['consecutivo'] == anterior
         assert enviados == []
     finally:
         conn.close()

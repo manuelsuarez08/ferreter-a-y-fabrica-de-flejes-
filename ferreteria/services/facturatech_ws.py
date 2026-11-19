@@ -4,7 +4,8 @@ Operaciones del WSDL (`.../v1/demo/index.php?wsdl`): uploadDocument,
 documentStatus, downloadXML, downloadPDF, downloadCUFE, downloadMetaData y
 checkCredits. Las credenciales salen de variables de entorno, nunca del código:
 
-    FACTURATECH_URL       https://ws-pos.facturatech.co/v1/demo   (o /v1/pro)
+    FACTURATECH_URL       URL base del servicio POS (/v1/) o factura (/v2/);
+                          también acepta la dirección completa del WSDL
     FACTURATECH_USUARIO   usuario de la plataforma
     FACTURATECH_PASSWORD  contraseña del WS (se envía como SHA-256 hex; si ya
                           viene como hash de 64 hex se envía tal cual)
@@ -16,6 +17,7 @@ import re
 import time
 import urllib.error
 import urllib.request
+from urllib.parse import urlsplit, urlunsplit
 import xml.etree.ElementTree as ET
 from xml.sax.saxutils import escape
 
@@ -36,15 +38,23 @@ def hash_password(password):
 
 
 def _config():
-    url = (os.environ.get('FACTURATECH_URL') or '').rstrip('/')
+    url = (os.environ.get('FACTURATECH_URL') or '').strip()
     usuario = os.environ.get('FACTURATECH_USUARIO') or ''
     password = os.environ.get('FACTURATECH_PASSWORD') or ''
     if not (url and usuario and password):
         raise ErrorFacturatech(
             'Faltan FACTURATECH_URL, FACTURATECH_USUARIO o FACTURATECH_PASSWORD')
-    if not url.startswith('https://'):
-        raise ErrorFacturatech('FACTURATECH_URL debe usar https')
-    return url, usuario, password
+    try:
+        partes = urlsplit(url)
+        if (partes.scheme.lower() != 'https' or not partes.hostname or partes.username
+                or partes.password or partes.fragment or partes.query.lower() not in ('', 'wsdl')):
+            raise ValueError()
+    except ValueError:
+        raise ErrorFacturatech('FACTURATECH_URL debe ser una URL HTTPS válida del servicio o su WSDL.')
+    ruta = partes.path.rstrip('/')
+    if ruta.endswith('/index.php'):
+        ruta = ruta[:-len('/index.php')]
+    return urlunsplit(('https', partes.netloc, ruta, '', '')), usuario, password
 
 
 def _sobre(operacion, namespace, parametros):
@@ -83,6 +93,7 @@ def llamar(operacion, parametros, url=None):
     peticion = urllib.request.Request(
         endpoint, data=_sobre(operacion, namespace, parametros), method='POST',
         headers={'Content-Type': 'text/xml; charset=utf-8',
+                 'User-Agent': 'FerreControl/1.0',
                  'SOAPAction': f'{namespace}{separador}{operacion}'})
     # El demo responde 500 vacío de forma intermitente; se reintenta. Reenviar
     # uploadDocument es seguro: un folio ya procesado se rechaza con código 201.
@@ -93,6 +104,16 @@ def llamar(operacion, parametros, url=None):
                 datos = resp.read()
         except urllib.error.HTTPError as error:
             datos = error.read()
+            if error.code in (401, 403):
+                raise ErrorFacturatech(f'Facturatech respondió HTTP {error.code}; revise el acceso al servicio.') from error
+            try:
+                raiz_error = ET.fromstring(datos)
+            except ET.ParseError:
+                raiz_error = None
+            if raiz_error is None or raiz_error.tag not in (
+                    '{http://schemas.xmlsoap.org/soap/envelope/}Envelope',
+                    '{http://www.w3.org/2003/05/soap-envelope}Envelope'):
+                raise ErrorFacturatech(f'Facturatech respondió HTTP {error.code}; revise el acceso al servicio.') from error
         except (urllib.error.URLError, TimeoutError, OSError) as error:
             if intento == INTENTOS - 1:
                 raise ErrorFacturatech(f'No se pudo contactar a Facturatech: {error}')
@@ -102,13 +123,18 @@ def llamar(operacion, parametros, url=None):
     try:
         raiz = ET.fromstring(datos)
     except ET.ParseError:
-        raise ErrorFacturatech('Respuesta no válida de Facturatech')
+        raise ErrorFacturatech('Respuesta SOAP no válida de Facturatech')
+    if raiz.tag not in ('{http://schemas.xmlsoap.org/soap/envelope/}Envelope',
+                        '{http://www.w3.org/2003/05/soap-envelope}Envelope'):
+        raise ErrorFacturatech('Respuesta SOAP no válida de Facturatech')
     resultado = {}
     for nodo in raiz.iter():
         if len(nodo) == 0 and nodo.text is not None:
             resultado[_local(nodo.tag)] = nodo.text
     if 'faultstring' in resultado:
         raise ErrorFacturatech(f"Error SOAP: {resultado['faultstring']}")
+    if 'code' not in resultado:
+        raise ErrorFacturatech('La respuesta SOAP no contiene un código de resultado.')
     return resultado
 
 
