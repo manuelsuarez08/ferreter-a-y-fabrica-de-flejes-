@@ -1,0 +1,11 @@
+# Informe de impuestos detallados
+
+El informe está disponible desde Contabilidad y utiliza los asientos contabilizados y anulados. Los borradores no se incluyen. Una anulación se muestra con su asiento original y su reversión, con importe y base negativos en la fecha de la reversión. El filtro de cierre incluye o excluye los asientos cuyo origen es `cierre_ejercicio`.
+
+Los importes proceden de las líneas de cuentas vinculadas a la parametrización de IVA: las cuentas de clase 1 se tratan como IVA descontable de compras y las demás como IVA generado de ventas, siguiendo el informe de IVA existente. La base procede de `asiento_detalle.base_gravable`. La identificación y el nombre proceden de la línea contable y, para ventas, del cliente asociado. El número DIAN se utiliza para la venta original cuando existe; en otro caso se usa el comprobante contable. La sucursal no está registrada y se muestra vacía.
+
+El modelo actual no guarda la tarifa histórica en cada línea de impuesto. `ventas.iva_porcentaje` es la tarifa dominante y no desglosa las ventas mixtas. El informe solo utiliza ese valor como **estimación** cuando es compatible con el impuesto y la base contabilizados; esto no demuestra que la venta tenga una sola tarifa. El resto aparece como tarifa no disponible, incluidas las compras sin tarifa registrada. Una venta sin IVA se agrupa en 0%, pero no es posible distinguir operaciones exentas, excluidas o con IVA desactivado. Los asientos sin línea de IVA no permiten identificar bases de compras a 0%.
+
+Para un informe tributario exacto por tarifa, se necesita guardar en cada línea fiscal histórica del documento la tarifa, naturaleza tributaria (gravado, exento o excluido), base e impuesto, y vincular cada línea con su asiento y su tercero. También se necesita registrar la sucursal del tercero y conservar el número de documento de compras. Las reversiones deben copiar esos datos e invertir sus importes. La información histórica que no se guardó debe reconstruirse de documentos originales verificables; no puede deducirse con certeza del catálogo actual.
+
+Los datos de prueba aislados están en `tests/test_informe_impuestos.py`: cubren IVA generado, descontable, cero, tarifa no disponible, anulación, cierre, filtros y XLSX. No insertan datos en la base de producción.

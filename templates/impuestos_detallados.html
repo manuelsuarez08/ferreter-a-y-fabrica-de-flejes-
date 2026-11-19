@@ -1,0 +1,211 @@
+<!DOCTYPE html>
+<html lang="es">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Informe impuestos detallados | Ferre Control</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+    <style>
+        body {
+            background: #f4f6f9;
+            color: #233446;
+        }
+
+        .reporte {
+            max-width: 1800px;
+            margin: auto;
+        }
+
+        .panel {
+            background: #fff;
+            border: 1px solid #dfe6ed;
+            border-radius: 6px;
+        }
+
+        .cabecera {
+            border-bottom: 1px solid #dfe6ed;
+        }
+
+        .tabla-scroll {
+            overflow: auto;
+            max-height: 65vh;
+        }
+
+        .informe {
+            min-width: 1330px;
+            width: 100%;
+            border-collapse: collapse;
+            font-size: .88rem;
+        }
+
+        .informe th {
+            background: #0b4f8a;
+            color: #fff;
+            position: sticky;
+            top: 0;
+            z-index: 1;
+        }
+
+        .informe th,
+        .informe td {
+            padding: .72rem .8rem;
+            border-bottom: 1px solid #e4eaf0;
+            vertical-align: middle;
+        }
+
+        .informe th:first-child {
+            min-width: 210px;
+        }
+
+        .informe th:nth-child(4) {
+            min-width: 235px;
+        }
+
+        .informe th:nth-child(n+6) {
+            min-width: 150px;
+        }
+
+        .informe td:nth-child(n+6),
+        .informe th:nth-child(n+6) {
+            text-align: right;
+            font-variant-numeric: tabular-nums;
+            white-space: nowrap;
+        }
+
+        .tipo td {
+            background: #dceefb;
+            font-weight: 700;
+        }
+
+        .tarifa td {
+            background: #ebf5fc;
+            font-weight: 600;
+        }
+
+        .detalle:hover td {
+            background: #f6faff;
+        }
+
+        .grupo-boton {
+            border: 0;
+            background: transparent;
+            padding: 0;
+            text-align: left;
+            color: #193d5e;
+            font-weight: inherit;
+        }
+
+        .grupo-boton:focus-visible {
+            outline: 2px solid #0b4f8a;
+            outline-offset: 3px;
+        }
+
+        .flecha {
+            display: inline-block;
+            width: 1.3rem;
+        }
+
+        .tarifa .grupo-boton {
+            margin-left: 1.15rem;
+        }
+
+        .nota {
+            color: #566a7a;
+            font-size: .84rem;
+        }
+    </style>
+</head>
+
+<body>
+    <nav class="navbar navbar-dark bg-dark px-3">
+        <a class="navbar-brand" href="/contabilidad">Contabilidad</a>
+        <div class="d-flex align-items-center gap-3">
+            <span class="text-light small">{{ usuario }} ({{ rol }})</span>
+            <a class="btn btn-sm btn-outline-light" href="/contabilidad">Volver a contabilidad</a>
+        </div>
+    </nav>
+    <main class="reporte container-fluid py-4 px-md-4">
+        <div class="d-flex flex-wrap justify-content-between align-items-center gap-3 mb-3">
+            <div>
+                <div class="text-secondary small mb-1">CONTABILIDAD / INFORMES</div>
+                <h1 class="h4 mb-0">Informe impuestos detallados</h1>
+            </div>
+            <button id="exportar" class="btn btn-outline-success btn-sm" type="button" disabled>Exportar a
+                Excel</button>
+        </div>
+        <section class="panel mb-3" aria-label="Criterios de búsqueda">
+            <div class="cabecera d-flex justify-content-between align-items-center px-3 py-2">
+                <strong>Criterios de búsqueda</strong>
+                <button id="alternar-filtros" type="button" class="btn btn-link btn-sm text-decoration-none"
+                    aria-expanded="true" aria-controls="filtros">Ocultar criterios de búsqueda</button>
+            </div>
+            <form id="filtros" class="p-3">
+                <div class="row g-3 align-items-end">
+                    <div class="col-12 col-sm-6 col-lg-2"><label class="form-label small" for="tipo">Tipo
+                            impuesto</label><select class="form-select form-select-sm" id="tipo">
+                            <option>IVA</option>
+                        </select></div>
+                    <div class="col-12 col-sm-6 col-lg-2"><label class="form-label small" for="tarifas">Tarifas /
+                            subtipos</label><select class="form-select form-select-sm" id="tarifas">
+                            <option value="">Todas las tarifas</option>
+                            <option value="19">IVA 19%</option>
+                            <option value="5">IVA 5%</option>
+                            <option value="0">IVA 0%</option>
+                            <option value="sin-dato">Tarifa no disponible</option>
+                        </select></div>
+                    <div class="col-12 col-sm-6 col-lg-2"><label class="form-label small"
+                            for="tercero">Tercero</label><input id="tercero" class="form-control form-control-sm"
+                            list="terceros" placeholder="Nombre o identificación" autocomplete="off"><datalist
+                            id="terceros"></datalist></div>
+                    <div class="col-12 col-sm-6 col-lg-2"><label class="form-label small" for="periodo">Fecha
+                            elaboración</label><select id="periodo" class="form-select form-select-sm">
+                            <option value="mes">Este mes</option>
+                            <option value="anterior">Mes anterior</option>
+                            <option value="personalizado">Personalizado</option>
+                        </select></div>
+                    <div class="col-6 col-lg-2"><label class="form-label small" for="desde">Fecha inicial</label><input
+                            required id="desde" type="date" class="form-control form-control-sm"></div>
+                    <div class="col-6 col-lg-2"><label class="form-label small" for="hasta">Fecha final</label><input
+                            required id="hasta" type="date" class="form-control form-control-sm"></div>
+                    <div class="col-12">
+                        <div class="form-check mb-1"><input id="cierre" class="form-check-input" type="checkbox"><label
+                                class="form-check-label small" for="cierre">Incluye cierre</label></div>
+                    </div>
+                </div>
+                <div class="d-flex flex-wrap gap-2 mt-3"><button class="btn btn-primary btn-sm"
+                        type="submit">Buscar</button><button id="limpiar" class="btn btn-outline-secondary btn-sm"
+                        type="button">Limpiar filtros</button></div>
+            </form>
+        </section>
+        <div class="d-flex flex-wrap align-items-center justify-content-between gap-2 mb-2">
+            <div id="estado" role="status" class="small text-secondary">Cargando informe...</div><span
+                id="periodo-aplicado" class="small text-secondary"></span>
+        </div>
+        <div id="error" class="alert alert-danger d-none" role="alert"></div>
+        <div class="panel tabla-scroll">
+            <table class="informe">
+                <thead>
+                    <tr>
+                        <th>Comprobante</th>
+                        <th>Identificación</th>
+                        <th>Sucursal</th>
+                        <th>Nombre tercero</th>
+                        <th>Fecha elaboración</th>
+                        <th>Base ventas</th>
+                        <th>Valor impuesto ventas</th>
+                        <th>Base compras</th>
+                        <th>Valor impuesto compras</th>
+                    </tr>
+                </thead>
+                <tbody id="resultados"></tbody>
+            </table>
+        </div>
+        <p class="nota mt-3 mb-0">Las tarifas son estimadas cuando el valor registrado lo permite. Las ventas de tarifa
+            mixta y las compras sin tarifa histórica pueden aparecer como tarifa no disponible. El 0% incluye
+            operaciones sin IVA; no distingue exentas de excluidas.</p>
+    </main>
+    <script src="/static/js/impuestos_detallados.js" defer></script>
+</body>
+
+</html>

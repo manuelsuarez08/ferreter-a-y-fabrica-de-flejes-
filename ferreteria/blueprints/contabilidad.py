@@ -46,6 +46,7 @@ import io
 from ..db import get_db
 from ..security import admin_required, login_required
 from ..services import contabilidad as motor_contable
+from ..services import informe_impuestos as impuestos_detallados
 
 bp = Blueprint('contabilidad', __name__)
 
@@ -939,6 +940,89 @@ def libro_iva():
 # ═════════════════════════════════════════════════════
 # Vista amigable para el contador
 # ═════════════════════════════════════════════════════
+def _filtros_impuestos():
+    from datetime import date
+    desde, hasta = _rango_peticion()
+    try:
+        inicio, fin = date.fromisoformat(desde), date.fromisoformat(hasta)
+    except ValueError:
+        raise ValueError('Las fechas deben tener el formato AAAA-MM-DD.')
+    if inicio > fin:
+        raise ValueError('La fecha inicial no puede ser posterior a la fecha final.')
+    tipo = request.args.get('tipo', 'IVA')
+    if tipo != 'IVA':
+        raise ValueError('El tipo de impuesto no está disponible.')
+    return {'desde': desde, 'hasta': hasta, 'tipo': tipo,
+            'tercero': request.args.get('tercero', '').strip()[:200],
+            'tarifas': request.args.getlist('tarifa'),
+            'incluye_cierre': request.args.get('incluye_cierre') == '1'}
+
+
+def _datos_impuestos(filtros):
+    conn = get_db()
+    try:
+        return impuestos_detallados.consultar_impuestos(
+            conn, filtros['desde'], filtros['hasta'], filtros['tercero'],
+            filtros['tarifas'], filtros['incluye_cierre'])
+    finally:
+        conn.close()
+
+
+@bp.route('/contabilidad/impuestos-detallados')
+@login_required
+def pagina_impuestos_detallados():
+    return render_template('impuestos_detallados.html', usuario=session.get('usuario'),
+                           rol=session.get('rol', 'empleado'))
+
+
+@bp.route('/api/contabilidad/impuestos-detallados')
+@login_required
+def informe_impuestos_detallados():
+    try:
+        filtros = _filtros_impuestos()
+        return jsonify({'filtros': filtros, **_datos_impuestos(filtros)})
+    except ValueError as error:
+        return jsonify({'error': str(error)}), 400
+
+
+@bp.route('/api/contabilidad/impuestos-detallados/terceros')
+@login_required
+def terceros_impuestos_detallados():
+    busqueda = request.args.get('q', '').strip()[:100]
+    if len(busqueda) < 2:
+        return jsonify([])
+    conn = get_db()
+    try:
+        termino = f"%{busqueda.replace('!', '!!').replace('%', '!%').replace('_', '!_')}%"
+        filas = conn.execute('''
+            SELECT nombre, identificacion FROM (
+                SELECT nombre, cedula_nit AS identificacion FROM clientes
+                UNION
+                SELECT tercero_nombre, tercero_numero FROM asiento_detalle
+            ) WHERE COALESCE(nombre, '') LIKE ? ESCAPE '!'
+                 OR COALESCE(identificacion, '') LIKE ? ESCAPE '!'
+            ORDER BY nombre LIMIT 20
+        ''', (termino, termino)).fetchall()
+        return jsonify([{'nombre': nombre or '', 'identificacion': identificacion or ''}
+                        for nombre, identificacion in filas])
+    finally:
+        conn.close()
+
+
+@bp.route('/api/contabilidad/impuestos-detallados.xlsx')
+@login_required
+def exportar_impuestos_detallados():
+    try:
+        filtros = _filtros_impuestos()
+        datos = _datos_impuestos(filtros)
+    except ValueError as error:
+        return jsonify({'error': str(error)}), 400
+    buffer = impuestos_detallados.crear_excel(datos, filtros)
+    return send_file(buffer, as_attachment=True,
+                     download_name=f"impuestos_detallados_{filtros['desde']}_{filtros['hasta']}.xlsx",
+                     mimetype='application/vnd.openxmlformats-officedocument.spreadsheetml.sheet')
+
+
 @bp.route('/contabilidad', methods=['GET'])
 @login_required
 def pagina():
