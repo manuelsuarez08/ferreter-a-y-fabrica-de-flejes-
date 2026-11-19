@@ -8,6 +8,7 @@ from datetime import timedelta
 from flask import Flask
 from .config import SECRET_KEY, SESION_HORAS
 from .db import asegurar_base_de_datos, init_db, respaldar_base_de_datos
+from .security import restringir_contador
 from .blueprints import (alquiler, catalogo, contabilidad, core, cotizaciones,
                          dian_notas, dian_pos, fabrica, pedidos,
                          personalizacion, superadmin, ventas)
@@ -26,6 +27,7 @@ def create_app(inicializar_db=True, iniciar_hilo_dian=True):
     """
     app = Flask(__name__, template_folder='../templates', static_folder='../static')
     app.secret_key = SECRET_KEY
+    app.before_request(restringir_contador)
 
     # ── Sesión duradera ──────────────────────────────────────────────────────
     # Sin esto, la cookie de sesión es de navegador: al cerrarlo, o al reiniciar

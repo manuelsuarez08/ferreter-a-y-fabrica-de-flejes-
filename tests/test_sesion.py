@@ -41,6 +41,44 @@ def _login(cl):
             follow_redirects=True)
 
 
+def test_selector_de_usuarios_incluye_contador(html_completo):
+    assert '<option value="contador">Contador</option>' in html_completo
+
+
+def test_contador_puede_consultar_pero_no_operar(tmp_path, monkeypatch):
+    from ferreteria import db
+
+    base = tmp_path / 'contador.db'
+    shutil.copy2(os.path.join(RAIZ, 'ferreteria-semilla.db'), base)
+    monkeypatch.setattr(db, 'DB_NAME', str(base))
+    aplicacion = create_app(inicializar_db=True, iniciar_hilo_dian=False)
+    administrador = aplicacion.test_client()
+    with administrador.session_transaction() as sesion:
+        sesion['usuario'] = 'admin'
+        sesion['rol'] = 'admin'
+    respuesta = administrador.post('/api/usuarios', json={
+        'usuario': 'contador_prueba', 'clave': 'clave-prueba', 'rol': 'contador',
+    })
+    assert respuesta.status_code == 201
+
+    contador = aplicacion.test_client()
+    respuesta = contador.post('/login', data={'usuario': 'contador_prueba', 'clave': 'clave-prueba'},
+                              follow_redirects=True)
+    assert respuesta.status_code == 200
+    assert 'Contabilidad' in respuesta.get_data(as_text=True)
+    assert 'Cerrar sesión' in respuesta.get_data(as_text=True)
+    assert 'id="btn-cierre"' not in respuesta.get_data(as_text=True)
+    assert contador.get('/contabilidad/impuestos-detallados').status_code == 200
+    assert contador.get('/api/contabilidad/impuestos-detallados?desde=2026-01-01&hasta=2026-12-31').status_code == 200
+    assert contador.get('/api/contabilidad/impuestos-detallados.xlsx?desde=2026-01-01&hasta=2026-12-31').status_code == 200
+    assert contador.get('/api/contabilidad/plan-cuentas').status_code == 200
+    assert contador.get('/api/productos').status_code == 403
+    assert contador.post('/api/ventas', json={}).status_code == 403
+    assert contador.get('/api/backup').status_code == 403
+    assert contador.post('/api/contabilidad/cerrar-ejercicio', json={}).status_code == 403
+    assert contador.get('/logout').status_code == 302
+
+
 def test_las_veces_de_configurar_las_credenciales_devuelven_json(app):
     """Comprobacion basica: la app arranca y tiene la base."""
     assert os.path.exists(cfg.DB_NAME)

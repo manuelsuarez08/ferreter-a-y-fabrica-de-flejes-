@@ -63,6 +63,8 @@ def _marca_por_defecto():
 def index():
     if 'usuario' not in session:
         return redirect(url_for('core.login'))
+    if session.get('rol') == 'contador':
+        return redirect(url_for('contabilidad.pagina'))
 
     # La marca se lee una sola vez, con el mismo camino que el login: asi el
     # cliente ve su logo en las dos pantallas.

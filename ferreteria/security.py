@@ -6,7 +6,17 @@ preocupación aislada (SRP) y reutilizables por cualquier blueprint.
 """
 from functools import wraps
 
-from flask import jsonify, session
+from flask import jsonify, request, session
+
+
+def restringir_contador():
+    if session.get('rol') != 'contador':
+        return None
+    if request.endpoint in ('static', 'core.login', 'core.logout', 'core.index'):
+        return None
+    if request.blueprint == 'contabilidad' and request.method in ('GET', 'HEAD'):
+        return None
+    return jsonify({'error': 'El rol contador solo tiene acceso de consulta a Contabilidad.'}), 403
 
 
 def login_required(view):

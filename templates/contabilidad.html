@@ -23,7 +23,11 @@
   <span class="navbar-brand mb-0 h1">Contabilidad</span>
   <div class="d-flex align-items-center gap-3">
     <span class="text-light small">{{ usuario }} ({{ rol }})</span>
+    {% if rol == 'contador' %}
+    <a class="btn btn-sm btn-outline-light" href="/logout">Cerrar sesión</a>
+    {% else %}
     <a class="btn btn-sm btn-outline-light" href="/">Volver al POS</a>
+    {% endif %}
   </div>
 </nav>
 
@@ -54,8 +58,10 @@
                     onclick="exportarActiva()"
                     title="Descarga en CSV (se abre en Excel)">
               Exportar a Excel</button>
+            {% if rol != 'contador' %}
             <button id="btn-cierre" class="btn btn-outline-danger btn-sm"
                     onclick="cerrarEjercicio()">Cerrar ejercicio…</button>
+            {% endif %}
           </div>
         </div>
       </div>
