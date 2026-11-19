@@ -90,15 +90,19 @@ function mostrar(datos) {
         grupo.documentos.forEach(documento => {
             const fila = document.createElement('tr');
             fila.className = 'detalle';
-            [documento.comprobante, documento.identificacion || '-', documento.sucursal || '-', documento.nombre || '-', fechaVisible(documento.fecha)].forEach(valor => celda(fila, valor));
-            campos.forEach(campo => celda(fila, formato.format(Number(documento[campo]))));
+            const comprobante = documento.comprobante + (documento.fuente === 'venta_sin_asiento' ? ' (sin asiento)' : '');
+            [comprobante, documento.identificacion || '-', documento.sucursal || '-', documento.nombre || '-', fechaVisible(documento.fecha)].forEach(valor => celda(fila, valor));
+            campos.forEach(campo => celda(fila, documento[campo] === null ? '—' : formato.format(Number(documento[campo]))));
             estado.detalles.push(fila);
             cuerpo.appendChild(fila);
             cantidad += 1;
         });
         grupos.push(estado);
     });
-    elemento('estado').textContent = cantidad ? `${cantidad} ${cantidad === 1 ? 'registro' : 'registros'}` : 'No se encontraron movimientos para los filtros seleccionados.';
+    const pendientes = datos.ventas_sin_desglose || 0;
+    elemento('estado').textContent = cantidad ? `${cantidad} ${cantidad === 1 ? 'registro' : 'registros'}` +
+        (pendientes ? `; ${pendientes} sin desglose fiscal, excluidos de los totales` : '') :
+        'No se encontraron movimientos. Comprueba las fechas y los filtros seleccionados.';
 }
 
 async function buscar(evento) {

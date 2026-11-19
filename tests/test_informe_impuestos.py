@@ -33,7 +33,8 @@ class ConsultaImpuestosTest(unittest.TestCase):
         self.conn.executescript('''
             CREATE TABLE clientes (id INTEGER, cedula_nit TEXT, nombre TEXT);
             CREATE TABLE ventas (id INTEGER, id_cliente INTEGER, numero_dian TEXT,
-                                 iva_porcentaje REAL, iva_valor REAL, subtotal_venta REAL);
+                                 iva_porcentaje REAL, iva_valor REAL, subtotal_venta REAL,
+                                 fecha_dia TEXT, anulada INTEGER DEFAULT 0, total_venta REAL);
             CREATE TABLE asientos_contables (id INTEGER, tipo_comprobante TEXT, numero INTEGER,
                 fecha TEXT, origen TEXT, origen_id INTEGER, descripcion TEXT, estado TEXT);
             CREATE TABLE plan_cuentas (codigo TEXT, clase TEXT);
@@ -41,9 +42,9 @@ class ConsultaImpuestosTest(unittest.TestCase):
                 tercero_numero TEXT, tercero_nombre TEXT, debito REAL, credito REAL, base_gravable REAL);
             CREATE TABLE parametrizacion_contable (componente TEXT, cuenta_debito TEXT, cuenta_credito TEXT);
             INSERT INTO clientes VALUES (1, '901513285', 'Cliente Prueba');
-            INSERT INTO ventas VALUES (1, 1, 'FV-4-597', 19, 190, 1000),
-                                      (2, 1, 'FV-4-598', 0, 0, 250),
-                                      (3, 1, 'FV-4-599', 19, 125, 1000);
+            INSERT INTO ventas VALUES (1, 1, 'FV-4-597', 19, 190, 1000, '2026-11-03', 1, 1190),
+                                      (2, 1, 'FV-4-598', 0, 0, 250, '2026-11-05', 0, 250),
+                                      (3, 1, 'FV-4-599', 19, 125, 1000, '2026-11-07', 0, 1125);
             INSERT INTO plan_cuentas VALUES ('2404', '2'), ('1355', '1');
             INSERT INTO parametrizacion_contable VALUES ('iva', NULL, '2404'),
                 ('iva', NULL, '2404'), ('iva', '1355', NULL);
@@ -97,6 +98,26 @@ class ConsultaImpuestosTest(unittest.TestCase):
         cierre = consultar_impuestos(self.conn, '2026-11-01', '2026-11-30', incluye_cierre=True)
         self.assertEqual(cierre['totales']['impuesto_ventas'], Decimal('144.00'))
 
+    def test_venta_historica_sin_asiento_aparece_sin_duplicar_ni_inventar_iva(self):
+        self.conn.executemany('INSERT INTO ventas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [
+            (4, 1, 'FV-4-600', 19, 190, 1000, '2026-11-10', 0, 1190),
+            (5, 1, 'FV-4-601', 19, 190, 1000, '2026-11-11', 1, 1190),
+            (6, 1, 'FV-4-602', 0, 0, 0, '2026-11-12', 0, 1190),
+        ])
+        self.conn.commit()
+        informe = consultar_impuestos(self.conn, '2026-11-01', '2026-11-30')
+        self.assertEqual(informe['totales']['base_ventas'], Decimal('2250.00'))
+        self.assertEqual(informe['totales']['impuesto_ventas'], Decimal('315.00'))
+        documentos = [documento for grupo in informe['grupos'] for documento in grupo['documentos']]
+        historico = next(documento for documento in documentos if documento['comprobante'] == 'FV-4-600')
+        self.assertEqual(historico['fuente'], 'venta_sin_asiento')
+        self.assertNotIn('FV-4-601', [documento['comprobante'] for documento in documentos])
+        incompleto = next(documento for documento in documentos if documento['comprobante'] == 'FV-4-602')
+        self.assertTrue(incompleto['sin_desglose'])
+        self.assertIsNone(incompleto['base_ventas'])
+        self.assertIsNone(incompleto['impuesto_ventas'])
+        self.assertEqual(informe['ventas_sin_desglose'], 1)
+
     def test_api_y_excel_aplican_los_mismos_filtros(self):
         query = '?desde=2026-11-01&hasta=2026-11-30&tercero=Proveedor'
         respuesta = self.cliente.get('/api/contabilidad/impuestos-detallados' + query)
@@ -113,6 +134,28 @@ class ConsultaImpuestosTest(unittest.TestCase):
         self.assertEqual(self.cliente.get('/contabilidad/impuestos-detallados').status_code, 200)
         terceros = self.cliente.get('/api/contabilidad/impuestos-detallados/terceros?q=proveedor')
         self.assertEqual(terceros.json, [{'nombre': 'Proveedor Prueba', 'identificacion': '123'}])
+
+    def test_api_y_excel_muestran_ventas_historicas_incompletas(self):
+        self.conn.executemany('INSERT INTO ventas VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)', [
+            (4, 1, 'FV-4-600', 19, 190, 1000, '2026-11-10', 0, 1190),
+            (6, 1, 'FV-4-602', 0, 0, 0, '2026-11-12', 0, 1190),
+        ])
+        self.conn.commit()
+        query = '?desde=2026-11-01&hasta=2026-11-30&tercero=901513285'
+        respuesta = self.cliente.get('/api/contabilidad/impuestos-detallados' + query)
+        self.assertEqual(respuesta.status_code, 200)
+        self.assertEqual(respuesta.json['ventas_sin_desglose'], 1)
+        self.assertEqual(respuesta.json['totales']['impuesto_ventas'], '315.00')
+        excel = self.cliente.get('/api/contabilidad/impuestos-detallados.xlsx' + query)
+        hoja = load_workbook(BytesIO(excel.data)).active
+        self.assertIn('excluidas de los totales: 1', hoja['A5'].value)
+        filas = {fila[0].value: fila for fila in hoja.iter_rows(min_row=7)}
+        self.assertEqual(filas['FV-4-600 (sin asiento)'][6].value, 190)
+        self.assertIsNone(filas['FV-4-602 (sin asiento)'][5].value)
+        self.assertIsNone(filas['FV-4-602 (sin asiento)'][6].value)
+        filtrado = self.cliente.get('/api/contabilidad/impuestos-detallados' + query + '&tarifa=19')
+        self.assertEqual(filtrado.json['ventas_sin_desglose'], 0)
+        self.assertEqual(filtrado.json['totales']['impuesto_ventas'], '190.00')
 
     def test_sin_sesion(self):
         cliente = self.app.test_client()

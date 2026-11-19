@@ -9,6 +9,14 @@ def dinero(valor):
     return Decimal(str(valor or 0)).quantize(CENTAVO, rounding=ROUND_HALF_UP)
 
 
+def tarifa_estimada(tarifa, base, impuesto):
+    if tarifa is not None and dinero(tarifa) > 0 and base:
+        estimado = abs(base) * dinero(tarifa) / 100
+        if abs(estimado - abs(impuesto)) <= Decimal('1.00'):
+            return format(Decimal(str(tarifa)).normalize(), 'f')
+    return 'sin-dato'
+
+
 def agrupar_documentos(documentos):
     grupos = {}
     total = {campo: Decimal('0.00') for campo in CAMPOS_VALOR}
@@ -20,6 +28,9 @@ def agrupar_documentos(documentos):
             'totales': {campo: Decimal('0.00') for campo in CAMPOS_VALOR},
         })
         for campo in CAMPOS_VALOR:
+            if documento.get('sin_desglose') and campo in ('base_ventas', 'impuesto_ventas'):
+                documento[campo] = None
+                continue
             valor = dinero(documento.get(campo))
             documento[campo] = valor
             grupo['totales'][campo] += valor
@@ -56,11 +67,7 @@ def consultar_impuestos(conn, desde, hasta, tercero='', tarifas=(), incluye_cier
          debito, credito, base) in filas:
         impuesto = dinero(debito) - dinero(credito) if clase == '1' else dinero(credito) - dinero(debito)
         base = dinero(base) * (-1 if impuesto < 0 else 1)
-        tarifa = 'sin-dato'
-        if tarifa_venta is not None and dinero(tarifa_venta) > 0 and base:
-            estimado = abs(base) * dinero(tarifa_venta) / 100
-            if abs(estimado - abs(impuesto)) <= Decimal('1.00'):
-                tarifa = format(Decimal(str(tarifa_venta)).normalize(), 'f')
+        tarifa = tarifa_estimada(tarifa_venta, base, impuesto)
         documentos.append({
             'asiento': asiento, 'comprobante': numero_dian if origen == 'venta' and numero_dian else f'{tipo}-{numero}',
             'identificacion': tercero_numero or cliente_numero or '',
@@ -98,6 +105,42 @@ def consultar_impuestos(conn, desde, hasta, tercero='', tarifas=(), incluye_cier
         })
 
     busqueda = tercero.strip().casefold()
+    historicas = conn.execute('''
+        SELECT v.id, v.fecha_dia, v.numero_dian, c.cedula_nit, c.nombre,
+               v.subtotal_venta, v.iva_valor, v.iva_porcentaje, v.total_venta
+        FROM ventas v
+        LEFT JOIN clientes c ON c.id = v.id_cliente
+        WHERE v.fecha_dia BETWEEN ? AND ? AND COALESCE(v.anulada, 0) = 0
+          AND NOT EXISTS (SELECT 1 FROM asientos_contables a
+                          WHERE a.origen = 'venta' AND a.origen_id = v.id
+                            AND a.estado IN ('contabilizado', 'anulado'))
+        ORDER BY v.fecha_dia, v.id
+    ''', (desde, hasta)).fetchall()
+    sin_desglose = 0
+    for (id_venta, fecha, numero, identificacion, nombre, base, impuesto,
+         tarifa_venta, total) in historicas:
+        identificacion, nombre = identificacion or '', nombre or ''
+        if busqueda and busqueda not in identificacion.casefold() and busqueda not in nombre.casefold():
+            continue
+        base, impuesto, total = dinero(base), dinero(impuesto), dinero(total)
+        if base < 0 or impuesto < 0 or (total > 0 and base == 0) or abs(base + impuesto - total) > Decimal('1.00'):
+            if not tarifas or 'sin-dato' in tarifas:
+                sin_desglose += 1
+            documentos.append({
+                'asiento': -id_venta, 'fuente': 'venta_sin_asiento', 'sin_desglose': True,
+                'comprobante': numero or f'Venta #{id_venta}',
+                'identificacion': identificacion, 'nombre': nombre, 'sucursal': '',
+                'fecha': fecha, 'tarifa': 'sin-dato',
+            })
+            continue
+        tarifa = '0' if impuesto == 0 else tarifa_estimada(tarifa_venta, base, impuesto)
+        documentos.append({
+            'asiento': -id_venta, 'fuente': 'venta_sin_asiento',
+            'comprobante': numero or f'Venta #{id_venta}',
+            'identificacion': identificacion, 'nombre': nombre, 'sucursal': '',
+            'fecha': fecha, 'tarifa': tarifa, 'base_ventas': base, 'impuesto_ventas': impuesto,
+        })
+
     documentos = [documento for documento in documentos
                   if (not busqueda or busqueda in documento['identificacion'].casefold()
                       or busqueda in documento['nombre'].casefold())
@@ -112,7 +155,9 @@ def consultar_impuestos(conn, desde, hasta, tercero='', tarifas=(), incluye_cier
             anterior = consolidados[clave]
             for campo in CAMPOS_VALOR:
                 anterior[campo] = dinero(anterior.get(campo)) + dinero(documento.get(campo))
-    return agrupar_documentos(consolidados.values())
+    informe = agrupar_documentos(consolidados.values())
+    informe['ventas_sin_desglose'] = sin_desglose
+    return informe
 
 
 def etiqueta_tarifa(tarifa):
@@ -133,7 +178,7 @@ def crear_excel(datos, filtros):
     hoja.append([f"Período: {filtros['desde']} a {filtros['hasta']}"])
     hoja.append([f"Tipo: IVA | Tarifas: {', '.join(etiqueta_tarifa(t) for t in filtros['tarifas']) or 'Todas'}"])
     hoja.append([f"Tercero: {filtros['tercero'] or 'Todos'} | Incluye cierre: {'Sí' if filtros['incluye_cierre'] else 'No'}"])
-    hoja.append(['Tarifas estimadas; la base de datos no conserva el desglose histórico por tarifa.'])
+    hoja.append([f"Tarifas estimadas. Ventas sin desglose excluidas de los totales: {datos.get('ventas_sin_desglose', 0)}."])
     hoja.append(['Comprobante', 'Identificación', 'Sucursal', 'Nombre tercero', 'Fecha elaboración',
                  'Base ventas', 'Valor impuesto ventas', 'Base compras', 'Valor impuesto compras'])
     for celda in hoja[6]:
@@ -150,9 +195,12 @@ def crear_excel(datos, filtros):
     for grupo in datos['grupos']:
         agregar_resumen('Impuesto: ' + etiqueta_tarifa(grupo['tarifa']), grupo['totales'], 'EBF5FC', 1)
         for documento in grupo['documentos']:
-            hoja.append([documento['comprobante'], documento['identificacion'], documento['sucursal'],
+            comprobante = documento['comprobante']
+            if documento.get('fuente') == 'venta_sin_asiento':
+                comprobante += ' (sin asiento)'
+            hoja.append([comprobante, documento['identificacion'], documento['sucursal'],
                          documento['nombre'], date.fromisoformat(documento['fecha'])] +
-                        [float(documento[campo]) for campo in CAMPOS_VALOR])
+                        [None if documento[campo] is None else float(documento[campo]) for campo in CAMPOS_VALOR])
             hoja.row_dimensions[hoja.max_row].outlineLevel = 2
             for celda in hoja[hoja.max_row][:4]:
                 if celda.value is not None:
