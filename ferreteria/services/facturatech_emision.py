@@ -165,13 +165,32 @@ def _subir(conn, id_documento, id_venta, numero, prefijo, folio, xml_bytes,
                 'mensaje': f'Sin conexión con Facturatech: documento en '
                            f'CONTINGENCIA. {error}'}
     if not carga['ok']:
+        transaccion = carga.get('transaccion') or ''
+        if transaccion:
+            try:
+                estado, mensaje, cufe = _resolver_firma(
+                    conn, id_documento, id_venta, numero, prefijo, folio,
+                    transaccion)
+            except ws.ErrorFacturatech as error:
+                mensaje = (
+                    f'Facturatech devolvió la transacción {transaccion}, pero '
+                    f'no se pudo verificar su estado: {error}'
+                )
+                _guardar_estado(conn, id_documento, id_venta, numero, 'firmado',
+                                mensaje, carga['codigo'], transaccion)
+                estado, cufe = 'firmado', ''
+            return {
+                'id_documento': id_documento, 'numero': numero, 'cuide': cufe,
+                'estado': estado, 'contingencia': False,
+                'qr_url': URL_CONSULTA_DIAN + cufe if cufe else '',
+                'codigo_dian': carga['codigo'], 'track_id': transaccion,
+                'mensaje': mensaje,
+            }
         _guardar_estado(conn, id_documento, id_venta, numero, 'rechazado',
-                carga['mensaje'], carga['codigo'],
-                carga.get('transaccion') or None)
+                        carga['mensaje'], carga['codigo'])
         return {'id_documento': id_documento, 'numero': numero, 'cuide': '',
                 'estado': 'rechazado', 'contingencia': False, 'qr_url': '',
                 'codigo_dian': carga['codigo'],
-            'track_id': carga.get('transaccion') or '',
                 'mensaje': f'Documento {numero} RECHAZADO: {carga["mensaje"]}'}
     estado, mensaje, cufe = _resolver_firma(
         conn, id_documento, id_venta, numero, prefijo, folio, carga['transaccion'])

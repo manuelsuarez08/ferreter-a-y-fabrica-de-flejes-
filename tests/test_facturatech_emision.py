@@ -100,24 +100,45 @@ def test_rechazo_no_se_trata_como_contingencia(monkeypatch):
     assert conn.execute("SELECT COUNT(*) FROM cola_dian").fetchone()[0] == 0
 
 
-def test_rechazo_conserva_transaccion_para_consultar_detalle(monkeypatch):
+def test_rechazo_con_transaccion_consulta_detalle_automaticamente(monkeypatch):
     for clave, valor in ENV.items():
         monkeypatch.setenv(clave, valor)
     conn, venta = _preparar()
     monkeypatch.setattr(ws, 'upload_document', lambda xml: _ok(
         codigo='422', ok=False, mensaje='Comprobante rechazado',
         transaccion='TX-RECHAZO'))
+    monkeypatch.setattr(ws, 'document_status', lambda transaccion: _ok(
+        codigo='422', ok=False, mensaje='Detalle DIAN: DFA_8 inválido'))
     resultado = fe.emitir_venta(conn, venta)
     assert resultado['estado'] == 'rechazado'
     assert resultado['track_id'] == 'TX-RECHAZO'
+    assert 'DFA_8 inválido' in resultado['mensaje']
     id_documento = resultado['id_documento']
     assert conn.execute('SELECT track_id FROM documentos_electronicos WHERE id = ?',
                         (id_documento,)).fetchone()[0] == 'TX-RECHAZO'
 
+
+def test_carga_duplicada_firmada_se_recupera_como_aceptada(monkeypatch):
+    for clave, valor in ENV.items():
+        monkeypatch.setenv(clave, valor)
+    conn, venta = _preparar()
+    subidos = []
+    monkeypatch.setattr(ws, 'upload_document', lambda xml: subidos.append(xml) or _ok(
+        codigo='422', ok=False,
+        mensaje='El comprobante ya ha sido firmado previamente',
+        transaccion='TX-FIRMADA'))
     monkeypatch.setattr(ws, 'document_status', lambda transaccion: _ok(
-        codigo='422', ok=False, mensaje='Detalle DIAN: DFA_8 inválido'))
-    consulta = fe.consultar_estado(conn, id_documento)
-    assert 'DFA_8 inválido' in consulta['mensaje']
+        codigo='200', estado='SIGNED_XML'))
+    monkeypatch.setattr(ws, 'download_cufe', lambda prefijo, folio: _ok(datos='CUFE-LAG2'))
+
+    resultado = fe.emitir_venta(conn, venta)
+
+    assert resultado['estado'] == 'aceptado'
+    assert resultado['cuide'] == 'CUFE-LAG2'
+    assert resultado['track_id'] == 'TX-FIRMADA'
+    assert len(subidos) == 1
+    assert conn.execute('SELECT COUNT(*) FROM documentos_electronicos WHERE id_venta = ?',
+                        (venta,)).fetchone()[0] == 1
 
 
 def test_factura_facturatech_rechazada_regenera_xml_al_emitir_de_nuevo(monkeypatch):
