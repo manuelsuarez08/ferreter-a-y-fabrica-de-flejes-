@@ -160,7 +160,6 @@ def _emisor(emisor, nit_emisor):
             ('CDE_3', emisor.get('telefono')),
             ('CDE_4', correo),
         ]))
-    nodo.append(_hijos(_nodo('GTE'), [('GTE_1', '01'), ('GTE_2', 'IVA')]))
     return nodo
 
 
@@ -194,6 +193,15 @@ def _adquirente(adquirente, email_respaldo=None):
         ('ADQ_22', str(calcular_digito_verificacion(numero)) if tipo_doc == '31' else None),
     ])
     nodo.append(_hijos(_nodo('TCR'), [('TCR_1', _obligacion(adquirente))]))
+    municipio, departamento, ciudad, nombre_dep = _direccion_fiscal(adquirente)
+    pais = adquirente.get('pais') or 'CO'
+    postal = adquirente.get('codigo_postal') or municipio
+    nodo.append(_hijos(_nodo('DFA'), [
+        ('DFA_1', municipio or None), ('DFA_2', departamento or None),
+        ('DFA_3', pais), ('DFA_4', postal or None), ('DFA_5', 'Colombia'),
+        ('DFA_6', nombre_dep or None), ('DFA_7', ciudad or None),
+        ('DFA_8', adquirente.get('direccion') or None),
+    ]))
     correo = _email_valido(adquirente.get('email') or email_respaldo)
     if correo:
         nodo.append(_hijos(_nodo('CDA'), [
