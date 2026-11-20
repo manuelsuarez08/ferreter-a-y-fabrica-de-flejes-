@@ -24,6 +24,16 @@ def _ok(**extra):
     return dict(base, **extra)
 
 
+def test_ambiente_facturatech_es_configurable_y_debe_coincidir_con_url(monkeypatch):
+    monkeypatch.setenv('FACTURATECH_URL', 'https://ws.facturatech.co/v2/demo')
+    monkeypatch.setenv('FACTURATECH_AMBIENTE', '2')
+    assert fe._ambiente() == '2'
+
+    monkeypatch.setenv('FACTURATECH_AMBIENTE', '1')
+    with pytest.raises(dian_emision.ErrorEmision, match='no coincide'):
+        fe._ambiente()
+
+
 def _preparar():
     app = create_app()
     ctx = app.app_context()
@@ -384,7 +394,10 @@ def test_factura_lag_por_ws_pos_habilitado_explicitamente(monkeypatch):
         assert b'<ENC_1>INVOIC</ENC_1>' in enviados[0]
         assert b'<ENC_9>01</ENC_9>' in enviados[0]
         assert b'<ENC_20>1</ENC_20>' in enviados[0]
-        assert b'<IPV>' in enviados[0]
+        assert b'<ENC_7>2026-11-04</ENC_7>' in enviados[0]
+        assert b'<ENC_8>10:00:00-05:00</ENC_8>' in enviados[0]
+        assert b'<ENC_16>2026-11-04</ENC_16>' in enviados[0]
+        assert b'<IPV>' not in enviados[0]
         assert b'<EMI_1>2</EMI_1>' in enviados[0]
         assert b'<DRF_4>LAG</DRF_4>' in enviados[0]
         assert dian_series.leer_serie(conn, 'FV')['consecutivo'] == 2

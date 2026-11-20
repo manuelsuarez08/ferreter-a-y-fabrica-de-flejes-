@@ -88,6 +88,7 @@ def test_campos_de_comprador_y_pago_compatibles_con_dian():
 
 def test_xml_referencia_lag2_corregido():
     documento = dict(DOC, prefijo='LAG', folio='2', tipo_ambiente='1',
+                     fecha_emision='2026-11-20', hora_emision='07:24:51',
                      forma_pago='1', medio_pago='10',
                      pos={'codigo_venta': '4'})
     emisor = dict(EMISOR, nit='14321983', digito_verificacion='3',
@@ -107,12 +108,18 @@ def test_xml_referencia_lag2_corregido():
         documento, emisor, adquirente, items, totales, RESOLUCION)
 
     assert raiz.findtext('ENC/ENC_6') == 'LAG2'
+    assert raiz.findtext('ENC/ENC_7') == '2026-11-20'
+    assert raiz.findtext('ENC/ENC_8') == '07:24:51-05:00'
+    assert raiz.findtext('ENC/ENC_9') == '20'
+    assert raiz.findtext('ENC/ENC_16') == '2026-11-20'
     assert raiz.findtext('ENC/ENC_20') == '1'
+    assert raiz.findtext('IPV/IPV_5') == '1'
     assert raiz.findtext('EMI/EMI_1') == '2'
     assert raiz.findtext('EMI/CDE/CDE_4') == 'emisor@example.com'
     assert raiz.findtext('EMI/GTE/GTE_1') == '01'
     assert raiz.findtext('ADQ/DFA/DFA_1') == 'CO'
     assert raiz.findtext('ADQ/DFA/DFA_3') == '17665'
+    assert raiz.findtext('ADQ/ADQ_13') == 'Samaná'
     assert raiz.findtext('ADQ/DFA/DFA_8') == 'Calle 1'
     assert raiz.findtext('ADQ/CDA/CDA_4') == 'cliente@example.com'
     assert raiz.findtext('ADQ/GTA/GTA_1') == '01'
@@ -171,7 +178,9 @@ def test_totales_cuadran():
 
 def test_descuento_en_ide_y_base_neta():
     items = [dict(ITEMS[0], descuento=2000)]
-    raiz = _construir(items=items)
+    raiz = _construir(items=items,
+                      totales={'line_extension_amount': 18000,
+                               'payable_amount': 21420})
     assert raiz.findtext('ITE/ITE_5') == '18000.00'
     assert raiz.findtext('TOT/TOT_1') == '18000.00'
     assert raiz.findtext('ITE/IDE/IDE_2') == '2000.00'
@@ -238,6 +247,14 @@ def test_datos_faltantes():
 def test_xml_bien_formado():
     datos = fx.a_bytes(_construir(items=[dict(ITEMS[0], descripcion='A & B <x>')]))
     assert ET.fromstring(datos).findtext('ITE/ITE_11') == 'A & B <x>'
+
+
+def test_descripcion_xml_utf8_sin_bom_y_sin_comillas_tipograficas():
+    descripcion = 'Tornillo #8 x 1 ′′ & <niño>\x01'
+    datos = fx.a_bytes(_construir(items=[dict(ITEMS[0], descripcion=descripcion)]))
+    assert not datos.startswith(b'\xef\xbb\xbf')
+    assert ET.fromstring(datos).findtext('ITE/ITE_11') == \
+        'Tornillo #8 x 1 pulg & <niño>'
 
 
 if __name__ == '__main__':

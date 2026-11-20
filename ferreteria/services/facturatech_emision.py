@@ -44,7 +44,15 @@ def _ahora():
 
 
 def _ambiente():
-    return '1' if '/pro' in os.environ.get('FACTURATECH_URL', '') else '2'
+    configurado = str(os.environ.get('FACTURATECH_AMBIENTE') or '').strip()
+    por_url = '1' if '/pro' in os.environ.get('FACTURATECH_URL', '') else '2'
+    if configurado and configurado not in ('1', '2'):
+        raise _error_emision()(
+            'FACTURATECH_AMBIENTE debe ser 1 (producción) o 2 (pruebas).')
+    if configurado and configurado != por_url:
+        raise _error_emision()(
+            'FACTURATECH_AMBIENTE no coincide con el ambiente de FACTURATECH_URL.')
+    return configurado or por_url
 
 
 def _validar_serie_produccion(serie, folio=None):
@@ -256,6 +264,10 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
     fecha = normalizar_fecha(fecha_dia)
     documento = {
         'prefijo': prefijo, 'folio': folio, 'tipo_ambiente': _ambiente(),
+        'tipo_documento': tipo_doc,
+        'tipo_factura': '20' if tipo_doc == 'POS' else '01',
+        'fecha_emision': fecha, 'hora_emision': hora,
+        'fecha_vencimiento': fecha,
         'tipo_operacion': tipo_op, 'forma_pago': forma, 'medio_pago': medio,
         'numero': numero,
     }

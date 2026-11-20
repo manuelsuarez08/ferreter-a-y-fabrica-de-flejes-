@@ -16,11 +16,14 @@ Supuestos no confirmados por el manual (verificar contra el demo):
   sep-2025 (ITE_5 neto de descuentos; orden IAE -> IDE -> TII).
 """
 import re
+import unicodedata
 import xml.etree.ElementTree as ET
+from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from ferreteria.services.dian import calcular_digito_verificacion
 
 from ferreteria.services.dian_pos import (
-    formatear_cantidad, formatear_monto, normalizar_fecha, solo_digitos)
+    formatear_cantidad, formatear_monto, normalizar_fecha, normalizar_hora,
+    solo_digitos)
 from ferreteria.services.dian_xml import (
     _nombre_departamento, _nombre_municipio, _nombre_normalizado)
 
@@ -30,6 +33,7 @@ NIT_CONSUMIDOR_FINAL = '222222222222'
 OBLIGACIONES_VALIDAS = ('O-13', 'O-15', 'O-23', 'O-47', 'R-99-PN')
 TIPOS_DOCUMENTO = {'INVOIC', 'NC', 'ND'}
 PATRON_EMAIL = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
+CENTAVO = Decimal('0.01')
 
 
 def _nodo(tag, texto=None):
@@ -48,12 +52,45 @@ def _hijos(padre, pares):
 
 
 def _monto(valor):
-    return formatear_monto(valor)
+    return formatear_monto(_redondear_monto(valor))
 
 
 def _email_valido(valor):
     correo = str(valor or '').strip()
     return correo if PATRON_EMAIL.fullmatch(correo) else None
+
+
+def _decimal(valor):
+    try:
+        return Decimal(str(valor if valor is not None else 0))
+    except (InvalidOperation, TypeError, ValueError) as error:
+        raise ValueError(f'Valor numérico no válido: {valor!r}') from error
+
+
+def _redondear_monto(valor):
+    return _decimal(valor).quantize(CENTAVO, rounding=ROUND_HALF_UP)
+
+
+def _tipo_factura(documento):
+    tipo_explicito = str(documento.get('tipo_factura') or '').strip()
+    if tipo_explicito:
+        return tipo_explicito
+    tipo_documento = str(documento.get('tipo_documento') or '').strip().upper()
+    if tipo_documento == 'POS' or (not tipo_documento and documento.get('pos') is not None):
+        return '20'
+    return '01'
+
+
+def _sanear_descripcion(valor):
+    texto = unicodedata.normalize('NFC', str(valor or 'Producto'))
+    texto = (texto.replace('′′', ' pulg ').replace('″', ' pulg ')
+             .replace('′', "'").replace('“', '"').replace('”', '"')
+             .replace('‘', "'").replace('’', "'"))
+    texto = ''.join(
+        caracter for caracter in texto
+        if caracter in '\t\n\r' or ord(caracter) >= 0x20
+    )
+    return ' '.join(texto.split())
 
 
 def _prefijo_y_folio(documento):
@@ -74,7 +111,15 @@ def _encabezado(documento, adquirente, items, prefijo, folio, nit_emisor):
     if tipo not in TIPOS_DOCUMENTO:
         raise ValueError(f'Tipo de documento no válido: {tipo}')
     nit_adq = solo_digitos(adquirente.get('numero_documento')) or NIT_CONSUMIDOR_FINAL
-    ambiente = '1' if str(documento.get('tipo_ambiente')) == '1' else '2'
+    ambiente = str(documento.get('tipo_ambiente') or '2')
+    if ambiente not in ('1', '2'):
+        raise ValueError('El ambiente Facturatech debe ser 1 (producción) o 2 (pruebas)')
+    fecha_emision = normalizar_fecha(
+        documento.get('fecha_emision') or documento.get('fecha'))
+    hora_emision = normalizar_hora(
+        documento.get('hora_emision') or documento.get('hora'))
+    fecha_vencimiento = normalizar_fecha(
+        documento.get('fecha_vencimiento') or fecha_emision)
     return _hijos(_nodo('ENC'), [
         ('ENC_1', tipo),
         ('ENC_2', nit_emisor),
@@ -82,25 +127,29 @@ def _encabezado(documento, adquirente, items, prefijo, folio, nit_emisor):
         ('ENC_4', 'UBL 2.1'),
         ('ENC_5', 'DIAN 2.1'),
         ('ENC_6', f'{prefijo}{folio}'),
-        ('ENC_9', documento.get('tipo_factura') or '01'),
+        ('ENC_7', fecha_emision),
+        ('ENC_8', hora_emision),
+        ('ENC_9', _tipo_factura(documento)),
         ('ENC_10', documento.get('moneda') or 'COP'),
         ('ENC_15', len(items)),
-        ('ENC_16', normalizar_fecha(documento['fecha_vencimiento'])
-         if documento.get('fecha_vencimiento') else None),
+        ('ENC_16', fecha_vencimiento),
         ('ENC_20', ambiente),
         ('ENC_21', documento.get('tipo_operacion') or '10'),
     ])
 
 
-def _punto_de_venta(documento, totales):
+def _punto_de_venta(documento, items, base):
     pos = documento.get('pos') or {}
+    total_unidades = sum((_decimal(item.get('cantidad')) for item in items), Decimal('0'))
+    if total_unidades <= 0:
+        raise ValueError('El Documento Equivalente POS necesita unidades facturadas mayores que cero')
     return _hijos(_nodo('IPV'), [
         ('IPV_1', pos.get('placa') or 'CAJA01'),
         ('IPV_2', pos.get('ubicacion') or 'ALMACEN'),
         ('IPV_3', pos.get('cajero') or 'CAJERO'),
         ('IPV_4', pos.get('tipo_caja') or 'TC01'),
-        ('IPV_5', pos.get('codigo_venta') or documento.get('numero') or ''),
-        ('IPV_6', _monto(totales.get('line_extension_amount'))),
+        ('IPV_5', formatear_cantidad(total_unidades)),
+        ('IPV_6', _monto(base)),
     ])
 
 
@@ -191,7 +240,7 @@ def _adquirente(adquirente):
             'Falta la dirección del comprador. Complétela en los datos del cliente '
             'de esta factura antes de emitir.'
         )
-    municipio, departamento, _, _ = _direccion_fiscal(adquirente)
+    municipio, departamento, ciudad, _ = _direccion_fiscal(adquirente)
     juridica = tipo_doc == '31'
     nodo = _hijos(_nodo('ADQ'), [
         ('ADQ_1', '1' if juridica else '2'),
@@ -200,6 +249,7 @@ def _adquirente(adquirente):
         ('ADQ_6', nombre),
         ('ADQ_7', None if juridica else nombre),
         ('ADQ_11', departamento or None),
+        ('ADQ_13', ciudad or None),
         ('ADQ_14', adquirente.get('codigo_postal') or municipio or None),
         ('ADQ_15', adquirente.get('pais') or 'CO'),
         ('ADQ_22', str(calcular_digito_verificacion(numero)) if tipo_doc == '31' else None),
@@ -227,18 +277,18 @@ def _adquirente(adquirente):
 
 
 def _calcular_linea(item):
-    cantidad = float(item.get('cantidad') or 0)
-    precio = float(item.get('precio_unitario') or 0)
-    descuento = float(item.get('descuento') or 0)
-    bruto = round(cantidad * precio, 2)
-    base = round(bruto - descuento, 2)
-    iva_tasa = float(item.get('iva_tasa') or 0)
-    inc_tasa = float(item.get('inc_tasa') or 0)
+    cantidad = _decimal(item.get('cantidad'))
+    precio = _decimal(item.get('precio_unitario'))
+    descuento = _redondear_monto(item.get('descuento'))
+    bruto = _redondear_monto(cantidad * precio)
+    base = _redondear_monto(bruto - descuento)
+    iva_tasa = _decimal(item.get('iva_tasa'))
+    inc_tasa = _decimal(item.get('inc_tasa'))
     return {
         'cantidad': cantidad, 'precio': precio, 'descuento': descuento,
         'bruto': bruto, 'base': base,
-        'iva_tasa': iva_tasa, 'iva': round(base * iva_tasa / 100, 2),
-        'inc_tasa': inc_tasa, 'inc': round(base * inc_tasa / 100, 2),
+        'iva_tasa': iva_tasa, 'iva': _redondear_monto(base * iva_tasa / 100),
+        'inc_tasa': inc_tasa, 'inc': _redondear_monto(base * inc_tasa / 100),
     }
 
 
@@ -261,7 +311,7 @@ def _linea(indice, item, calculo, moneda):
         ('ITE_6', moneda),
         ('ITE_7', _monto(calculo['precio'])),
         ('ITE_8', moneda),
-        ('ITE_11', item.get('descripcion') or 'Producto'),
+        ('ITE_11', _sanear_descripcion(item.get('descripcion'))),
         ('ITE_19', _monto(calculo['base'])),
         ('ITE_20', moneda),
         ('ITE_27', formatear_cantidad(calculo['cantidad'])),
@@ -274,7 +324,7 @@ def _linea(indice, item, calculo, moneda):
     # Orden del manual: IAE -> IDE -> TII.
     if calculo['descuento']:
         porcentaje = (calculo['descuento'] * 100 / calculo['bruto']
-                      if calculo['bruto'] else 0)
+                  if calculo['bruto'] else Decimal('0'))
         nodo.append(_hijos(_nodo('IDE'), [
             ('IDE_1', 'false'), ('IDE_2', _monto(calculo['descuento'])),
             ('IDE_3', moneda), ('IDE_6', _monto(porcentaje)),
@@ -298,14 +348,17 @@ def _impuestos_globales(calculos, moneda):
     """Nodos TIM/IMP: un TIM con un IMP por cada tipo y tarifa."""
     grupos = {}
     for c in calculos:
-        grupos.setdefault((TIPO_IMPUESTO_IVA, c['iva_tasa']), [0.0, 0.0])
+        grupos.setdefault((TIPO_IMPUESTO_IVA, c['iva_tasa']),
+                  [Decimal('0'), Decimal('0')])
         grupos[(TIPO_IMPUESTO_IVA, c['iva_tasa'])][0] += c['base']
         grupos[(TIPO_IMPUESTO_IVA, c['iva_tasa'])][1] += c['iva']
         if c['inc_tasa']:
-            grupos.setdefault((TIPO_IMPUESTO_INC, c['inc_tasa']), [0.0, 0.0])
+            grupos.setdefault((TIPO_IMPUESTO_INC, c['inc_tasa']),
+                              [Decimal('0'), Decimal('0')])
             grupos[(TIPO_IMPUESTO_INC, c['inc_tasa'])][0] += c['base']
             grupos[(TIPO_IMPUESTO_INC, c['inc_tasa'])][1] += c['inc']
-    total = round(sum(valor for _, valor in grupos.values()), 2)
+    total = _redondear_monto(sum(
+        (valor for _, valor in grupos.values()), Decimal('0')))
     tim = _hijos(_nodo('TIM'), [
         ('TIM_1', 'false'), ('TIM_2', _monto(total)), ('TIM_3', moneda)])
     for (codigo, tasa), (base, valor) in sorted(grupos.items()):
@@ -318,11 +371,18 @@ def _impuestos_globales(calculos, moneda):
 
 
 def _totales(calculos, totales, moneda):
-    base = round(sum(c['base'] for c in calculos), 2)
-    impuestos = round(sum(c['iva'] + c['inc'] for c in calculos), 2)
-    con_impuestos = round(base + impuestos, 2)
+    base = _redondear_monto(sum(
+        (c['base'] for c in calculos), Decimal('0')))
+    impuestos = _redondear_monto(sum(
+        (c['iva'] + c['inc'] for c in calculos), Decimal('0')))
+    con_impuestos = _redondear_monto(base + impuestos)
     a_pagar = totales.get('payable_amount')
-    a_pagar = con_impuestos if a_pagar is None else float(a_pagar)
+    a_pagar = con_impuestos if a_pagar is None else _redondear_monto(a_pagar)
+    if a_pagar != con_impuestos:
+        raise ValueError(
+            'El total a pagar no coincide con la base más los impuestos '
+            'calculados en las líneas.'
+        )
     # TOT_1 = suma de ITE_5, que ya es neto de descuentos.
     return _hijos(_nodo('TOT'), [
         ('TOT_1', _monto(base)), ('TOT_2', moneda),
@@ -386,10 +446,18 @@ def construir_factura(documento, emisor, adquirente, items, totales,
         anula = str(concepto['codigo']) == '2'
         documento.setdefault('tipo_operacion', '20' if anula else '22')
 
+    tipo_factura = _tipo_factura(documento)
+    if tipo_factura not in ('01', '20', '91', '92'):
+        raise ValueError('Tipo de comprobante no válido: ENC_9 debe ser 01, 20, 91 o 92')
+    if tipo_factura == '20' and documento.get('pos') is None:
+        raise ValueError('El Documento Equivalente POS (ENC_9=20) requiere el bloque IPV')
+    documento = dict(documento, tipo_factura=tipo_factura)
+
     raiz = ET.Element('NOTA' if es_nota else 'FACTURA')
     raiz.append(_encabezado(documento, adquirente, items, prefijo, folio, nit_emisor))
-    if documento.get('pos') is not None:
-        raiz.append(_punto_de_venta(documento, totales))
+    if tipo_factura == '20':
+        base = sum((calculo['base'] for calculo in calculos), Decimal('0'))
+        raiz.append(_punto_de_venta(documento, items, base))
         if beneficio_comprador:
             raiz.append(_hijos(_nodo('BAC'), [
                 ('BAC_1', beneficio_comprador.get('documento')),
