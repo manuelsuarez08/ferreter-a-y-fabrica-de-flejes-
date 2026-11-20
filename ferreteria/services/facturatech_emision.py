@@ -193,10 +193,16 @@ def emitir_venta(conn, id_venta, forzar=False, contingencia=False):
     existente = de._buscar_documento(cursor, id_venta)
     if existente and not forzar:
         id_doc, numero, cuide, estado = existente
-        return {'id_documento': id_doc, 'numero': numero, 'cuide': cuide,
-                'estado': estado, 'contingencia': estado == 'contingencia',
-                'mensaje': 'La venta ya tiene documento electrónico',
-                'qr_url': URL_CONSULTA_DIAN + cuide if cuide else ''}
+        if estado == 'rechazado' and es_de_facturatech(conn, id_doc):
+            # La factura fue rechazada antes de aceptación; al pulsar Emitir de
+            # nuevo se regenera el XML con los datos fiscales corregidos y se
+            # conserva el mismo prefijo/folio. Nunca se duplica un documento.
+            forzar = True
+        else:
+            return {'id_documento': id_doc, 'numero': numero, 'cuide': cuide,
+                    'estado': estado, 'contingencia': estado == 'contingencia',
+                    'mensaje': 'La venta ya tiene documento electrónico',
+                    'qr_url': URL_CONSULTA_DIAN + cuide if cuide else ''}
     if existente and forzar:
         if not es_de_facturatech(conn, existente[0]):
             raise ErrorEmision('No se puede reemitir con Facturatech un documento de otro proveedor.')

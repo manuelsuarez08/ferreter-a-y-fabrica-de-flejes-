@@ -86,6 +86,38 @@ def test_rechazo_no_se_trata_como_contingencia(monkeypatch):
     assert conn.execute("SELECT COUNT(*) FROM cola_dian").fetchone()[0] == 0
 
 
+def test_factura_facturatech_rechazada_regenera_xml_al_emitir_de_nuevo(monkeypatch):
+    for clave, valor in ENV.items():
+        monkeypatch.setenv(clave, valor)
+    monkeypatch.setattr(fe, 'ESPERA_FIRMA_SEGUNDOS', (0,))
+    conn, venta = _preparar()
+    cursor = conn.cursor()
+    id_anterior = dian_emision._guardar_documento(cursor, {
+        'id_venta': venta, 'tipo': 'FV', 'prefijo': 'TCFA', 'numero': 'TCFA-5',
+        'cuide': '', 'fecha': '2026-11-04', 'hora': '10:00:00', 'total': 11900,
+        'iva': 1900, 'inc': 0, 'xml': '<FACTURA><ENC><ENC_20>2</ENC_20></ENC><EMI><EMI_13/><EMI_19/></EMI></FACTURA>',
+        'xml_firmado': '<FACTURA><ENC><ENC_20>2</ENC_20></ENC><EMI><EMI_13/><EMI_19/></EMI></FACTURA>',
+        'qr': '', 'modo': 'facturatech', 'estado': 'rechazado', 'contingencia': 0,
+    })
+    conn.commit()
+    enviados = []
+    monkeypatch.setattr(ws, 'upload_document', lambda xml: enviados.append(xml) or _ok())
+    monkeypatch.setattr(ws, 'document_status', lambda transaccion: _ok(estado='SIGNED_XML'))
+    monkeypatch.setattr(ws, 'download_cufe', lambda prefijo, folio: _ok(datos='CUFE-REINTENTO'))
+    try:
+        resultado = fe.emitir_venta(conn, venta)
+        assert resultado['estado'] == 'aceptado'
+        assert resultado['id_documento'] == id_anterior
+        assert resultado['numero'] == 'TCFA-5'
+        xml = __import__('xml.etree.ElementTree', fromlist=['']).fromstring(enviados[0])
+        assert xml.findtext('EMI/EMI_13') == 'Medellín'
+        assert xml.findtext('EMI/EMI_19') == 'Antioquia'
+        assert conn.execute('SELECT COUNT(*) FROM documentos_electronicos WHERE id_venta = ?',
+                            (venta,)).fetchone()[0] == 1
+    finally:
+        conn.close()
+
+
 def test_sin_red_pasa_a_contingencia_y_se_encola(monkeypatch):
     for clave, valor in ENV.items():
         monkeypatch.setenv(clave, valor)
