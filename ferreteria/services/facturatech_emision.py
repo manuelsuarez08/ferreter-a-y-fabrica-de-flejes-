@@ -158,10 +158,12 @@ def _subir(conn, id_documento, id_venta, numero, prefijo, folio, xml_bytes,
                            f'CONTINGENCIA. {error}'}
     if not carga['ok']:
         _guardar_estado(conn, id_documento, id_venta, numero, 'rechazado',
-                        carga['mensaje'], carga['codigo'])
+                carga['mensaje'], carga['codigo'],
+                carga.get('transaccion') or None)
         return {'id_documento': id_documento, 'numero': numero, 'cuide': '',
                 'estado': 'rechazado', 'contingencia': False, 'qr_url': '',
                 'codigo_dian': carga['codigo'],
+            'track_id': carga.get('transaccion') or '',
                 'mensaje': f'Documento {numero} RECHAZADO: {carga["mensaje"]}'}
     estado, mensaje, cufe = _resolver_firma(
         conn, id_documento, id_venta, numero, prefijo, folio, carga['transaccion'])
