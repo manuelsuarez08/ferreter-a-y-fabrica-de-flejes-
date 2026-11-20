@@ -54,6 +54,30 @@ def test_encabezado_y_emisor():
     assert raiz.findtext('DRF/DRF_4') == 'SETT'
 
 
+def test_campos_de_comprador_y_pago_compatibles_con_dian():
+    raiz = _construir(documento=dict(DOC, forma_pago='1', medio_pago='10'),
+                      adquirente={'nombre': 'Juan Perez',
+                                  'numero_documento': '123456789',
+                                  'tipo_documento': 'CC'})
+    assert raiz.find('ADQ/ADQ_8') is None
+    assert raiz.find('ADQ/ADQ_9') is None
+    assert raiz.findtext('MEP/MEP_1') == '10'
+    assert raiz.findtext('MEP/MEP_2') == '1'
+
+
+def test_omite_correo_invalido_y_conserva_correo_valido():
+    emisor = dict(EMISOR, email='correo-sin-dominio', telefono='6041234567')
+    raiz = _construir(emisor=emisor,
+                      adquirente={'nombre': 'Juan Perez', 'telefono': '3001234567'})
+    assert raiz.findtext('EMI/CDE/CDE_3') == '6041234567'
+    assert raiz.find('EMI/CDE/CDE_4') is None
+    assert raiz.findtext('ADQ/CDA/CDA_3') == '3001234567'
+    assert raiz.find('ADQ/CDA/CDA_4') is None
+
+    raiz = _construir(emisor=dict(EMISOR, email='facturas@example.com'))
+    assert raiz.findtext('EMI/CDE/CDE_4') == 'facturas@example.com'
+
+
 def test_direccion_fiscal_emisor_municipio_samana():
     emisor = dict(EMISOR, municipio='17665', departamento='17', ciudad='',
                   nombre_departamento='')

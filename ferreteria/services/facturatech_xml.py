@@ -15,6 +15,7 @@ Supuestos no confirmados por el manual (verificar contra el demo):
 - La numeración y estructura de factura/nota sigue las guías de Facturatech de
   sep-2025 (ITE_5 neto de descuentos; orden IAE -> IDE -> TII).
 """
+import re
 import xml.etree.ElementTree as ET
 from ferreteria.services.dian import calcular_digito_verificacion
 
@@ -28,6 +29,7 @@ TIPO_IMPUESTO_INC = '04'
 NIT_CONSUMIDOR_FINAL = '222222222222'
 OBLIGACIONES_VALIDAS = ('O-13', 'O-15', 'O-23', 'O-47', 'R-99-PN')
 TIPOS_DOCUMENTO = {'INVOIC', 'NC', 'ND'}
+PATRON_EMAIL = re.compile(r'[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}')
 
 
 def _nodo(tag, texto=None):
@@ -47,6 +49,11 @@ def _hijos(padre, pares):
 
 def _monto(valor):
     return formatear_monto(valor)
+
+
+def _email_valido(valor):
+    correo = str(valor or '').strip()
+    return correo if PATRON_EMAIL.fullmatch(correo) else None
 
 
 def _prefijo_y_folio(documento):
@@ -146,11 +153,12 @@ def _emisor(emisor, nit_emisor):
     # ICC_9 (prefijo de la numeración) es obligatorio solo para persona jurídica.
     if (emisor.get('tipo_persona') or '1') == '1' and emisor.get('prefijo'):
         nodo.append(_hijos(_nodo('ICC'), [('ICC_9', emisor['prefijo'])]))
-    if emisor.get('email') or emisor.get('telefono'):
+    correo = _email_valido(emisor.get('email'))
+    if correo or emisor.get('telefono'):
         nodo.append(_hijos(_nodo('CDE'), [
             ('CDE_2', emisor.get('nombre_comercial') or razon),
             ('CDE_3', emisor.get('telefono')),
-            ('CDE_4', emisor.get('email')),
+            ('CDE_4', correo),
         ]))
     nodo.append(_hijos(_nodo('GTE'), [('GTE_1', '01'), ('GTE_2', 'IVA')]))
     return nodo
@@ -160,14 +168,6 @@ CODIGO_TIPO_DOCUMENTO = {
     'RC': '11', 'TI': '12', 'CC': '13', 'TE': '21', 'CE': '22', 'NIT': '31',
     'PA': '41', 'PP': '41', 'DIE': '42', 'NUIP': '91',
 }
-
-
-def _nombres_y_apellidos(nombre):
-    partes = str(nombre or '').split()
-    if len(partes) < 2:
-        return (partes[0] if partes else 'Consumidor'), '.'
-    corte = 1 if len(partes) == 2 else len(partes) // 2
-    return ' '.join(partes[:corte]), ' '.join(partes[corte:])
 
 
 def _adquirente(adquirente, email_respaldo=None):
@@ -182,22 +182,19 @@ def _adquirente(adquirente, email_respaldo=None):
     nombre = adquirente.get('nombre') or 'Consumidor final'
     municipio, departamento, _, _ = _direccion_fiscal(adquirente)
     juridica = tipo_doc == '31'
-    nombres, apellidos = (None, None) if juridica else _nombres_y_apellidos(nombre)
     nodo = _hijos(_nodo('ADQ'), [
         ('ADQ_1', '1' if juridica else '2'),
         ('ADQ_2', numero),
         ('ADQ_3', tipo_doc),
         ('ADQ_6', nombre),
         ('ADQ_7', None if juridica else nombre),
-        ('ADQ_8', nombres),
-        ('ADQ_9', apellidos),
         ('ADQ_11', departamento or None),
         ('ADQ_14', adquirente.get('codigo_postal') or municipio or None),
         ('ADQ_15', adquirente.get('pais') or 'CO'),
         ('ADQ_22', str(calcular_digito_verificacion(numero)) if tipo_doc == '31' else None),
     ])
     nodo.append(_hijos(_nodo('TCR'), [('TCR_1', _obligacion(adquirente))]))
-    correo = adquirente.get('email') or email_respaldo
+    correo = _email_valido(adquirente.get('email') or email_respaldo)
     if correo or adquirente.get('telefono'):
         nodo.append(_hijos(_nodo('CDA'), [
             ('CDA_2', nombre),
@@ -335,7 +332,7 @@ def construir_factura(documento, emisor, adquirente, items, totales,
 
     `documento` necesita: prefijo, folio, fecha (opcional, no se envía),
     tipo ('INVOIC' por defecto), tipo_ambiente ('1' prod / '2' demo),
-    forma_pago ('1' contado, '2' crédito), medio_pago (Tabla 26, '10' efectivo)
+    forma_pago ('1' contado, '2' crédito), medio_pago (Tabla 5, '10' efectivo)
     y, para POS, `pos` con placa, ubicacion, cajero, tipo_caja, codigo_venta.
     `resolucion`: numero, fecha_inicio, fecha_fin, desde, hasta.
     Para notas (`tipo` 'NC' o 'ND') la raíz es `<NOTA>`, ENC_9 es 91/92 y se
@@ -395,11 +392,7 @@ def construir_factura(documento, emisor, adquirente, items, totales,
         ]))
     forma = documento.get('forma_pago') or '1'
     medio = documento.get('medio_pago') or '10'
-    # Guía de factura (nov-2025): MEP_1 = medio (Tabla 5), MEP_2 = método (Tabla 26).
-    # La guía POS conserva el orden anterior.
-    mep = ([('MEP_1', forma), ('MEP_2', medio)] if documento.get('pos') is not None
-           else [('MEP_1', medio), ('MEP_2', forma)])
-    raiz.append(_hijos(_nodo('MEP'), mep))
+    raiz.append(_hijos(_nodo('MEP'), [('MEP_1', medio), ('MEP_2', forma)]))
     if es_nota:
         raiz.append(_hijos(_nodo('CDN'), [
             ('CDN_1', concepto['codigo']),
