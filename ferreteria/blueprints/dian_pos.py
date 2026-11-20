@@ -24,7 +24,7 @@ import os
 import re
 
 from flask import (Blueprint, jsonify, render_template, request, send_file,
-                   session)
+                   redirect, session, url_for)
 
 from ..config import BASE_DIR
 from ..db import get_db
@@ -597,9 +597,10 @@ def proveedor_probar():
 # Vistas
 # ═════════════════════════════
 @bp.route('/dian', methods=['GET'])
-@login_required
 def panel():
     """Página de administración del módulo de facturación electrónica."""
+    if 'usuario' not in session:
+        return redirect(url_for('core.login'))
     return render_template('dian.html',
                            usuario=session.get('usuario'),
                            rol=session.get('rol', 'empleado'))

@@ -127,6 +127,18 @@ def empleado(app):
     return c
 
 
+def test_pagina_dian_sin_sesion_redirige_al_login(app):
+    respuesta = app.test_client().get('/dian')
+    assert respuesta.status_code == 302
+    assert respuesta.headers['Location'].endswith('/login')
+
+
+def test_pagina_dian_con_sesion_muestra_el_panel(admin):
+    respuesta = admin.get('/dian')
+    assert respuesta.status_code == 200
+    assert 'Facturación Electrónica DIAN' in respuesta.get_data(as_text=True)
+
+
 # ═════════════════════════════════════════════════════
 # La tabla de series
 # ═════════════════════════════════════════════════════
