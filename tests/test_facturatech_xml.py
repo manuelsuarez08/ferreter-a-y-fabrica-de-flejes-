@@ -55,15 +55,31 @@ def test_encabezado_y_emisor():
     assert raiz.findtext('DRF/DRF_4') == 'SETT'
 
 
+def test_emisor_persona_natural_necesita_correo_valido():
+    raiz = _construir(emisor=dict(EMISOR, tipo_persona='2', prefijo='',
+                                 email='facturas@example.com'))
+    assert raiz.find('EMI/ICC') is None
+    assert raiz.findtext('EMI/CDE/CDE_4') == 'facturas@example.com'
+    try:
+        _construir(emisor=dict(EMISOR, tipo_persona='2', prefijo='', email=''))
+    except ValueError as error:
+        assert 'correo electrónico válido' in str(error)
+    else:
+        raise AssertionError('El emisor sin ICC ni correo válido debía fallar')
+
+
 def test_campos_de_comprador_y_pago_compatibles_con_dian():
     raiz = _construir(documento=dict(DOC, forma_pago='1', medio_pago='10'),
                       adquirente={'nombre': 'Juan Perez',
                                   'numero_documento': '123456789',
                                   'tipo_documento': 'CC',
-                                  'direccion': 'Calle 1'})
+                                  'direccion': 'Calle 1',
+                                  'municipio': '17665', 'departamento': '17'})
     assert raiz.find('ADQ/ADQ_8') is None
     assert raiz.find('ADQ/ADQ_9') is None
     assert raiz.find('ADQ/GTA') is None
+    assert raiz.findtext('ADQ/DFA/DFA_1') == 'CO'
+    assert raiz.findtext('ADQ/DFA/DFA_3') == '17665'
     assert raiz.findtext('ADQ/DFA/DFA_8') == 'Calle 1'
     assert raiz.findtext('MEP/MEP_1') == '10'
     assert raiz.findtext('MEP/MEP_2') == '1'

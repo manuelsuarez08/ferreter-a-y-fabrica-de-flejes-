@@ -160,6 +160,11 @@ def _emisor(emisor, nit_emisor):
             ('CDE_3', emisor.get('telefono')),
             ('CDE_4', correo),
         ]))
+    if not any(hijo.tag in ('ICC', 'CDE') for hijo in nodo):
+        raise ValueError(
+            'El emisor necesita un prefijo de numeración autorizado o un correo '
+            'electrónico válido para Facturatech.'
+        )
     return nodo
 
 
@@ -197,8 +202,8 @@ def _adquirente(adquirente, email_respaldo=None):
     pais = adquirente.get('pais') or 'CO'
     postal = adquirente.get('codigo_postal') or municipio
     nodo.append(_hijos(_nodo('DFA'), [
-        ('DFA_1', municipio or None), ('DFA_2', departamento or None),
-        ('DFA_3', pais), ('DFA_4', postal or None), ('DFA_5', 'Colombia'),
+        ('DFA_1', pais), ('DFA_2', departamento or None),
+        ('DFA_3', municipio or None), ('DFA_4', postal or None), ('DFA_5', 'Colombia'),
         ('DFA_6', nombre_dep or None), ('DFA_7', ciudad or None),
         ('DFA_8', adquirente.get('direccion') or None),
     ]))
