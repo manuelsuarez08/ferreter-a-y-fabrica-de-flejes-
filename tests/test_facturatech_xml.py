@@ -54,6 +54,18 @@ def test_encabezado_y_emisor():
     assert raiz.findtext('DRF/DRF_4') == 'SETT'
 
 
+def test_direccion_fiscal_emisor_municipio_samana():
+    emisor = dict(EMISOR, municipio='17665', departamento='17', ciudad='',
+                  nombre_departamento='')
+    municipio, departamento, ciudad, nombre_departamento = fx._direccion_fiscal(emisor)
+    assert (municipio, departamento, ciudad, nombre_departamento) == (
+        '17665', '17', 'Samaná', 'Caldas')
+    raiz = _construir(emisor=emisor)
+    assert raiz.findtext('EMI/EMI_13') == 'Samaná'
+    assert raiz.findtext('EMI/EMI_19') == 'Caldas'
+    assert raiz.findtext('EMI/DFE/DFE_6') == 'Caldas'
+
+
 def test_totales_cuadran():
     raiz = _construir()
     assert raiz.findtext('TOT/TOT_1') == '20000.00'

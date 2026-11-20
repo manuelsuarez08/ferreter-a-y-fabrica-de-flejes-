@@ -823,7 +823,7 @@ _TILDES = {
     'HUILA': 'Huila', 'MAGDALENA': 'Magdalena', 'NARINO': 'Nariño',
     'QUINDIO': 'Quindío', 'RISARALDA': 'Risaralda',
     'SANTANDER': 'Santander', 'TOLIMA': 'Tolima',
-    'CALDAS': 'Caldas', 'CESAR': 'Cesar',
+    'CALDAS': 'Caldas', 'CESAR': 'Cesar', 'SAMANA': 'Samaná',
 }
 
 
@@ -852,7 +852,7 @@ def _nombre_normalizado(nombre):
 # documento como campo ausente, que es honesto.
 DEPARTAMENTOS_DANE = {
     '05': 'Antioquia', '08': 'Atlántico', '11': 'Bogotá D.C.',
-    '13': 'Bolívar', '20': 'Boyacá', '25': 'Cundinamarca',
+    '13': 'Bolívar', '17': 'Caldas', '20': 'Boyacá', '25': 'Cundinamarca',
     '41': 'Huila', '47': 'Magdalena', '52': 'Nariño',
     '63': 'Quindío', '66': 'Risaralda', '68': 'Santander',
     '73': 'Tolima', '76': 'Valle del Cauca',
@@ -861,7 +861,7 @@ DEPARTAMENTOS_DANE = {
 # Municipio por código DANE, solo para las capitales que se usan en la práctica.
 MUNICIPIOS_DANE = {
     '05001': 'Medellín', '08001': 'Barranquilla', '11001': 'Bogotá D.C.',
-    '13001': 'Cartagena', '20001': 'Valledupar', '23001': 'Montería',
+    '13001': 'Cartagena', '17665': 'Samaná', '20001': 'Valledupar', '23001': 'Montería',
     '41001': 'Neiva', '47001': 'Santa Marta', '52001': 'Pasto',
     '63001': 'Armenia', '66001': 'Pereira', '68001': 'Bucaramanga',
     '73001': 'Ibagué', '76001': 'Cali', '76088': 'Buenaventura',
