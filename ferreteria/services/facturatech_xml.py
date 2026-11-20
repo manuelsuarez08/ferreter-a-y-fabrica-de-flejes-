@@ -154,7 +154,7 @@ def _emisor(emisor, nit_emisor):
     if (emisor.get('tipo_persona') or '1') == '1' and emisor.get('prefijo'):
         nodo.append(_hijos(_nodo('ICC'), [('ICC_9', emisor['prefijo'])]))
     correo = _email_valido(emisor.get('email'))
-    if correo or emisor.get('telefono'):
+    if correo:
         nodo.append(_hijos(_nodo('CDE'), [
             ('CDE_2', emisor.get('nombre_comercial') or razon),
             ('CDE_3', emisor.get('telefono')),
@@ -195,13 +195,12 @@ def _adquirente(adquirente, email_respaldo=None):
     ])
     nodo.append(_hijos(_nodo('TCR'), [('TCR_1', _obligacion(adquirente))]))
     correo = _email_valido(adquirente.get('email') or email_respaldo)
-    if correo or adquirente.get('telefono'):
+    if correo:
         nodo.append(_hijos(_nodo('CDA'), [
             ('CDA_2', nombre),
             ('CDA_3', adquirente.get('telefono')),
             ('CDA_4', correo),
         ]))
-    nodo.append(_hijos(_nodo('GTA'), [('GTA_1', '01'), ('GTA_2', 'IVA')]))
     return nodo
 
 

@@ -61,6 +61,7 @@ def test_campos_de_comprador_y_pago_compatibles_con_dian():
                                   'tipo_documento': 'CC'})
     assert raiz.find('ADQ/ADQ_8') is None
     assert raiz.find('ADQ/ADQ_9') is None
+    assert raiz.find('ADQ/GTA') is None
     assert raiz.findtext('MEP/MEP_1') == '10'
     assert raiz.findtext('MEP/MEP_2') == '1'
 
@@ -69,10 +70,8 @@ def test_omite_correo_invalido_y_conserva_correo_valido():
     emisor = dict(EMISOR, email='correo-sin-dominio', telefono='6041234567')
     raiz = _construir(emisor=emisor,
                       adquirente={'nombre': 'Juan Perez', 'telefono': '3001234567'})
-    assert raiz.findtext('EMI/CDE/CDE_3') == '6041234567'
-    assert raiz.find('EMI/CDE/CDE_4') is None
-    assert raiz.findtext('ADQ/CDA/CDA_3') == '3001234567'
-    assert raiz.find('ADQ/CDA/CDA_4') is None
+    assert raiz.find('EMI/CDE') is None
+    assert raiz.find('ADQ/CDA') is None
 
     raiz = _construir(emisor=dict(EMISOR, email='facturas@example.com'))
     assert raiz.findtext('EMI/CDE/CDE_4') == 'facturas@example.com'
