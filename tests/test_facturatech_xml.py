@@ -90,6 +90,7 @@ def test_campos_de_comprador_y_pago_compatibles_con_dian():
 
 def test_xml_referencia_lag2_corregido():
     documento = dict(DOC, prefijo='LAG', folio='2', tipo_ambiente='1',
+                     tipo_factura='01',
                      fecha_emision='2026-11-20', hora_emision='07:24:51',
                      forma_pago='1', medio_pago='10',
                      pos={'codigo_venta': '4'})
@@ -110,11 +111,12 @@ def test_xml_referencia_lag2_corregido():
         documento, emisor, adquirente, items, totales, RESOLUCION)
 
     assert raiz.findtext('ENC/ENC_6') == 'LAG2'
-    assert raiz.findtext('ENC/ENC_7') == '2026-11-20'
-    assert raiz.findtext('ENC/ENC_8') == '07:24:51-05:00'
-    assert raiz.findtext('ENC/ENC_9') == '20'
-    assert raiz.findtext('ENC/ENC_16') == '2026-11-20'
+    assert raiz.find('ENC/ENC_7') is None
+    assert raiz.find('ENC/ENC_8') is None
+    assert raiz.findtext('ENC/ENC_9') == '01'
+    assert raiz.find('ENC/ENC_16') is None
     assert raiz.findtext('ENC/ENC_20') == '1'
+    assert raiz.find('IPV') is not None
     assert raiz.findtext('IPV/IPV_5') == '1'
     assert raiz.findtext('EMI/EMI_1') == '2'
     assert raiz.findtext('EMI/CDE/CDE_4') == 'emisor@example.com'
@@ -128,6 +130,22 @@ def test_xml_referencia_lag2_corregido():
     assert raiz.findtext('MEP/MEP_1') == '10'
     assert raiz.findtext('MEP/MEP_2') == '1'
     assert raiz.findtext('TOT/TOT_7') == '50.00'
+
+
+def test_factura_v2_emite_fechas_sin_ipv():
+    documento = dict(DOC, prefijo='LAG', folio='2', tipo_documento='FV',
+                     tipo_ambiente='1', fecha_emision='2026-11-20',
+                     hora_emision='07:24:51', forma_pago='1', medio_pago='10')
+    documento['pos'] = None
+    raiz = _construir(documento=documento,
+                      adquirente={'nombre': 'Cliente Prueba',
+                                  'direccion': 'Calle 1',
+                                  'municipio': '17665', 'departamento': '17'})
+    assert raiz.findtext('ENC/ENC_7') == '2026-11-20'
+    assert raiz.findtext('ENC/ENC_8') == '07:24:51-05:00'
+    assert raiz.findtext('ENC/ENC_9') == '01'
+    assert raiz.findtext('ENC/ENC_16') == '2026-11-20'
+    assert raiz.find('IPV') is None
 
 
 def test_omite_correo_invalido_y_conserva_correo_valido():

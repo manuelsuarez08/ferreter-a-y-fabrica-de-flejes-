@@ -120,22 +120,31 @@ def _encabezado(documento, adquirente, items, prefijo, folio, nit_emisor):
         documento.get('hora_emision') or documento.get('hora'))
     fecha_vencimiento = normalizar_fecha(
         documento.get('fecha_vencimiento') or fecha_emision)
-    return _hijos(_nodo('ENC'), [
+    campos = [
         ('ENC_1', tipo),
         ('ENC_2', nit_emisor),
         ('ENC_3', nit_adq),
         ('ENC_4', 'UBL 2.1'),
         ('ENC_5', 'DIAN 2.1'),
         ('ENC_6', f'{prefijo}{folio}'),
-        ('ENC_7', fecha_emision),
-        ('ENC_8', hora_emision),
+    ]
+    # WS-POS usa el layout POS legado: ENC_9 sigue a ENC_6 y no admite
+    # ENC_7/8. El layout de factura v2 sí transporta fecha y hora aquí.
+    if documento.get('pos') is None:
+        campos.extend([('ENC_7', fecha_emision), ('ENC_8', hora_emision)])
+    campos.extend([
         ('ENC_9', _tipo_factura(documento)),
         ('ENC_10', documento.get('moneda') or 'COP'),
         ('ENC_15', len(items)),
-        ('ENC_16', fecha_vencimiento),
+    ])
+    if (documento.get('pos') is None
+            or str(documento.get('forma_pago') or '1') == '2'):
+        campos.append(('ENC_16', fecha_vencimiento))
+    campos.extend([
         ('ENC_20', ambiente),
         ('ENC_21', documento.get('tipo_operacion') or '10'),
     ])
+    return _hijos(_nodo('ENC'), campos)
 
 
 def _punto_de_venta(documento, items, base):
@@ -455,7 +464,7 @@ def construir_factura(documento, emisor, adquirente, items, totales,
 
     raiz = ET.Element('NOTA' if es_nota else 'FACTURA')
     raiz.append(_encabezado(documento, adquirente, items, prefijo, folio, nit_emisor))
-    if tipo_factura == '20':
+    if documento.get('pos') is not None:
         base = sum((calculo['base'] for calculo in calculos), Decimal('0'))
         raiz.append(_punto_de_venta(documento, items, base))
         if beneficio_comprador:
