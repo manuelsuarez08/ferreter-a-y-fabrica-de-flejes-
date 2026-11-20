@@ -32,6 +32,15 @@ def test_hash_de_password_normal():
     assert ws.hash_password('clave') == hashlib.sha256(b'clave').hexdigest()
 
 
+def test_error_especifico_prevalece_sobre_mensaje_generico():
+    resultado = ws._normalizar({
+        'code': '422',
+        'message': 'El comprobante 2 ha sido rechazado',
+        'messageError': 'DFA_8: dirección del adquirente inválida',
+    })
+    assert resultado['mensaje'] == 'DFA_8: dirección del adquirente inválida'
+
+
 def test_sobre_soap():
     ns = 'urn:https://ws-pos.facturatech.co/v1/demo/'
     datos = ws._sobre('uploadDocument', ns, [

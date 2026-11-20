@@ -160,8 +160,8 @@ def _normalizar(crudo):
     return {
         'codigo': codigo,
         'ok': codigo in ('200', '201'),
-        'mensaje': (crudo.get('message') or crudo.get('success')
-                    or crudo.get('error') or crudo.get('messageError') or ''),
+        'mensaje': (crudo.get('messageError') or crudo.get('error')
+                or crudo.get('message') or crudo.get('success') or ''),
         'transaccion': crudo.get('transactionID') or crudo.get('transaccionID') or '',
         'estado': crudo.get('status') or '',
         'datos': crudo.get('documentBase64') or crudo.get('resourceData') or '',

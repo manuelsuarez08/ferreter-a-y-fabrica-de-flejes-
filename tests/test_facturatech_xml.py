@@ -86,6 +86,41 @@ def test_campos_de_comprador_y_pago_compatibles_con_dian():
     assert raiz.findtext('MEP/MEP_2') == '1'
 
 
+def test_xml_referencia_lag2_corregido():
+    documento = dict(DOC, prefijo='LAG', folio='2', tipo_ambiente='1',
+                     forma_pago='1', medio_pago='10',
+                     pos={'codigo_venta': '4'})
+    emisor = dict(EMISOR, nit='14321983', digito_verificacion='3',
+                  tipo_persona='2', prefijo='', telefono='3005550101',
+                  email='emisor@example.com')
+    adquirente = {
+        'tipo_documento': 'CC', 'numero_documento': '1054552590',
+        'nombre': 'Cliente Prueba', 'direccion': 'Calle 1',
+        'telefono': '3005550102', 'email': 'cliente@example.com',
+        'municipio': '17665', 'departamento': '17', 'pais': 'CO',
+        'responsabilidades': ['R-99-PN'],
+    }
+    items = [{'descripcion': 'Tornillo', 'cantidad': 1, 'precio_unitario': 42.02,
+              'iva_tasa': 19, 'codigo': '1', 'unidad': '94'}]
+    totales = {'line_extension_amount': 42.02, 'payable_amount': 50.00}
+    raiz = fx.construir_factura(
+        documento, emisor, adquirente, items, totales, RESOLUCION)
+
+    assert raiz.findtext('ENC/ENC_6') == 'LAG2'
+    assert raiz.findtext('ENC/ENC_20') == '1'
+    assert raiz.findtext('EMI/EMI_1') == '2'
+    assert raiz.findtext('EMI/CDE/CDE_4') == 'emisor@example.com'
+    assert raiz.findtext('EMI/GTE/GTE_1') == '01'
+    assert raiz.findtext('ADQ/DFA/DFA_1') == 'CO'
+    assert raiz.findtext('ADQ/DFA/DFA_3') == '17665'
+    assert raiz.findtext('ADQ/DFA/DFA_8') == 'Calle 1'
+    assert raiz.findtext('ADQ/CDA/CDA_4') == 'cliente@example.com'
+    assert raiz.findtext('ADQ/GTA/GTA_1') == '01'
+    assert raiz.findtext('MEP/MEP_1') == '10'
+    assert raiz.findtext('MEP/MEP_2') == '1'
+    assert raiz.findtext('TOT/TOT_7') == '50.00'
+
+
 def test_omite_correo_invalido_y_conserva_correo_valido():
     emisor = dict(EMISOR, email='correo-sin-dominio', telefono='6041234567')
     raiz = _construir(emisor=emisor,
