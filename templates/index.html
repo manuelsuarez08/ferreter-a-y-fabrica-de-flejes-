@@ -1346,6 +1346,7 @@
           <div class="col-md-3"><label class="form-label">NIT</label><input id="config-nit" class="form-control" spellcheck="false"></div>
           <div class="col-md-3"><label class="form-label">Teléfono</label><input id="config-telefono" class="form-control" spellcheck="false"></div>
           <div class="col-md-3"><label class="form-label">Dirección</label><input id="config-direccion" class="form-control" spellcheck="true"></div>
+          <div class="col-md-3"><label class="form-label">Correo del emisor</label><input id="config-email-emisor" type="email" class="form-control" placeholder="facturacion@negocio.com" autocomplete="email"></div>
           <div class="col-md-2">
             <label class="form-label">IVA (%)</label>
             <input id="config-iva" type="number" min="0" max="100" step="0.01" class="form-control" placeholder="19">
@@ -6137,6 +6138,7 @@
       document.getElementById('config-nit').value = config.nit || '';
       document.getElementById('config-telefono').value = config.telefono || '';
       document.getElementById('config-direccion').value = config.direccion || '';
+      document.getElementById('config-email-emisor').value = config.email_emisor || '';
       const fechaHoy = hoyLocalISO();
       document.getElementById('gasto-fecha').value = document.getElementById('gasto-fecha').value || fechaHoy;
       document.getElementById('cierre-fecha').value = document.getElementById('cierre-fecha').value || fechaHoy;
@@ -6616,6 +6618,7 @@
         nit: document.getElementById('config-nit').value,
         telefono: document.getElementById('config-telefono').value,
         direccion: document.getElementById('config-direccion').value,
+        email_emisor: document.getElementById('config-email-emisor').value,
         iva_porcentaje: document.getElementById('config-iva') ? document.getElementById('config-iva').value : undefined,
         iva_activo: document.getElementById('config-iva-activo') ? document.getElementById('config-iva-activo').checked : true,
         // Ver el aviso junto al checkbox: solo activar con el catálogo clasificado.

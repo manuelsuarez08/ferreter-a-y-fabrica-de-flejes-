@@ -286,19 +286,20 @@ def configuracion_negocio():
     conn = get_db()
     if request.method == 'GET':
         row = conn.execute(
-            "SELECT nombre, nit, telefono, direccion, consecutivo, "
+            "SELECT nombre, nit, telefono, direccion, COALESCE(email_emisor, ''), consecutivo, "
             "COALESCE(iva_porcentaje, 19), COALESCE(iva_activo, 1), "
             "COALESCE(iva_por_producto, 0) FROM configuracion WHERE id = 1"
         ).fetchone()
         conn.close()
         return jsonify({"nombre": row[0], "nit": row[1], "telefono": row[2],
-                        "direccion": row[3], "consecutivo": row[4],
-                        "iva_porcentaje": row[5], "iva_activo": bool(row[6]),
+                        "direccion": row[3], "email_emisor": row[4],
+                        "consecutivo": row[5], "iva_porcentaje": row[6],
+                        "iva_activo": bool(row[7]),
                         # Cobrar el IVA segun la tasa de cada producto. En 0
                         # mientras el catalogo no este clasificado: hoy casi
                         # todos los productos tienen tasa 0, y activarlo sin
                         # clasificar dejaria de cobrar impuesto en toda la venta.
-                        "iva_por_producto": bool(row[7])})
+                        "iva_por_producto": bool(row[8])})
 
     if session.get('rol') != 'admin':
         conn.close()
@@ -310,6 +311,9 @@ def configuracion_negocio():
         (str(data.get('nombre', '')).strip(), str(data.get('nit', '')).strip(),
          str(data.get('telefono', '')).strip(), str(data.get('direccion', '')).strip()),
     )
+    if 'email_emisor' in data:
+        conn.execute("UPDATE configuracion SET email_emisor = ? WHERE id = 1",
+                     (str(data.get('email_emisor') or '').strip(),))
     # Códigos DIAN del emisor: solo se tocan si vienen informados.
     for llave in ('codigo_municipio', 'codigo_departamento'):
         if llave in data:

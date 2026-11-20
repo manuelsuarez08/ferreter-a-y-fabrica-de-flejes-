@@ -137,6 +137,19 @@ def test_la_configuracion_lo_expone(admin):
     assert d['iva_por_producto'] is False
 
 
+def test_correo_emisor_se_guarda_y_se_expone(admin):
+    actual = admin.get('/api/configuracion').get_json()
+    respuesta = admin.put('/api/configuracion', json={
+        'nombre': actual['nombre'], 'nit': actual['nit'],
+        'telefono': actual['telefono'], 'direccion': actual['direccion'],
+        'email_emisor': 'facturacion@example.com',
+    })
+    assert respuesta.status_code == 200
+    assert admin.get('/api/configuracion').get_json()['email_emisor'] == \
+        'facturacion@example.com'
+    assert 'id="config-email-emisor"' in admin.get('/').get_data(as_text=True)
+
+
 # ═════════════════════════════════════════════════════
 # Con el interruptor apagado, NADA cambia
 # ═════════════════════════════════════════════════════
