@@ -165,6 +165,7 @@ def _emisor(emisor, nit_emisor):
             'El emisor necesita un prefijo de numeración autorizado o un correo '
             'electrónico válido para Facturatech.'
         )
+    nodo.append(_hijos(_nodo('GTE'), [('GTE_1', '01'), ('GTE_2', 'IVA')]))
     return nodo
 
 
@@ -174,7 +175,7 @@ CODIGO_TIPO_DOCUMENTO = {
 }
 
 
-def _adquirente(adquirente, email_respaldo=None):
+def _adquirente(adquirente):
     numero = solo_digitos(adquirente.get('numero_documento')) or NIT_CONSUMIDOR_FINAL
     consumidor = numero == NIT_CONSUMIDOR_FINAL
     if consumidor:
@@ -184,6 +185,12 @@ def _adquirente(adquirente, email_respaldo=None):
                        or CODIGO_TIPO_DOCUMENTO.get(
                            str(adquirente.get('tipo_documento') or '').upper(), '13'))
     nombre = adquirente.get('nombre') or 'Consumidor final'
+    direccion = str(adquirente.get('direccion') or '').strip()
+    if not direccion:
+        raise ValueError(
+            'Falta la dirección del comprador. Complétela en los datos del cliente '
+            'de esta factura antes de emitir.'
+        )
     municipio, departamento, _, _ = _direccion_fiscal(adquirente)
     juridica = tipo_doc == '31'
     nodo = _hijos(_nodo('ADQ'), [
@@ -205,15 +212,17 @@ def _adquirente(adquirente, email_respaldo=None):
         ('DFA_1', pais), ('DFA_2', departamento or None),
         ('DFA_3', municipio or None), ('DFA_4', postal or None), ('DFA_5', 'Colombia'),
         ('DFA_6', nombre_dep or None), ('DFA_7', ciudad or None),
-        ('DFA_8', adquirente.get('direccion') or None),
+        ('DFA_8', direccion),
     ]))
-    correo = _email_valido(adquirente.get('email') or email_respaldo)
-    if correo:
+    correo = _email_valido(adquirente.get('email'))
+    telefono = str(adquirente.get('telefono') or '').strip()
+    if correo and len(telefono) >= 3:
         nodo.append(_hijos(_nodo('CDA'), [
             ('CDA_2', nombre),
-            ('CDA_3', adquirente.get('telefono')),
+            ('CDA_3', telefono),
             ('CDA_4', correo),
         ]))
+    nodo.append(_hijos(_nodo('GTA'), [('GTA_1', '01'), ('GTA_2', 'IVA')]))
     return nodo
 
 
@@ -388,7 +397,7 @@ def construir_factura(documento, emisor, adquirente, items, totales,
                 ('BAC_3', beneficio_comprador.get('puntos', 0)),
             ]))
     raiz.append(_emisor(emisor, nit_emisor))
-    raiz.append(_adquirente(adquirente, emisor.get('email')))
+    raiz.append(_adquirente(adquirente))
     raiz.append(_totales(calculos, totales, moneda))
     raiz.append(_impuestos_globales(calculos, moneda))
     raiz.append(_resolucion(resolucion, prefijo))

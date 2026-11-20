@@ -31,7 +31,8 @@ TOTALES = {'line_extension_amount': 20000, 'payable_amount': 23800}
 
 
 def _construir(**cambios):
-    args = dict(documento=DOC, emisor=EMISOR, adquirente={}, items=ITEMS,
+    args = dict(documento=DOC, emisor=EMISOR,
+                adquirente={'direccion': 'Direccion de prueba'}, items=ITEMS,
                 totales=TOTALES, resolucion=RESOLUCION)
     args.update(cambios)
     return fx.construir_factura(**args)
@@ -51,7 +52,7 @@ def test_encabezado_y_emisor():
     assert raiz.findtext('ENC/ENC_20') == '2'
     assert raiz.findtext('EMI/EMI_22') == '8'
     assert raiz.findtext('EMI/TAC/TAC_1') == 'O-13'
-    assert raiz.find('EMI/GTE') is None
+    assert raiz.findtext('EMI/GTE/GTE_1') == '01'
     assert raiz.findtext('DRF/DRF_4') == 'SETT'
 
 
@@ -77,7 +78,7 @@ def test_campos_de_comprador_y_pago_compatibles_con_dian():
                                   'municipio': '17665', 'departamento': '17'})
     assert raiz.find('ADQ/ADQ_8') is None
     assert raiz.find('ADQ/ADQ_9') is None
-    assert raiz.find('ADQ/GTA') is None
+    assert raiz.findtext('ADQ/GTA/GTA_1') == '01'
     assert raiz.findtext('ADQ/DFA/DFA_1') == 'CO'
     assert raiz.findtext('ADQ/DFA/DFA_3') == '17665'
     assert raiz.findtext('ADQ/DFA/DFA_8') == 'Calle 1'
@@ -88,12 +89,27 @@ def test_campos_de_comprador_y_pago_compatibles_con_dian():
 def test_omite_correo_invalido_y_conserva_correo_valido():
     emisor = dict(EMISOR, email='correo-sin-dominio', telefono='6041234567')
     raiz = _construir(emisor=emisor,
-                      adquirente={'nombre': 'Juan Perez', 'telefono': '3001234567'})
+                      adquirente={'nombre': 'Juan Perez', 'telefono': '3001234567',
+                                  'direccion': 'Calle 1'})
     assert raiz.find('EMI/CDE') is None
     assert raiz.find('ADQ/CDA') is None
 
     raiz = _construir(emisor=dict(EMISOR, email='facturas@example.com'))
     assert raiz.findtext('EMI/CDE/CDE_4') == 'facturas@example.com'
+
+
+def test_comprador_necesita_direccion_y_no_usa_correo_del_emisor():
+    try:
+        _construir(adquirente={'nombre': 'Juan Perez'},
+                   emisor=dict(EMISOR, email='emisor@example.com'))
+    except ValueError as error:
+        assert 'dirección del comprador' in str(error)
+    else:
+        raise AssertionError('El comprador sin dirección debía fallar')
+
+    raiz = _construir(adquirente={'nombre': 'Juan Perez', 'direccion': 'Calle 1'},
+                      emisor=dict(EMISOR, email='emisor@example.com'))
+    assert raiz.find('ADQ/CDA') is None
 
 
 def test_direccion_fiscal_emisor_municipio_samana():

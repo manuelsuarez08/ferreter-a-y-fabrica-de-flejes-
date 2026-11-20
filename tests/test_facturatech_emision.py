@@ -38,6 +38,10 @@ def _preparar():
     conn.execute("UPDATE configuracion SET nit='901143311', digito_verificacion='8', "
                  "nombre='Emisor SAS', direccion='Calle 1', codigo_municipio='05001', "
                  "codigo_departamento='05', email_emisor='a@b.co' WHERE id=1")
+    conn.execute("UPDATE clientes SET nombre='Cliente Prueba', cedula_nit='123456789', "
+                 "tipo_documento='CC', direccion='Carrera 10 #20-30', "
+                 "codigo_municipio='05001', codigo_departamento='05', "
+                 "telefono='3001234567', email='' WHERE id=1")
     prod = conn.execute("SELECT id FROM productos LIMIT 1").fetchone()
     if not prod:
         conn.execute("INSERT INTO productos (nombre, precio_venta, stock) "
