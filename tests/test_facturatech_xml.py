@@ -57,10 +57,12 @@ def test_encabezado_y_emisor():
 
 
 def test_emisor_persona_natural_necesita_correo_valido():
-    raiz = _construir(emisor=dict(EMISOR, tipo_persona='2', prefijo='',
+    raiz = _construir(emisor=dict(EMISOR, tipo_persona='2', prefijo='LAG',
                                  email='facturas@example.com'))
-    assert raiz.find('EMI/ICC') is None
+    assert raiz.findtext('EMI/ICC/ICC_9') == 'LAG'
     assert raiz.findtext('EMI/CDE/CDE_4') == 'facturas@example.com'
+    orden = [n.tag for n in raiz.find('EMI')]
+    assert orden.index('DFE') < orden.index('ICC') < orden.index('CDE')
     try:
         _construir(emisor=dict(EMISOR, tipo_persona='2', prefijo='', email=''))
     except ValueError as error:

@@ -199,8 +199,8 @@ def _emisor(emisor, nit_emisor):
         ('DFE_4', postal), ('DFE_5', 'Colombia'), ('DFE_6', nombre_dep),
         ('DFE_7', ciudad), ('DFE_8', emisor.get('direccion')),
     ]))
-    # ICC_9 (prefijo de la numeración) es obligatorio solo para persona jurídica.
-    if (emisor.get('tipo_persona') or '1') == '1' and emisor.get('prefijo'):
+    # FacturaTech requiere el prefijo autorizado también para persona natural.
+    if emisor.get('prefijo'):
         nodo.append(_hijos(_nodo('ICC'), [('ICC_9', emisor['prefijo'])]))
     correo = _email_valido(emisor.get('email'))
     if correo:
