@@ -287,6 +287,7 @@
           {% if rol in ['admin', 'superadmin'] %}
             <a href="/personalizacion" class="text-white text-decoration-underline">Mi Negocio</a> |
             <a href="/contabilidad" class="text-white text-decoration-underline">Contabilidad</a> |
+            <a href="/dian" class="text-white text-decoration-underline">Facturación electrónica</a> |
           {% endif %}
           <a href="/logout" class="text-white text-decoration-underline">Cerrar Sesión</a>
         </span>
@@ -2191,7 +2192,7 @@
                     onclick="alternarEdicionItemsFactura()" style="display:none;">✏️ Editar precios</button>
             <button type="button" class="btn btn-info fw-bold" id="btn-emitir-dian"
                     onclick="emitirFacturaElectronica()" style="display:none;">🧾 Emitir factura electrónica</button>
-            <button type="button" class="btn btn-primary fw-bold" onclick="imprimirRecibo('area-factura-pdf', 'factura')">🖨️ Imprimir recibo</button>
+            <button type="button" class="btn btn-primary fw-bold" onclick="imprimirFactura()">🖨️ Imprimir recibo</button>
                        <button type="button" class="btn btn-success fw-bold" onclick="descargarPDF()">📥 Descargar PDF</button>
                        <button type="button" class="btn fw-bold text-white" style="background:#25D366;" onclick="whatsappFactura()">📱 WhatsApp</button>
                      </div>
@@ -6027,8 +6028,48 @@
 			}
 			}
 
-			function descargarPDF() {
-			generarPDFRecibo(document.getElementById('area-factura-pdf'), `factura-${facturaActualId}.pdf`);
+			// PDF oficial de Facturatech: solo existe cuando la factura fue
+			// aceptada. Devuelve el blob, o null para usar la tirilla del sistema.
+			async function obtenerPdfFacturatech() {
+				const dian = (facturaActual && facturaActual.dian) || {};
+				if (dian.estado !== 'aceptado' || !dian.id_documento) return null;
+				try {
+					const res = await fetch(`/api/dian/documentos/${dian.id_documento}/pdf`);
+					if (!res.ok) return null;
+					return await res.blob();
+				} catch (e) {
+					return null;
+				}
+			}
+
+			async function descargarPDF() {
+				const blob = await obtenerPdfFacturatech();
+				if (!blob) {
+					generarPDFRecibo(document.getElementById('area-factura-pdf'), `factura-${facturaActualId}.pdf`);
+					return;
+				}
+				const nombre = ((facturaActual.dian && facturaActual.dian.numero) || `factura-${facturaActualId}`).replace(/[^\w.-]/g, '');
+				const url = URL.createObjectURL(blob);
+				const enlace = document.createElement('a');
+				enlace.href = url;
+				enlace.download = `${nombre}.pdf`;
+				document.body.appendChild(enlace);
+				enlace.click();
+				enlace.remove();
+				setTimeout(() => URL.revokeObjectURL(url), 60000);
+			}
+
+			async function imprimirFactura() {
+				// La ventana se abre antes del fetch para que el navegador no la bloquee.
+				const ventana = window.open('', '_blank');
+				const blob = await obtenerPdfFacturatech();
+				if (!blob) {
+					if (ventana) ventana.close();
+					imprimirRecibo('area-factura-pdf', 'factura');
+					return;
+				}
+				if (!ventana) { alert('Permita las ventanas emergentes para imprimir la factura.'); return; }
+				ventana.location.href = URL.createObjectURL(blob);
 			}
 
 		// Construye el mensaje de la factura de venta para WhatsApp.
