@@ -5903,11 +5903,11 @@
 			       	              if (btnDian) btnDian.style.display =
 			       	                (window.DianPos && window.DianPos.sePuedeEmitir(factura)) ? '' : 'none';
 			       	       new bootstrap.Modal(document.getElementById('modalFactura')).show();
-			// Si la factura ya fue emitida, se muestra el diseño oficial de Facturatech.
-			const conPdfOficial = await mostrarPdfFacturatech();
+			// Se pide en segundo plano para que el modal abra sin esperar a Facturatech.
+			const pdfListo = mostrarPdfFacturatech();
 			// Impresión automática de la tirilla si el usuario la activó.
 			if (autoPrint) {
-			  if (conPdfOficial) imprimirFactura();
+			  if (await pdfListo) imprimirFactura();
 			  else setTimeout(() => imprimirRecibo('area-factura-pdf', 'factura'), 400);
 			}
 		} catch (err) {
@@ -6036,16 +6036,22 @@
 
 			// PDF oficial de Facturatech: solo existe cuando la factura fue
 			// aceptada. Devuelve el blob, o null para usar la tirilla del sistema.
+			// Un PDF por documento: evita pedirle a Facturatech lo mismo varias veces.
+			const pdfFacturatechCache = {};
+
 			async function obtenerPdfFacturatech() {
 				const dian = (facturaActual && facturaActual.dian) || {};
 				if (!['aceptado', 'firmado'].includes(dian.estado) || !dian.id_documento) return null;
-				try {
-					const res = await fetch(`/api/dian/documentos/${dian.id_documento}/pdf`);
-					if (!res.ok) return null;
-					return await res.blob();
-				} catch (e) {
-					return null;
+				const id = dian.id_documento;
+				if (!pdfFacturatechCache[id]) {
+					const control = new AbortController();
+					const corte = setTimeout(() => control.abort(), 25000);
+					pdfFacturatechCache[id] = fetch(`/api/dian/documentos/${id}/pdf`, { signal: control.signal })
+						.then(res => res.ok ? res.blob() : null)
+						.catch(() => null)
+						.then(blob => { clearTimeout(corte); if (!blob) delete pdfFacturatechCache[id]; return blob; });
 				}
+				return pdfFacturatechCache[id];
 			}
 
 			// Reemplaza la tirilla del sistema por el PDF oficial dentro del modal.
@@ -6057,8 +6063,10 @@
 				contenedor.style.display = 'none';
 				tirilla.style.display = '';
 				marco.removeAttribute('src');
+				const idVenta = facturaActualId;
 				const blob = await obtenerPdfFacturatech();
-				if (!blob) return false;
+				// Si el usuario ya abrió otra factura mientras llegaba el PDF, se descarta.
+				if (!blob || idVenta !== facturaActualId) return false;
 				marco.src = URL.createObjectURL(blob);
 				contenedor.style.display = '';
 				tirilla.style.display = 'none';
