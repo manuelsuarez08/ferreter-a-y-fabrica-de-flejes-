@@ -2025,6 +2025,9 @@
         <div class="modal-body">
           <div class="factura-layout">
           <div class="columna-tirilla">
+          <div id="fac-pdf-facturatech" style="display:none;">
+            <iframe id="fac-pdf-facturatech-frame" title="Factura Facturatech" style="width:100%;height:75vh;border:1px solid #ccc;"></iframe>
+          </div>
           <div id="area-factura-pdf" class="factura-box">
             <div class="text-center mb-2">
               <img src="{% if negocio.logo_tiene %}{{ negocio.logo_url }}{% else %}{{ url_for('static', filename=logo_defecto) }}{% endif %}"
@@ -5900,9 +5903,12 @@
 			       	              if (btnDian) btnDian.style.display =
 			       	                (window.DianPos && window.DianPos.sePuedeEmitir(factura)) ? '' : 'none';
 			       	       new bootstrap.Modal(document.getElementById('modalFactura')).show();
+			// Si la factura ya fue emitida, se muestra el diseño oficial de Facturatech.
+			const conPdfOficial = await mostrarPdfFacturatech();
 			// Impresión automática de la tirilla si el usuario la activó.
 			if (autoPrint) {
-			  setTimeout(() => imprimirRecibo('area-factura-pdf', 'factura'), 400);
+			  if (conPdfOficial) imprimirFactura();
+			  else setTimeout(() => imprimirRecibo('area-factura-pdf', 'factura'), 400);
 			}
 		} catch (err) {
 		  console.error('Error al abrir la factura', id, err);
@@ -6032,7 +6038,7 @@
 			// aceptada. Devuelve el blob, o null para usar la tirilla del sistema.
 			async function obtenerPdfFacturatech() {
 				const dian = (facturaActual && facturaActual.dian) || {};
-				if (dian.estado !== 'aceptado' || !dian.id_documento) return null;
+				if (!['aceptado', 'firmado'].includes(dian.estado) || !dian.id_documento) return null;
 				try {
 					const res = await fetch(`/api/dian/documentos/${dian.id_documento}/pdf`);
 					if (!res.ok) return null;
@@ -6040,6 +6046,23 @@
 				} catch (e) {
 					return null;
 				}
+			}
+
+			// Reemplaza la tirilla del sistema por el PDF oficial dentro del modal.
+			async function mostrarPdfFacturatech() {
+				const contenedor = document.getElementById('fac-pdf-facturatech');
+				const tirilla = document.getElementById('area-factura-pdf');
+				const marco = document.getElementById('fac-pdf-facturatech-frame');
+				if (!contenedor || !tirilla || !marco) return false;
+				contenedor.style.display = 'none';
+				tirilla.style.display = '';
+				marco.removeAttribute('src');
+				const blob = await obtenerPdfFacturatech();
+				if (!blob) return false;
+				marco.src = URL.createObjectURL(blob);
+				contenedor.style.display = '';
+				tirilla.style.display = 'none';
+				return true;
 			}
 
 			async function descargarPDF() {
